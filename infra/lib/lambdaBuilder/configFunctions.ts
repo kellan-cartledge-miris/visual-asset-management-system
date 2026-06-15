@@ -63,6 +63,7 @@ export function buildConfigService(
             LOCATION_SERVICE_API_KEY_ARN_SSM_PARAM: config.locationServiceApiKeyArnSSMParam,
             LOCATION_SERVICE_URL_FORMAT: urlFormat,
             WEB_DEPLOYED_URL_SSM_PARAM: config.webUrlDeploymentSSMParam,
+            MIRIS_VIEWER_KEY: config.app.miris.enabled ? config.app.miris.viewerKey : "",
         },
     });
 
