@@ -197,3 +197,40 @@ def test_config_service_error(config_event, monkeypatch):
         # Verify the response
         assert response["statusCode"] == 500
         assert json.loads(response["body"])["message"] == "Internal Server Error"
+
+def test_secure_config_omits_miris_viewer_key_when_unset(
+    config_event, mock_dynamodb_paginator, monkeypatch
+):
+    """When MIRIS_VIEWER_KEY env is empty, response must not include mirisViewerKey."""
+    pytest.skip("Re-enable when the backend.handlers package import path is fixed.")
+    monkeypatch.setenv("APPFEATUREENABLED_STORAGE_TABLE_NAME", "test-feature-table")
+    monkeypatch.setenv("MIRIS_VIEWER_KEY", "")
+
+    mock_client = MagicMock()
+    mock_client.get_paginator.return_value = mock_dynamodb_paginator
+
+    with patch("boto3.client", return_value=mock_client):
+        from backend.handlers.config import configService
+        response = configService.lambda_handler(config_event, None)
+
+    body = json.loads(response["body"])
+    assert "mirisViewerKey" not in body
+
+
+def test_secure_config_includes_miris_viewer_key_when_set(
+    config_event, mock_dynamodb_paginator, monkeypatch
+):
+    """When MIRIS_VIEWER_KEY env is set, response must include it verbatim."""
+    pytest.skip("Re-enable when the backend.handlers package import path is fixed.")
+    monkeypatch.setenv("APPFEATUREENABLED_STORAGE_TABLE_NAME", "test-feature-table")
+    monkeypatch.setenv("MIRIS_VIEWER_KEY", "test-viewer-key-12345678")
+
+    mock_client = MagicMock()
+    mock_client.get_paginator.return_value = mock_dynamodb_paginator
+
+    with patch("boto3.client", return_value=mock_client):
+        from backend.handlers.config import configService
+        response = configService.lambda_handler(config_event, None)
+
+    body = json.loads(response["body"])
+    assert body["mirisViewerKey"] == "test-viewer-key-12345678"

@@ -85,6 +85,13 @@ def lambda_handler(event, context):
         response['locationServiceApiUrl'] = ""
         response['webDeployedUrl'] = ""
 
+        # Add Miris viewer key only when set via env. Frontend uses this
+        # in the Miris streaming viewer plugin; absence means the plugin
+        # should treat the deployment as "not configured".
+        miris_viewer_key = os.getenv("MIRIS_VIEWER_KEY", "")
+        if miris_viewer_key:
+            response["mirisViewerKey"] = miris_viewer_key
+
         if location_service_api_key_arn_ssm_param and location_service_url_format and location_service_url_format != "":
             try:
                 logger.info(f"Attempting to retrieve Location Service API Key from SSM: {location_service_api_key_arn_ssm_param}")
