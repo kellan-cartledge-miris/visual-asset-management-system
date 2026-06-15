@@ -338,6 +338,30 @@ export function getConfig(app: cdk.App): Config {
         config.app.webUi.allowUnsafeEvalFeatures = false;
     }
 
+    if (config.app.miris == undefined) {
+        config.app.miris = {
+            enabled: false,
+            viewerKey: "",
+        };
+    }
+
+    if (config.app.miris.enabled) {
+        if (config.app.govCloud.enabled) {
+            throw new Error(
+                "Configuration Error: app.miris.enabled cannot be true when " +
+                    "app.govCloud.enabled is true. Miris SaaS endpoints (*.miris.com) " +
+                    "are not reachable from GovCloud deployments."
+            );
+        }
+        if (!config.app.miris.viewerKey || config.app.miris.viewerKey.length < 16) {
+            throw new Error(
+                "Configuration Error: app.miris.enabled requires " +
+                    "app.miris.viewerKey. Generate one in the Miris Portal or via " +
+                    "`miris viewerkey create`."
+            );
+        }
+    }
+
     // Initialize authorizerOptions if undefined
     if (config.app.authProvider.authorizerOptions == undefined) {
         config.app.authProvider.authorizerOptions = {
@@ -1249,6 +1273,10 @@ export interface ConfigPublic {
         webUi: {
             optionalBannerHtmlMessage: string;
             allowUnsafeEvalFeatures: boolean;
+        };
+        miris: {
+            enabled: boolean;
+            viewerKey: string;
         };
         api: {
             globalRateLimit: number;
