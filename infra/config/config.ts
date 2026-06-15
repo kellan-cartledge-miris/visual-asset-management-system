@@ -353,7 +353,12 @@ export function getConfig(app: cdk.App): Config {
                     "are not reachable from GovCloud deployments."
             );
         }
-        if (!config.app.miris.viewerKey || config.app.miris.viewerKey.length < 16) {
+        if (
+            !config.app.miris.viewerKey ||
+            config.app.miris.viewerKey === "UNDEFINED" ||
+            config.app.miris.viewerKey === "" ||
+            config.app.miris.viewerKey.length < 16
+        ) {
             throw new Error(
                 "Configuration Error: app.miris.enabled requires " +
                     "app.miris.viewerKey. Generate one in the Miris Portal or via " +
