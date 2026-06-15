@@ -415,6 +415,13 @@ export function generateContentSecurityPolicy(
         scriptSrc.push(`'unsafe-eval'`);
     }
 
+    //Add Miris streaming sources when enabled
+    if (config.app.miris.enabled) {
+        scriptSrc.push(`'wasm-unsafe-eval'`);
+        connectSrc.push("https://*.miris.com");
+        connectSrc.push("wss://*.miris.com");
+    }
+
     //Add GeoLocation service URL if feature turned on
     if (config.app.useLocationService.enabled) {
         connectSrc.push(`https://maps.${Service("GEO").Endpoint}/`);
