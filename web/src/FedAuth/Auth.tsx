@@ -141,6 +141,12 @@ interface Config {
     locationServiceApiUrl?: string;
 
     /**
+     * Miris Spatial Streaming viewer key (deployment-wide). Only present when
+     * the MIRIS_STREAMING feature flag is enabled in the backend.
+     */
+    mirisViewerKey?: string;
+
+    /**
      * Content Security Policy to apply (generally for ALB deployment where CSP may not be injected)
      */
     contentSecurityPolicy?: string;
@@ -611,6 +617,7 @@ const Auth: React.FC<AuthProps> = (props) => {
                     config.featuresEnabled = value.featuresEnabled;
                     config.locationServiceApiUrl = value.locationServiceApiUrl;
                     config.webDeployedUrl = value.webDeployedUrl || "";
+                    config.mirisViewerKey = value.mirisViewerKey;
                     appCache.setItem("config", config);
                     // nosemgrep: calling-set-state-on-current-state
                     setConfig(config);
