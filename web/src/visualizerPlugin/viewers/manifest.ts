@@ -30,6 +30,8 @@ export const VIEWER_COMPONENTS = {
         "VntanaViewerPlugin/VntanaViewerComponent",
     "./viewers/VeerumViewerPlugin/VeerumViewerComponent":
         "VeerumViewerPlugin/VeerumViewerComponent",
+    "./viewers/MirisStreamViewerPlugin/MirisStreamViewerComponent":
+        "MirisStreamViewerPlugin/MirisStreamViewerComponent",
     "./viewers/NeedleUSDViewerPlugin/NeedleUSDViewerComponent":
         "NeedleUSDViewerPlugin/NeedleUSDViewerComponent",
     "./viewers/ThreeJSViewerPlugin/ThreeJSViewerComponent":
@@ -47,6 +49,7 @@ export const DEPENDENCY_MANAGERS = {
         "PlayCanvasGaussianSplatViewerPlugin/dependencies",
     "./viewers/VntanaViewerPlugin/dependencies": "VntanaViewerPlugin/dependencies",
     "./viewers/VeerumViewerPlugin/dependencies": "VeerumViewerPlugin/dependencies",
+    "./viewers/MirisStreamViewerPlugin/dependencies": "MirisStreamViewerPlugin/dependencies",
     "./viewers/NeedleUSDViewerPlugin/dependencies": "NeedleUSDViewerPlugin/dependencies",
     "./viewers/ThreeJSViewerPlugin/dependencies": "ThreeJSViewerPlugin/dependencies",
     // Add new dependency managers here as needed:
