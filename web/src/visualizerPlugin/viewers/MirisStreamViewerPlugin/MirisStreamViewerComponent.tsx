@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 import React, { useEffect, useRef, useState } from "react";
-import { MirisScene, MirisStream, MirisControls } from "@miris-inc/three";
-import { PerspectiveCamera, WebGLRenderer } from "three";
+import { MirisScene, MirisStream } from "@miris-inc/three";
+import { PerspectiveCamera, Vector3, WebGLRenderer } from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { ViewerPluginProps } from "../../core/types";
 import { downloadAsset } from "../../../services/APIService";
 import { appCache } from "../../../services/appCache";
@@ -17,6 +18,43 @@ type ViewerError =
     | { kind: "MANIFEST_FETCH" }
     | { kind: "STREAM_TIMEOUT"; uuid: string }
     | { kind: "WEBGL_UNAVAILABLE" };
+
+/**
+ * Position the camera so the streamed asset fits comfortably in the view, and set the
+ * OrbitControls target to the asset center. Uses standard "fit to view" geometry:
+ *   distance = (radius / sin(fov/2)) * padding
+ * Camera is placed on a diagonal so the viewer sees three faces of the bounding box.
+ * Mutates `camera` and `controls` in place; caller must already have wired them up.
+ */
+function frameCameraToBounds(
+    bounds: { min: { x: number; y: number; z: number }; max: { x: number; y: number; z: number } },
+    camera: PerspectiveCamera,
+    controls: OrbitControls
+): void {
+    const center = new Vector3(
+        (bounds.min.x + bounds.max.x) / 2,
+        (bounds.min.y + bounds.max.y) / 2,
+        (bounds.min.z + bounds.max.z) / 2
+    );
+    const size = new Vector3(
+        bounds.max.x - bounds.min.x,
+        bounds.max.y - bounds.min.y,
+        bounds.max.z - bounds.min.z
+    );
+    const radius = size.length() / 2 || 1; // protect against zero-size bounds
+    const fovRad = (camera.fov * Math.PI) / 180;
+    const distance = (radius / Math.sin(fovRad / 2)) * 1.4; // 1.4 = padding factor
+
+    // Diagonal offset so the user sees the asset in 3/4 view, not flat-on.
+    const direction = new Vector3(1, 0.6, 1).normalize();
+    camera.position.copy(center).addScaledVector(direction, distance);
+    camera.near = Math.max(distance / 100, 0.01);
+    camera.far = distance * 100;
+    camera.updateProjectionMatrix();
+
+    controls.target.copy(center);
+    controls.update();
+}
 
 function errorMessage(err: ViewerError): string {
     switch (err.kind) {
@@ -63,7 +101,7 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
     const streamRef = useRef<MirisStream | null>(null);
     const cameraRef = useRef<PerspectiveCamera | null>(null);
     const rendererRef = useRef<WebGLRenderer | null>(null);
-    const controlsRef = useRef<MirisControls | null>(null);
+    const controlsRef = useRef<OrbitControls | null>(null);
     const loadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const resizeObserverRef = useRef<ResizeObserver | null>(null);
     const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -145,10 +183,28 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                     }
                 }
 
-                const controls = new MirisControls(stream as any, camera, renderer.domElement);
+                // Three.js OrbitControls — orbit + scroll-zoom + right-click-pan.
+                // Miris docs explicitly recommend this over MirisControls (drag-rotate only).
+                const controls = new OrbitControls(camera, renderer.domElement);
+                controls.enableDamping = true;
+                controls.dampingFactor = 0.08;
+                controls.enableZoom = true;
+                controls.enablePan = true;
                 controlsRef.current = controls;
 
-                // 6. 10s load-timeout + streamloaded clears it
+                // Provisional camera position — slightly off-origin so OrbitControls has a
+                // direction to look in before the scene loads. Refined by frameCameraToBounds
+                // on the 'sceneloaded' event below.
+                camera.position.set(0, 0, 5);
+                controls.target.set(0, 0, 0);
+                controls.update();
+
+                // 6. Load timing:
+                //   - 'streamloaded' clears the 10s timeout (first data arrived).
+                //   - 'sceneloaded' fires when the full hierarchy is resolved; that's when
+                //     stream.getBounds() returns the final WASM bounding box. Box3.setFromObject
+                //     does NOT work on Miris geometry — getBounds() is the only reliable path
+                //     (documented as a stable undocumented API in Miris technical docs).
                 const loadTimer = setTimeout(() => {
                     if (!cancelled)
                         setError({
@@ -158,6 +214,17 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                 }, 10_000);
                 loadTimerRef.current = loadTimer;
                 stream.addEventListener("streamloaded", () => clearTimeout(loadTimer));
+                stream.addEventListener("sceneloaded", () => {
+                    if (cancelled) return;
+                    try {
+                        frameCameraToBounds(stream.getBounds(), camera, controls);
+                    } catch (e) {
+                        // getBounds() can throw if called before geometry is ready in
+                        // edge cases. Leaving the camera at its provisional position is
+                        // a graceful fallback — orbit/zoom still works.
+                        console.warn("Miris viewer: failed to fit camera to bounds", e);
+                    }
+                });
 
                 // 7. Animation loop
                 renderer.setAnimationLoop(() => {

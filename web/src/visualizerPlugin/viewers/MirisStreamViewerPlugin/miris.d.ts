@@ -28,6 +28,11 @@ declare module "@miris-inc/three" {
         viewerKey?: string;
     }
 
+    export interface MirisBounds {
+        min: { x: number; y: number; z: number };
+        max: { x: number; y: number; z: number };
+    }
+
     export class MirisStream extends Group {
         constructor(options: MirisStreamOptions);
         readonly uuid: string;
@@ -38,6 +43,11 @@ declare module "@miris-inc/three" {
             handler: () => void
         ): void;
         removeFromParent(): this;
+        // Undocumented but stable: queries the WASM engine's internal bounding box.
+        // Box3.setFromObject() does not work on WASM-managed geometry, so this is
+        // the only reliable way to fit a camera to streamed asset bounds. Call
+        // after the 'sceneloaded' event for final geometry.
+        getBounds(): MirisBounds;
     }
 
     export class MirisControls extends Controls<{ start: object; end: object }> {

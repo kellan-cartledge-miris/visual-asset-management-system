@@ -38,12 +38,16 @@ jest.mock("@miris-inc/three", () => ({
     }),
 }));
 
-// --- Mock three (minimal renderer) ---
+// --- Mock three (minimal renderer + Vector3) ---
 // Note: document.createElement cannot be called inside jest.mock() factories
 // (static scope restriction). Use a plain object for domElement instead.
 jest.mock("three", () => ({
     PerspectiveCamera: jest.fn().mockImplementation(() => ({
         aspect: 1,
+        fov: 50,
+        near: 0.1,
+        far: 1000,
+        position: { copy: jest.fn(), addScaledVector: jest.fn(), set: jest.fn() },
         updateProjectionMatrix: jest.fn(),
     })),
     WebGLRenderer: jest.fn().mockImplementation(() => ({
@@ -54,6 +58,35 @@ jest.mock("three", () => ({
         renderLists: { dispose: jest.fn() },
         render: jest.fn(),
     })),
+    Vector3: jest.fn().mockImplementation((x = 0, y = 0, z = 0) => ({
+        x,
+        y,
+        z,
+        set: jest.fn(),
+        copy: jest.fn().mockReturnThis(),
+        addScaledVector: jest.fn().mockReturnThis(),
+        normalize: jest.fn().mockReturnThis(),
+        length: jest.fn().mockReturnValue(1),
+    })),
+}));
+
+// --- Mock OrbitControls (replaces MirisControls in the component) ---
+const mockOrbitDispose = jest.fn();
+const mockOrbitUpdate = jest.fn();
+const mockOrbitCtor = jest.fn();
+jest.mock("three/examples/jsm/controls/OrbitControls.js", () => ({
+    OrbitControls: jest.fn().mockImplementation((...args) => {
+        mockOrbitCtor(...args);
+        return {
+            update: mockOrbitUpdate,
+            dispose: mockOrbitDispose,
+            target: { copy: jest.fn(), set: jest.fn() },
+            enableDamping: false,
+            dampingFactor: 0,
+            enableZoom: false,
+            enablePan: false,
+        };
+    }),
 }));
 
 // --- Mock the dependency manager (preload happens before component mounts) ---
@@ -141,7 +174,17 @@ describe("MirisStreamViewerComponent", () => {
         await act(async () => {
             unmount();
         });
-        expect(mockControlsDispose).toHaveBeenCalledTimes(1);
+        // OrbitControls.dispose is now what the component calls (replaced MirisControls).
+        expect(mockOrbitDispose).toHaveBeenCalledTimes(1);
         expect(mockStreamRemoveFromParent).toHaveBeenCalledTimes(1);
+    });
+
+    it("registers a sceneloaded handler for camera framing", async () => {
+        render(<MirisStreamViewerComponent {...baseProps} />);
+        await waitFor(() => expect(mockSceneCtor).toHaveBeenCalledTimes(1));
+        // streamloaded (for timeout-clear) AND sceneloaded (for bounds-fit) should both be wired.
+        const events = mockStreamAddEventListener.mock.calls.map((c) => c[0]);
+        expect(events).toContain("streamloaded");
+        expect(events).toContain("sceneloaded");
     });
 });
