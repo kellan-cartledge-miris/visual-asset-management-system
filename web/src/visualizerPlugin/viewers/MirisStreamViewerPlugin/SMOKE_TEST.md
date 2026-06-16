@@ -8,18 +8,32 @@ Run once against a real Miris account before merging this branch. Unit tests cov
 - A valid Miris viewer key (16+ chars). Generate via the Miris Portal or `miris viewerkey create`.
 - A VAMS dev stack you can deploy to (commercial region — GovCloud is blocked by `getConfig()`).
 - Browser DevTools handy for the Network → WS tab.
+- Docker Desktop with the **containerd image store disabled** (Settings → General → uncheck "Use containerd for pulling and storing images"). With it enabled, CDK Lambda layer bundling fails because BuildKit-built images aren't visible to `docker run`.
+- CDK bootstrap in **two regions**: your primary region (e.g. `us-west-2`) AND `us-east-1` — the CloudFront WAF stack lives in us-east-1 regardless of where the main stack deploys.
 
 ## Steps
 
 ### 1. Deploy with Miris enabled
 
-In `infra/config/config.json` (or your deployment-specific config), set:
+In `infra/config/config.json` (or your deployment-specific config), set both blocks:
 
 ```json
+"webUi": {
+    "allowUnsafeEvalFeatures": true
+},
 "miris": {
     "enabled": true,
     "viewerKey": "<your-real-miris-viewer-key>"
 }
+```
+
+`allowUnsafeEvalFeatures: true` is required — `getConfig()` rejects `miris.enabled` without it. The `@miris-inc/three` SDK calls `eval()` at runtime, so it lives on the same opt-in trust boundary as Cesium and Needle USD.
+
+Bootstrap CDK in both regions if you haven't already:
+
+```bash
+npx cdk bootstrap aws://<account>/us-west-2
+npx cdk bootstrap aws://<account>/us-east-1   # required for CloudFront WAF
 ```
 
 Deploy:
@@ -66,7 +80,11 @@ Navigate to the asset, click `smoke-test.mrx`. Verify:
 
 - [ ] The Miris viewer loads (no other viewer is offered for `.mrx`).
 - [ ] 3D content begins to stream within a few seconds.
-- [ ] Drag-to-rotate works smoothly.
+- [ ] **Camera framing:** asset is centered in view at a 3/4 diagonal angle, not at the origin inside the asset. (On `sceneloaded`, the component calls `stream.getBounds()` and fits the camera to the asset's bounding box.)
+- [ ] **Drag to orbit:** left-click drag orbits the camera around the asset center. The asset itself stays fixed; the camera moves.
+- [ ] **Scroll to zoom:** mouse wheel / pinch zooms toward the orbit target.
+- [ ] **Right-click drag to pan:** moves the orbit target through space.
+- [ ] **Damping:** motion has a small inertial smoothing (release-and-keep-moving).
 - [ ] Fullscreen toggle works (button in the viewer toolbar).
 - [ ] The `displayName` from the manifest appears as the viewer title.
 
@@ -79,9 +97,12 @@ In DevTools → Network → WS, note the open WebSocket to `*.miris.com`. Naviga
 
 ### 6. Verify the disable path
 
-Redeploy with `app.miris.enabled: false`:
+Redeploy with `app.miris.enabled: false` (you may also revert `allowUnsafeEvalFeatures` if it was only set for Miris):
 
 ```json
+"webUi": {
+    "allowUnsafeEvalFeatures": false
+},
 "miris": {
     "enabled": false,
     "viewerKey": "UNDEFINED"
@@ -97,6 +118,12 @@ Reload the web UI. Open the same `.mrx` file. Verify:
 - [ ] The Miris viewer no longer appears in the viewer selector.
 - [ ] The fallback Preview viewer takes over (or shows "no viewer available").
 - [ ] `/secure-config` no longer includes `mirisViewerKey`.
+
+### 6b. Verify the validation gate (optional)
+
+To confirm the security gate works, try to deploy with `miris.enabled: true` but `allowUnsafeEvalFeatures: false`. `getConfig()` should reject the deployment at synth time with: `Configuration Error: app.miris.enabled requires app.webUi.allowUnsafeEvalFeatures = true...`
+
+- [ ] CDK synth fails with the expected error message.
 
 ### 7. Verify the malformed-manifest error path
 
