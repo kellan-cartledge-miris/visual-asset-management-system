@@ -6,7 +6,6 @@
     "dependencies": {
         "@aws-amplify/ui-react": "^6.15.2",
         "@aws-sdk/client-s3": "^3.700.0",
-        "@miris-inc/three": "0.0.8-a58fecf",
         "@aws-sdk/lib-storage": "^3.700.0",
         "@aws-sdk/s3-request-presigner": "^3.700.0",
         "@badgateway/oauth2-client": "2.4.2",
@@ -19,6 +18,7 @@
         "@dnd-kit/utilities": "^3.2.2",
         "@mapbox/mapbox-gl-draw": "^1.4.1",
         "@maplibre/maplibre-gl-geocoder": "^1.5.0",
+        "@miris-inc/three": "0.0.8-a58fecf",
         "@turf/bbox": "^6.5.0",
         "@turf/turf": "^6.5.0",
         "@types/mapbox__mapbox-gl-draw": "^1.4.0",
@@ -105,6 +105,7 @@
         "babel-jest": "^29.5.0",
         "eslint-plugin-react-hooks": "^5.2.0",
         "fs-extra": "^11.1.1",
+        "jest-environment-jsdom": "^30.4.1",
         "prettier": "^2.4.1",
         "react-test-renderer": "^17.0.2",
         "sass": "^1.43.4",
