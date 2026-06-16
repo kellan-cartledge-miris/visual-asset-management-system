@@ -604,12 +604,17 @@ const Auth: React.FC<AuthProps> = (props) => {
     //Both Effect
     //Once logged in, get/set other configuration and profile information
     useEffect(() => {
-        //Secure Config Fetch - fetch if featuresEnabled, locationServiceApiUrl, or webDeployedUrl is missing
+        //Secure Config Fetch - fetch if featuresEnabled, locationServiceApiUrl, or webDeployedUrl is missing.
+        //Also fetch if MIRIS_STREAMING is enabled but mirisViewerKey isn't yet cached — handles the
+        //upgrade path where users have a cached config from before the field was added to the response.
+        const mirisFlagOnButKeyMissing =
+            config?.featuresEnabled?.includes("MIRIS_STREAMING") && !config?.mirisViewerKey;
         if (
             config &&
             (!config.featuresEnabled ||
                 !config.locationServiceApiUrl ||
-                config.webDeployedUrl === undefined) &&
+                config.webDeployedUrl === undefined ||
+                mirisFlagOnButKeyMissing) &&
             isLoggedIn
         ) {
             getSecureConfig()
