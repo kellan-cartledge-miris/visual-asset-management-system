@@ -237,9 +237,9 @@ if (config.featuresEnabled.includes("NEW_FEATURE")) {
 | Feature Flag                    | Description                                                                                                      |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `GOVCLOUD`                      | GovCloud deployment mode (no CloudFront, no Location Service, FIPS endpoints)                                    |
-| `ALLOWUNSAFEEVAL`               | Permits `unsafe-eval` in CSP; required by certain viewer plugins (CesiumJS, Needle USD WASM, ThreeJS CAD)        |
+| `ALLOWUNSAFEEVAL`               | Permits `unsafe-eval` in CSP; required by certain viewer plugins (CesiumJS, Needle USD WASM, ThreeJS CAD, Miris Spatial Streaming) |
 | `LOCATIONSERVICES`              | Amazon Location Service map visualization                                                                        |
-| `MIRIS_STREAMING`               | Enables the Miris Spatial Streaming viewer plugin (requires `app.miris.viewerKey`; incompatible with GovCloud)   |
+| `MIRIS_STREAMING`               | Enables the Miris Spatial Streaming viewer plugin (requires `app.miris.viewerKey` AND `app.webUi.allowUnsafeEvalFeatures: true`; incompatible with GovCloud) |
 | `ALBDEPLOY`                     | ALB-based static website distribution                                                                            |
 | `CLOUDFRONTDEPLOY`              | CloudFront-based static website distribution                                                                     |
 | `NOOPENSEARCH`                  | OpenSearch is not deployed; disables search-dependent UI                                                         |

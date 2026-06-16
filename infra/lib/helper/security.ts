@@ -417,16 +417,15 @@ export function generateContentSecurityPolicy(
 
     //Add Miris streaming sources when enabled.
     //
-    //Security note: We permit 'unsafe-eval' here because the @miris-inc/three
-    //SDK calls eval() at runtime (observed: EvalError thrown without it). A
-    //narrower 'wasm-unsafe-eval' is insufficient — Miris evaluates JS strings,
-    //not just WebAssembly. The trust boundary matches Cesium and Needle USD,
-    //which use the same directive via the ALLOWUNSAFEEVAL feature flag. This
-    //is opt-in: only deployments that set app.miris.enabled = true accept this
-    //relaxation, and connect-src is bounded to *.miris.com (HTTPS + WSS) so
-    //any exfiltration target is constrained to the configured Miris account.
+    //The @miris-inc/three SDK requires 'unsafe-eval' (it calls eval() at
+    //runtime, not only WebAssembly). VAMS already has a single gate for that
+    //directive — config.app.webUi.allowUnsafeEvalFeatures — pushed above.
+    //Rather than duplicate the push here, getConfig() validates that Miris
+    //cannot be enabled without that flag also being true, so by the time we
+    //reach this block 'unsafe-eval' is already in scriptSrc. This keeps the
+    //trust boundary explicit at the config layer (matching Cesium/Needle USD)
+    //and avoids letting Miris silently widen CSP behind the operator's back.
     if (config.app.miris.enabled) {
-        scriptSrc.push(`'unsafe-eval'`);
         connectSrc.push("https://*.miris.com");
         connectSrc.push("wss://*.miris.com");
     }
