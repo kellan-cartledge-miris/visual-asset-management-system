@@ -622,7 +622,17 @@ const Auth: React.FC<AuthProps> = (props) => {
                     config.featuresEnabled = value.featuresEnabled;
                     config.locationServiceApiUrl = value.locationServiceApiUrl;
                     config.webDeployedUrl = value.webDeployedUrl || "";
-                    config.mirisViewerKey = value.mirisViewerKey;
+                    // Only overwrite the cached viewer key when the backend supplied
+                    // a value. The /secure-config response omits mirisViewerKey when
+                    // MIRIS_VIEWER_KEY env is unset, so an unconditional assignment
+                    // would clobber a valid key with `undefined` and re-fire the
+                    // self-heal refetch every render if MIRIS_STREAMING is in
+                    // featuresEnabled but the env var is missing (degenerate
+                    // deployment inconsistency — gated by getConfig() in normal
+                    // flow, but worth defending against here).
+                    if (value.mirisViewerKey) {
+                        config.mirisViewerKey = value.mirisViewerKey;
+                    }
                     appCache.setItem("config", config);
                     // nosemgrep: calling-set-state-on-current-state
                     setConfig(config);
