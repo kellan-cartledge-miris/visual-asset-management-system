@@ -1,0 +1,34 @@
+/*
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Miris Streaming Viewer styles. Canvas sizing is handled by Three.js /
+ * parent layout. Add module-scoped overlay / banner styles here as needed.
+ */
+
+.container {
+    position: relative;
+    width: 100%;
+    height: 100%;
+}
+
+.canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+.errorOverlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.6);
+    color: #fff;
+    text-align: center;
+    padding: 1rem;
+}
