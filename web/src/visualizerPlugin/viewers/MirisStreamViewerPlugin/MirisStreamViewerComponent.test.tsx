@@ -84,10 +84,13 @@ beforeEach(() => {
     jest.clearAllMocks();
     mockAppCacheGet.mockReturnValue({ mirisViewerKey: "key-1234567890abcdef" });
     global.fetch = jest.fn().mockResolvedValue({
-        text: () => Promise.resolve(JSON.stringify({
-            schemaVersion: 1,
-            mirisAssetUuid: VALID_UUID,
-        })),
+        text: () =>
+            Promise.resolve(
+                JSON.stringify({
+                    schemaVersion: 1,
+                    mirisAssetUuid: VALID_UUID,
+                })
+            ),
     }) as unknown as typeof fetch;
     mockDownloadAsset.mockResolvedValue([true, "https://signed.example.com/manifest"]);
 });
@@ -108,9 +111,7 @@ describe("MirisStreamViewerComponent", () => {
     it("renders the not-configured banner when mirisViewerKey is missing", async () => {
         mockAppCacheGet.mockReturnValue({});
         render(<MirisStreamViewerComponent {...baseProps} />);
-        await waitFor(() =>
-            expect(screen.getByText(/not configured/i)).toBeInTheDocument()
-        );
+        await waitFor(() => expect(screen.getByText(/not configured/i)).toBeInTheDocument());
         expect(mockSceneCtor).not.toHaveBeenCalled();
     });
 
@@ -120,9 +121,7 @@ describe("MirisStreamViewerComponent", () => {
         }) as unknown as typeof fetch;
 
         render(<MirisStreamViewerComponent {...baseProps} />);
-        await waitFor(() =>
-            expect(screen.getByText(/malformed|invalid/i)).toBeInTheDocument()
-        );
+        await waitFor(() => expect(screen.getByText(/malformed|invalid/i)).toBeInTheDocument());
         expect(mockSceneCtor).not.toHaveBeenCalled();
     });
 

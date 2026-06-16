@@ -8,11 +8,7 @@ import { PerspectiveCamera, WebGLRenderer } from "three";
 import { ViewerPluginProps } from "../../core/types";
 import { downloadAsset } from "../../../services/APIService";
 import { appCache } from "../../../services/appCache";
-import {
-    parseMirisManifest,
-    MirisManifest,
-    MirisManifestErrorReason,
-} from "./manifestParser";
+import { parseMirisManifest, MirisManifest, MirisManifestErrorReason } from "./manifestParser";
 import styles from "./MirisStreamViewer.module.css";
 
 type ViewerError =
@@ -100,15 +96,16 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                 const text = await response.text();
                 const parsed = parseMirisManifest(text);
                 if (!parsed.ok) {
-                    if (!cancelled)
-                        setError({ kind: "MANIFEST_PARSE", reason: parsed.reason });
+                    if (!cancelled) setError({ kind: "MANIFEST_PARSE", reason: parsed.reason });
                     return;
                 }
                 if (cancelled) return;
                 setManifest(parsed.manifest);
 
                 // 3. Viewer key check
-                const appConfig = appCache.getItem("config") as { mirisViewerKey?: string } | undefined;
+                const appConfig = appCache.getItem("config") as
+                    | { mirisViewerKey?: string }
+                    | undefined;
                 const viewerKey = appConfig?.mirisViewerKey;
                 if (!viewerKey) {
                     if (!cancelled) setError({ kind: "NOT_CONFIGURED" });

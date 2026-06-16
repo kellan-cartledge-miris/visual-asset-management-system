@@ -33,7 +33,10 @@ declare module "@miris-inc/three" {
         readonly uuid: string;
         readonly viewerKey?: string;
         readonly isStream: true;
-        addEventListener(event: "streamloaded" | "rootloaded" | "sceneloaded", handler: () => void): void;
+        addEventListener(
+            event: "streamloaded" | "rootloaded" | "sceneloaded",
+            handler: () => void
+        ): void;
         removeFromParent(): this;
     }
 
