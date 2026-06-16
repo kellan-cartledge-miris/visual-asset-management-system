@@ -1,5 +1,5 @@
 /*
- * Copyright 2026 Miris Streaming Viewer Plugin
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 import { StylesheetManager } from "../../core/StylesheetManager";

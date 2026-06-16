@@ -1,7 +1,11 @@
 /*
+ * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/*
  * Hand-authored TypeScript declarations for @miris-inc/three.
  * The package does not ship .d.ts files as of v0.0.8.
- * Source: Miris docs and API reference for the @miris-inc/three package.
  */
 
 declare module "@miris-inc/three" {
