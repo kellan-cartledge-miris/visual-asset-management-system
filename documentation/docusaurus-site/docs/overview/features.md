@@ -12,6 +12,8 @@ The VAMS web interface is a React 17 application built with Vite and the AWS Clo
 
 VAMS includes 17 built-in viewer plugins across five categories (3D, Media, Document, Data, and Preview). The plugin-based architecture supports lazy loading, per-plugin dependency management, automatic viewer selection based on file extension, and fullscreen mode. Two additional licensed viewers (VNTANA and VEERUM) provide commercial-grade rendering for GLB models and point clouds.
 
+-   **Miris Spatial Streaming** — Stream 3D assets at progressive levels of detail via the Miris platform (`.mrx` manifest files trigger the viewer).
+
 For the complete list of supported file viewers and extensions, see [File Viewers](../concepts/viewers.md).
 
 ### Asset Management
@@ -259,6 +261,7 @@ VAMS uses a feature flag system to conditionally enable capabilities at deployme
 | `GOVCLOUD`                      | Indicates AWS GovCloud deployment mode                             |
 | `ALLOWUNSAFEEVAL`               | Enables viewers requiring `unsafe-eval` CSP (CesiumJS, Needle USD) |
 | `LOCATIONSERVICES`              | Enables Amazon Location Service integration for map views          |
+| `MIRIS_STREAMING`               | Enables the Miris Spatial Streaming viewer for `.mrx` manifest files |
 | `ALBDEPLOY`                     | Indicates Application Load Balancer web distribution               |
 | `CLOUDFRONTDEPLOY`              | Indicates Amazon CloudFront web distribution                       |
 | `NOOPENSEARCH`                  | Indicates Amazon OpenSearch is disabled                            |
