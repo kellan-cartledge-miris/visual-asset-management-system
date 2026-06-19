@@ -12,6 +12,7 @@ import { Stack, NestedStack } from "aws-cdk-lib";
 import { SecurityGroupGatewayPipelineConstruct } from "./constructs/securitygroup-gateway-pipeline-construct";
 import { PcPotreeViewerBuilderNestedStack } from "./preview/pcPotreeViewer/pcPotreeViewerBuilder-nestedStack";
 import { SplatToolboxBuilderNestedStack } from "./3dRecon/splatToolbox/splatToolboxBuilder-nestedStack";
+import { MirisUploadBuilderNestedStack } from "./miris/upload/mirisUploadBuilder-nestedStack";
 import { Metadata3dLabelingNestedStack } from "./genAi/metadata3dLabeling/metadata3dLabelingBuilder-nestedStack";
 import { RapidPipelineNestedStack } from "./multi/rapidPipeline/rapidPipeline-nestedStack";
 import { RapidPipelineEKSNestedStack } from "./multi/rapidPipelineEKS/rapidPipelineEKS-nestedStack";
@@ -107,6 +108,33 @@ export class PipelineBuilderNestedStack extends NestedStack {
             this.pipelineVamsLambdaFunctionNames.push(
                 splatToolboxPipelineNestedStack.pipelineVamsLambdaFunctionName
             );
+        }
+
+        if (props.config.app.miris.upload.enabled) {
+            const mirisUploadNestedStack = new MirisUploadBuilderNestedStack(
+                this,
+                "MirisUploadBuilderNestedStack",
+                {
+                    config: props.config,
+                    storageResources: props.storageResources,
+                    vpc: props.vpc,
+                    pipelineSubnets: pipelineNetwork.isolatedSubnets.pipeline,
+                    pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                    lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                    importGlobalPipelineWorkflowFunctionName:
+                        props.importGlobalPipelineWorkflowFunctionName,
+                }
+            );
+
+            //Add function name to array for stack output
+            this.pipelineVamsLambdaFunctionNames.push(
+                mirisUploadNestedStack.pipelineVamsLambdaFunctionName
+            );
+
+            new cdk.CfnOutput(this, "MirisUploadPipelineLambdaFunctionName", {
+                value: mirisUploadNestedStack.pipelineVamsLambdaFunctionName,
+                description: "The Miris Upload Pipeline VAMS execute Lambda function name",
+            });
         }
 
         if (props.config.app.pipelines.useNvidiaCosmos.enabled) {
