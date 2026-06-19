@@ -24,11 +24,7 @@ export interface MirisUploadBuilderNestedStackProps extends cdk.StackProps {
 export class MirisUploadBuilderNestedStack extends NestedStack {
     public pipelineVamsLambdaFunctionName: string;
 
-    constructor(
-        parent: Construct,
-        name: string,
-        props: MirisUploadBuilderNestedStackProps
-    ) {
+    constructor(parent: Construct, name: string, props: MirisUploadBuilderNestedStackProps) {
         super(parent, name);
         const construct = new MirisUploadConstruct(this, "MirisUpload", props);
         this.pipelineVamsLambdaFunctionName = construct.pipelineVamsLambdaFunctionName;

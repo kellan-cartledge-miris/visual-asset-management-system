@@ -13,9 +13,7 @@ import * as path from "path";
 import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
 import * as Config from "../../../../../../config/config";
-import {
-    LAMBDA_PYTHON_RUNTIME,
-} from "../../../../../../config/config";
+import { LAMBDA_PYTHON_RUNTIME } from "../../../../../../config/config";
 import { storageResources } from "../../../../storage/storageBuilder-nestedStack";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
@@ -24,7 +22,10 @@ import {
     suppressCdkNagErrorsByGrantReadWrite,
 } from "../../../../../helper/security";
 
-const LAMBDA_SRC = path.join(__dirname, "../../../../../../../backendPipelines/miris/upload/lambda");
+const LAMBDA_SRC = path.join(
+    __dirname,
+    "../../../../../../../backendPipelines/miris/upload/lambda"
+);
 
 function _commonProps(
     config: Config.Config,
@@ -159,12 +160,8 @@ export function buildConstructMirisUploadPipelineFunction(
         environment: {
             MIRIS_API_BASE_URL: config.app.miris.upload.mirisApiBaseUrl,
             MIRIS_API_KEY_SECRET_ARN: config.app.miris.upload.apiKeySecretArn,
-            MIRIS_UPLOAD_TASK_TIMEOUT_SECONDS: String(
-                config.app.miris.upload.taskTimeoutSeconds
-            ),
-            MIRIS_UPLOAD_MAX_ASSET_SIZE_BYTES: String(
-                config.app.miris.upload.maxAssetSizeBytes
-            ),
+            MIRIS_UPLOAD_TASK_TIMEOUT_SECONDS: String(config.app.miris.upload.taskTimeoutSeconds),
+            MIRIS_UPLOAD_MAX_ASSET_SIZE_BYTES: String(config.app.miris.upload.maxAssetSizeBytes),
         },
         ..._commonProps(config, vpc, subnets, lambdaCommonBaseLayer),
     });

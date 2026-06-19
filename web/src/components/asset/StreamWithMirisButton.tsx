@@ -39,9 +39,7 @@ const StreamWithMirisButton: React.FC<StreamWithMirisButtonProps> = ({
 }) => {
     const [running, setRunning] = useState(false);
     const [submitted, setSubmitted] = useState(false);
-    const config = appCache.getItem("config") as
-        | { featuresEnabled?: string }
-        | undefined;
+    const config = appCache.getItem("config") as { featuresEnabled?: string } | undefined;
     const enabled = (config?.featuresEnabled ?? "").includes("MIRIS_UPLOAD");
 
     if (!enabled) return null;

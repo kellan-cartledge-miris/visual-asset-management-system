@@ -109,9 +109,7 @@ export class MirisUploadConstruct extends Construct {
                         "states:SendTaskFailure",
                         "states:SendTaskHeartbeat",
                     ],
-                    resources: [
-                        `arn:${ServiceHelper.Partition()}:states:${region}:${account}:*`,
-                    ],
+                    resources: [`arn:${ServiceHelper.Partition()}:states:${region}:${account}:*`],
                 }),
             ],
         });
@@ -126,25 +124,21 @@ export class MirisUploadConstruct extends Construct {
             );
         }
 
-        const containerExecutionRole = new iam.Role(
-            this,
-            "MirisUploadContainerExecutionRole",
-            {
-                assumedBy: Service("ECS_TASKS").Principal,
-                inlinePolicies: {
-                    InputBucketPolicy: inputBucketPolicy,
-                    OutputBucketPolicy: outputBucketPolicy,
-                    SecretsPolicy: secretsPolicy,
-                    StateTaskPolicy: stateTaskPolicy,
-                },
-                managedPolicies: [
-                    iam.ManagedPolicy.fromAwsManagedPolicyName(
-                        "service-role/AmazonECSTaskExecutionRolePolicy"
-                    ),
-                    iam.ManagedPolicy.fromAwsManagedPolicyName("AWSXrayWriteOnlyAccess"),
-                ],
-            }
-        );
+        const containerExecutionRole = new iam.Role(this, "MirisUploadContainerExecutionRole", {
+            assumedBy: Service("ECS_TASKS").Principal,
+            inlinePolicies: {
+                InputBucketPolicy: inputBucketPolicy,
+                OutputBucketPolicy: outputBucketPolicy,
+                SecretsPolicy: secretsPolicy,
+                StateTaskPolicy: stateTaskPolicy,
+            },
+            managedPolicies: [
+                iam.ManagedPolicy.fromAwsManagedPolicyName(
+                    "service-role/AmazonECSTaskExecutionRolePolicy"
+                ),
+                iam.ManagedPolicy.fromAwsManagedPolicyName("AWSXrayWriteOnlyAccess"),
+            ],
+        });
 
         const containerJobRole = new iam.Role(this, "MirisUploadContainerJobRole", {
             assumedBy: Service("ECS_TASKS").Principal,
@@ -188,10 +182,7 @@ export class MirisUploadConstruct extends Construct {
                 ),
                 dockerfileName: "Dockerfile",
                 batchJobDefinitionName:
-                    "MirisUploadJob" +
-                    props.config.name +
-                    "_" +
-                    props.config.app.baseStackName,
+                    "MirisUploadJob" + props.config.name + "_" + props.config.app.baseStackName,
             }
         );
 
@@ -258,9 +249,7 @@ export class MirisUploadConstruct extends Construct {
 
         const duplicateSucceedState = new sfn.Succeed(this, "DuplicateAlreadyStreamed");
 
-        submitBatchTask
-            .addCatch(failState, { resultPath: "$.error" })
-            .next(endTask);
+        submitBatchTask.addCatch(failState, { resultPath: "$.error" }).next(endTask);
 
         const duplicateCheck = new sfn.Choice(this, "DuplicateCheck")
             .when(
@@ -274,31 +263,25 @@ export class MirisUploadConstruct extends Construct {
         /**
          * CloudWatch Log Group for the inner state machine
          */
-        const stateMachineLogGroup = new logs.LogGroup(
-            this,
-            "MirisUploadStateMachineLogGroup",
-            {
-                logGroupName:
-                    "/aws/vendedlogs/VAMSstateMachine-MirisUploadPipeline" +
-                    generateUniqueNameHash(
-                        props.config.env.coreStackName,
-                        props.config.env.account,
-                        "MirisUploadStateMachineLogGroup",
-                        10
-                    ),
-                retention: logs.RetentionDays.TEN_YEARS,
-                removalPolicy: cdk.RemovalPolicy.DESTROY,
-            }
-        );
+        const stateMachineLogGroup = new logs.LogGroup(this, "MirisUploadStateMachineLogGroup", {
+            logGroupName:
+                "/aws/vendedlogs/VAMSstateMachine-MirisUploadPipeline" +
+                generateUniqueNameHash(
+                    props.config.env.coreStackName,
+                    props.config.env.account,
+                    "MirisUploadStateMachineLogGroup",
+                    10
+                ),
+            retention: logs.RetentionDays.TEN_YEARS,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+        });
 
         /**
          * Inner Step Functions state machine
          */
         const stateMachine = new sfn.StateMachine(this, "MirisUploadInnerStateMachine", {
             definitionBody: sfn.DefinitionBody.fromChainable(sfnDefinition),
-            timeout: Duration.seconds(
-                props.config.app.miris.upload.taskTimeoutSeconds + 1200
-            ),
+            timeout: Duration.seconds(props.config.app.miris.upload.taskTimeoutSeconds + 1200),
             logs: {
                 destination: stateMachineLogGroup,
                 includeExecutionData: true,
@@ -347,10 +330,7 @@ export class MirisUploadConstruct extends Construct {
             props.pipelineSubnets
         );
         // Wire gate function name into the vamsExecute environment so it can invoke it
-        vamsExecuteFn.addEnvironment(
-            "MIRIS_UPLOAD_GATE_FUNCTION_NAME",
-            gateFn.functionName
-        );
+        vamsExecuteFn.addEnvironment("MIRIS_UPLOAD_GATE_FUNCTION_NAME", gateFn.functionName);
         gateFn.grantInvoke(vamsExecuteFn);
 
         /**
@@ -384,14 +364,11 @@ export class MirisUploadConstruct extends Construct {
                     outputType: ".all",
                     waitForCallback: "Enabled",
                     lambdaName: vamsExecuteFn.functionName,
-                    taskTimeout: String(
-                        props.config.app.miris.upload.taskTimeoutSeconds + 600
-                    ),
+                    taskTimeout: String(props.config.app.miris.upload.taskTimeoutSeconds + 600),
                     taskHeartbeatTimeout: "",
                     inputParameters: "",
                     workflowId: "miris-upload-streamable",
-                    workflowDescription:
-                        "Auto-upload USD assets to Miris Spatial Streaming",
+                    workflowDescription: "Auto-upload USD assets to Miris Spatial Streaming",
                     autoTriggerOnFileExtensionsUpload: props.config.app.miris.upload
                         .autoRegisterAutoTriggerOnFileUpload
                         ? props.config.app.miris.upload.triggerExtensions
