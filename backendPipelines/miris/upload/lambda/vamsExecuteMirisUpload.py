@@ -75,6 +75,30 @@ def lambda_handler(event, context):
                 "Make sure this pipeline is registered with waitForCallback=Enabled."
             )
 
+        # First: invoke the gate Lambda. If it returns gate=skip, we're done.
+        gate_function_name = os.environ.get("MIRIS_UPLOAD_GATE_FUNCTION_NAME", "")
+        if gate_function_name:
+            gate_payload = {
+                "body": json.dumps(
+                    {
+                        "databaseId": data.get("databaseId", ""),
+                        "assetId": data.get("assetId", ""),
+                        "inputS3AssetFilePath": data["inputS3AssetFilePath"],
+                        "sfnExternalTaskToken": data["TaskToken"],
+                        "inputParameters": data.get("inputParameters", ""),
+                    }
+                )
+            }
+            gate_resp = lambda_client.invoke(
+                FunctionName=gate_function_name,
+                InvocationType="RequestResponse",
+                Payload=json.dumps(gate_payload).encode("utf-8"),
+            )
+            gate_result = json.loads(gate_resp["Payload"].read().decode("utf-8"))
+            if gate_result.get("gate") == "skip":
+                logger.info("Gate Lambda returned skip; pipeline is a no-op")
+                return {"statusCode": 200, "body": "Skipped (gate)"}
+
         execute_pipeline(
             data["inputS3AssetFilePath"],
             data["outputS3AssetFilesPath"],
