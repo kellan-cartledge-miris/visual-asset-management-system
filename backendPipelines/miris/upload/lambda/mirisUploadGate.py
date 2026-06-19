@@ -17,18 +17,10 @@ Behavior:
 import json
 import os
 
-# Guard against overwriting an already-patched boto3 reference during
-# importlib.reload() in tests (reload re-executes module code; if boto3 is
-# already present in the module namespace — e.g., replaced by a unittest.mock
-# patch — we preserve it rather than re-binding to the real module).
-if "boto3" not in vars():
-    import boto3  # noqa: E402
-
+import boto3
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service="MirisUploadGate")
-
-_ENABLED_DATABASES = json.loads(os.environ.get("MIRIS_UPLOAD_ENABLED_DATABASES", "[]"))
 
 
 def _parse_body(event):
@@ -50,6 +42,7 @@ def _is_manual(input_parameters):
 
 
 def lambda_handler(event, context):
+    enabled_databases = json.loads(os.environ.get("MIRIS_UPLOAD_ENABLED_DATABASES", "[]"))
     logger.info("MirisUploadGate received event")
     body = _parse_body(event)
     database_id = body.get("databaseId", "")
@@ -60,7 +53,7 @@ def lambda_handler(event, context):
         logger.info("Manual invocation; bypassing allow-list")
         return {"gate": "proceed", "databaseId": database_id, **body}
 
-    if database_id in _ENABLED_DATABASES:
+    if database_id in enabled_databases:
         logger.info(f"Database {database_id} in allow-list; proceeding")
         return {"gate": "proceed", "databaseId": database_id, **body}
 

@@ -65,14 +65,11 @@ def test_database_not_in_allow_list_skips_and_sends_task_success():
     assert "db-blocked" in output["reason"]
 
 
-def test_empty_allow_list_skips_all_non_manual():
+def test_empty_allow_list_skips_all_non_manual(monkeypatch):
     """Empty allow-list = no auto-upload fires."""
-    os.environ["MIRIS_UPLOAD_ENABLED_DATABASES"] = "[]"
+    monkeypatch.setenv("MIRIS_UPLOAD_ENABLED_DATABASES", "[]")
     with patch("mirisUploadGate.boto3") as mock_boto3:
-        # Reload because env was already read at import time
-        import importlib
         import mirisUploadGate
-        importlib.reload(mirisUploadGate)
         result = mirisUploadGate.lambda_handler(_event("db-anything"), None)
     assert result["gate"] == "skip"
 
