@@ -342,7 +342,79 @@ export function getConfig(app: cdk.App): Config {
         config.app.miris = {
             enabled: false,
             viewerKey: "",
+            upload: {
+                enabled: false,
+                autoRegisterWithVAMS: true,
+                autoRegisterAutoTriggerOnFileUpload: true,
+                triggerExtensions: ".usd,.usda,.usdc,.usdz",
+                apiKeySecretArn: "",
+                mirisApiBaseUrl: "https://api.miris.com",
+                enabledDatabaseIds: [],
+                taskTimeoutSeconds: 1800,
+                maxAssetSizeBytes: 5_000_000_000,
+            },
         };
+    }
+
+    if (config.app.miris.upload == undefined) {
+        config.app.miris.upload = {
+            enabled: false,
+            autoRegisterWithVAMS: true,
+            autoRegisterAutoTriggerOnFileUpload: true,
+            triggerExtensions: ".usd,.usda,.usdc,.usdz",
+            apiKeySecretArn: "",
+            mirisApiBaseUrl: "https://api.miris.com",
+            enabledDatabaseIds: [],
+            taskTimeoutSeconds: 1800,
+            maxAssetSizeBytes: 5_000_000_000,
+        };
+    }
+
+    if (config.app.miris.upload.enabled) {
+        if (!config.app.miris.enabled) {
+            throw new Error(
+                "Configuration Error: app.miris.upload.enabled requires " +
+                    "app.miris.enabled = true. The upload pipeline produces .mrx " +
+                    "files that the Phase 1 viewer renders; enabling upload without " +
+                    "the viewer means assets get uploaded but cannot be viewed."
+            );
+        }
+        if (!config.app.webUi.allowUnsafeEvalFeatures) {
+            throw new Error(
+                "Configuration Error: app.miris.upload.enabled requires " +
+                    "app.webUi.allowUnsafeEvalFeatures = true (inherited Phase 1 gate)."
+            );
+        }
+        if (
+            !config.app.miris.upload.apiKeySecretArn ||
+            config.app.miris.upload.apiKeySecretArn === "UNDEFINED" ||
+            config.app.miris.upload.apiKeySecretArn === ""
+        ) {
+            throw new Error(
+                "Configuration Error: app.miris.upload.enabled requires " +
+                    "app.miris.upload.apiKeySecretArn to be set to the Secrets " +
+                    "Manager ARN of the Miris Integration Key."
+            );
+        }
+        if (
+            !config.app.miris.upload.mirisApiBaseUrl ||
+            config.app.miris.upload.mirisApiBaseUrl === ""
+        ) {
+            throw new Error(
+                "Configuration Error: app.miris.upload.enabled requires " +
+                    "app.miris.upload.mirisApiBaseUrl (default https://api.miris.com)."
+            );
+        }
+        if (
+            config.app.miris.upload.autoRegisterAutoTriggerOnFileUpload &&
+            config.app.miris.upload.enabledDatabaseIds.length === 0
+        ) {
+            console.warn(
+                "Configuration Warning: app.miris.upload.autoRegisterAutoTriggerOnFileUpload " +
+                    "is true but app.miris.upload.enabledDatabaseIds is empty. The pipeline " +
+                    "will register but never auto-fire (the gate Lambda blocks all databases)."
+            );
+        }
     }
 
     if (config.app.miris.enabled) {
@@ -1291,6 +1363,17 @@ export interface ConfigPublic {
         miris: {
             enabled: boolean;
             viewerKey: string;
+            upload: {
+                enabled: boolean;
+                autoRegisterWithVAMS: boolean;
+                autoRegisterAutoTriggerOnFileUpload: boolean;
+                triggerExtensions: string;
+                apiKeySecretArn: string;
+                mirisApiBaseUrl: string;
+                enabledDatabaseIds: string[];
+                taskTimeoutSeconds: number;
+                maxAssetSizeBytes: number;
+            };
         };
         api: {
             globalRateLimit: number;
