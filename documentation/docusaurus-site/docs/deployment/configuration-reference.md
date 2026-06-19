@@ -299,6 +299,26 @@ Miris Spatial Streaming requires outbound WebSocket connections to `*.miris.com`
 The `@miris-inc/three` SDK uses `eval()` at runtime, so enabling Miris also requires `app.webUi.allowUnsafeEvalFeatures: true`. `getConfig()` rejects deployments that enable Miris without that flag. This trust boundary matches the Cesium and Needle USD viewer plugins.
 :::
 
+### Miris auto-upload pipeline (`app.miris.upload`)
+
+Automatically uploads supported USD source files to the Miris Spatial Streaming platform and writes a `.mrx` manifest back to the VAMS asset. Requires `app.miris.enabled: true`.
+
+| Field                                                    | Type    | Default                    | Description                                                                                                                                     |
+| -------------------------------------------------------- | ------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.miris.upload.enabled`                               | boolean | `false`                    | Enables the Miris auto-upload pipeline.                                                                                                         |
+| `app.miris.upload.autoRegisterWithVAMS`                  | boolean | `true`                     | Automatically registers the pipeline and workflow in the VAMS database during deployment.                                                       |
+| `app.miris.upload.autoRegisterAutoTriggerOnFileUpload`   | boolean | `true`                     | Automatically triggers the pipeline when a matching file is uploaded. Requires `autoRegisterWithVAMS: true`.                                    |
+| `app.miris.upload.triggerExtensions`                     | string  | `".usd,.usda,.usdc,.usdz"` | Comma-separated list of file extensions that trigger the pipeline on upload.                                                                    |
+| `app.miris.upload.apiKeySecretArn`                       | string  | _(required when enabled)_  | AWS Secrets Manager ARN containing the Miris Integration Key used to authenticate with the Miris content API.                                   |
+| `app.miris.upload.mirisApiBaseUrl`                       | string  | `"https://api.miris.com"`  | Base URL for the Miris content API. Override only for non-production Miris environments.                                                        |
+| `app.miris.upload.enabledDatabaseIds`                    | array   | `[]`                       | Array of VAMS database IDs for which the pipeline is active. Files uploaded to databases not in this list are skipped. An empty list skips all. |
+| `app.miris.upload.taskTimeoutSeconds`                    | number  | `1800`                     | Maximum seconds the pipeline waits for Miris streamable processing to complete before failing (default: 30 minutes).                            |
+| `app.miris.upload.maxAssetSizeBytes`                     | number  | `5000000000`               | Maximum source file size in bytes accepted by the pipeline (default: 5 GB). Files larger than this limit are skipped.                           |
+
+:::warning[Requirements]
+Miris auto-upload requires `app.miris.enabled: true` and `app.webUi.allowUnsafeEvalFeatures: true`. Cannot be enabled in GovCloud or air-gapped deployments — outbound HTTPS to `api.miris.com` is required.
+:::
+
 ## Metadata schema (`app.metadataSchema`)
 
 Controls auto-loading of default metadata schemas during deployment.
