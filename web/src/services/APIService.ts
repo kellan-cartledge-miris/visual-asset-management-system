@@ -180,16 +180,28 @@ export const runWorkflow = async ({
     workflowId,
     fileKey,
     isGlobalWorkflow = false,
+    inputParameters,
+}: {
+    databaseId: string;
+    assetId: string;
+    workflowId: string;
+    fileKey?: string;
+    isGlobalWorkflow?: boolean;
+    inputParameters?: string;
 }) => {
     try {
         let endpoint;
-        let eventBody = {};
+        let eventBody: Record<string, unknown> = {};
         endpoint = `database/${databaseId}/assets/${assetId}/workflows/${workflowId}`;
 
         if (isGlobalWorkflow) {
             eventBody = { workflowDatabaseId: "GLOBAL", fileKey: fileKey };
         } else {
             eventBody = { workflowDatabaseId: databaseId, fileKey: fileKey };
+        }
+
+        if (inputParameters !== undefined) {
+            eventBody.inputParameters = inputParameters;
         }
 
         const response = await apiClient.post(endpoint, {
@@ -213,6 +225,27 @@ export const runWorkflow = async ({
         console.log(error);
         return [false, error?.message];
     }
+};
+
+/**
+ * Trigger the Miris auto-upload workflow on a single asset, bypassing the
+ * per-database gate via inputParameters.manual=true. Returns the execution
+ * record from the existing workflow-execute endpoint.
+ */
+export const triggerMirisUpload = async ({
+    databaseId,
+    assetId,
+}: {
+    databaseId: string;
+    assetId: string;
+}) => {
+    return await runWorkflow({
+        databaseId,
+        assetId,
+        workflowId: "miris-upload-streamable",
+        // The gate Lambda checks inputParameters.manual to bypass the allow-list
+        inputParameters: JSON.stringify({ manual: true }),
+    });
 };
 
 /**
