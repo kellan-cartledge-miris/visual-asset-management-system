@@ -151,7 +151,7 @@ def main():
         "schemaVersion": 1,
         "mirisAssetUuid": asset_uuid,
         "displayName": name_no_ext,
-        "tags": ["vams-pipeline"],
+        "tags": ["vams", f"vams-asset-{asset_id}", "vams-pipeline"],
         "uploadedAt": datetime.datetime.utcnow()
         .replace(microsecond=0)
         .isoformat()

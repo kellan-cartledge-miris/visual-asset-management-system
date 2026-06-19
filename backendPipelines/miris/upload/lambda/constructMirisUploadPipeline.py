@@ -115,7 +115,7 @@ def lambda_handler(event, context):
     return {
         "jobName": job_name,
         "currentStageType": "MIRIS_UPLOAD",
-        "definition": ["python", "-u", "__main__.py", json.dumps(definition)],
+        "definition": [json.dumps(definition)],
         "inputMetadata": event.get("inputMetadata", ""),
         "inputParameters": event.get("inputParameters", ""),
         "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),

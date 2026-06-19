@@ -60,9 +60,15 @@ def lambda_handler(event, context):
     reason = f"Database {database_id!r} not in MIRIS_UPLOAD_ENABLED_DATABASES allow-list"
     logger.info(f"Skipping: {reason}")
     if task_token:
-        sfn = boto3.client("stepfunctions")
-        sfn.send_task_success(
-            taskToken=task_token,
-            output=json.dumps({"status": "skipped", "reason": reason}),
-        )
+        try:
+            sfn = boto3.client("stepfunctions")
+            sfn.send_task_success(
+                taskToken=task_token,
+                output=json.dumps({"status": "skipped", "reason": reason}),
+            )
+        except Exception as e:
+            # Best-effort: log and proceed. Returning gate=skip still lets
+            # vamsExecute short-circuit, and the outer workflow will time out
+            # if the token call truly failed.
+            logger.warning(f"send_task_success failed (will fall through): {e}")
     return {"gate": "skip", "reason": reason}
