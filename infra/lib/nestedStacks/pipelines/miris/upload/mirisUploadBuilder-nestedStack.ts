@@ -7,8 +7,8 @@ import * as cdk from "aws-cdk-lib";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { Construct } from "constructs";
-import * as Config from "../../../../config/config";
-import { storageResources } from "../../storage/storageBuilder-nestedStack";
+import * as Config from "../../../../../config/config";
+import { storageResources } from "../../../storage/storageBuilder-nestedStack";
 import { MirisUploadConstruct } from "./constructs/mirisUpload-construct";
 
 export interface MirisUploadBuilderNestedStackProps extends cdk.StackProps {
