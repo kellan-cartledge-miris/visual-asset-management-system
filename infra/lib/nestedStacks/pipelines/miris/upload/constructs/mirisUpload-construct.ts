@@ -399,6 +399,38 @@ export class MirisUploadConstruct extends Construct {
             "Intended solution. The Miris upload pipeline lambda and container roles need " +
             "appropriate access to S3 and Step Functions for pipeline orchestration.";
 
+        // IAM4: container roles use AWS-managed policies (ECS task execution + X-Ray write).
+        // Same pattern as splatToolbox.
+        NagSuppressions.addResourceSuppressions(
+            containerExecutionRole,
+            [
+                {
+                    id: "AwsSolutions-IAM4",
+                    reason: "The IAM role for ECS Container execution uses AWS Managed Policies (AmazonECSTaskExecutionRolePolicy + AWSXrayWriteOnlyAccess).",
+                },
+                {
+                    id: "AwsSolutions-IAM5",
+                    reason: nagReason,
+                },
+            ],
+            true
+        );
+
+        NagSuppressions.addResourceSuppressions(
+            containerJobRole,
+            [
+                {
+                    id: "AwsSolutions-IAM4",
+                    reason: "The IAM role for ECS Container job uses AWS Managed Policies (AmazonECSTaskExecutionRolePolicy + AWSXrayWriteOnlyAccess).",
+                },
+                {
+                    id: "AwsSolutions-IAM5",
+                    reason: nagReason,
+                },
+            ],
+            true
+        );
+
         NagSuppressions.addResourceSuppressions(
             this,
             [
