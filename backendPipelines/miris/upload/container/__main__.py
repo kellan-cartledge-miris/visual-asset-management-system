@@ -101,7 +101,7 @@ def main():
     key = get_miris_integration_key(secret_arn, region_name=os.environ.get("AWS_REGION"))
     client = MirisClient(miris_base, key)
 
-    # 4. POST /v1/asset
+    # 4. POST /v1/content
     name_no_ext = os.path.splitext(filename)[0]
     start = client.start_upload(
         name=name_no_ext,
@@ -134,17 +134,20 @@ def main():
         )
     _log("sigv4_put_complete", bucket=temp_bucket, key=temp_key)
 
-    # 6. PUT /v1/asset/upload/{id}
+    # 6. PUT /v1/content/{id}
     client.mark_upload_complete(asset_uuid)
     _log("upload_marked_complete", asset_uuid=asset_uuid)
 
-    # 7. POST /v1/asset/{id}/generate
-    gen = client.trigger_generate(asset_uuid)
-    _log("generate_triggered", state=gen.get("state"))
+    # 7. Poll until terminal preview/streamable state
+    ready = client.poll_until_terminal(asset_uuid, timeout_seconds=task_timeout)
+    _log("terminal_state_reached", state=ready.get("state"))
 
-    # 8. Poll
-    ready = client.poll_until_streamable(asset_uuid, timeout_seconds=task_timeout)
-    _log("streamable_ready", state=ready.get("state"))
+    # 8. Best-effort streamable promotion (non-fatal; manual portal click is the fallback)
+    gen = client.trigger_generate_best_effort(asset_uuid)
+    if gen is None:
+        _log("generate_skipped", reason="endpoint_unavailable_or_4xx")
+    else:
+        _log("generate_triggered", state=gen.get("state"))
 
     # 9. Write the .mrx manifest
     manifest = {

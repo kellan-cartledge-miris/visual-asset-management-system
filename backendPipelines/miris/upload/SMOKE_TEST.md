@@ -41,15 +41,20 @@ Should print the JSON array of allowed databaseIds.
       SFN → Batch container.
 - [ ] Container logs (CloudWatch) show, in order:
       - `downloaded`
-      - `start_upload`
+      - `start_upload`  (POST /v1/content)
       - `sigv4_put_complete`
-      - `upload_marked_complete`
-      - `generate_triggered`
-      - `streamable_ready`
+      - `upload_marked_complete`  (PUT /v1/content/{id})
+      - `terminal_state_reached` with `state=preview` (or already `streamable`)
+      - `generate_triggered` OR `generate_skipped` (best-effort streamable promotion)
       - `manifest_written`
 - [ ] Within `taskTimeoutSeconds`, a `model.usdz.mrx` file appears in the asset's
       file list.
-- [ ] Open the `.mrx` in the VAMS web UI → Phase 1 viewer streams the asset.
+- [ ] In the Miris Portal, the asset shows up at state `preview`. If the
+      best-effort `generate` call worked it will move on to `streamable` over
+      the next few hours. If `generate_skipped` was logged, manually click
+      "Generate streamable" in the Portal for that asset (one credit).
+- [ ] Once the Miris asset reaches `streamable`, open the `.mrx` in the
+      VAMS web UI → Phase 1 viewer streams the asset.
 
 ### 4. Upload to a NON-allowed database
 

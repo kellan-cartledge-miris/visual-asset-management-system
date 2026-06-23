@@ -9,7 +9,7 @@ import responses
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-BASE = "https://api.miris.test"
+BASE = "https://app.miris.test"
 KEY = "test-integration-key-xxx"
 UUID = "11111111-2222-3333-4444-555555555555"
 
@@ -20,7 +20,7 @@ def test_start_upload_posts_correct_body_and_returns_response():
 
     responses.add(
         responses.POST,
-        f"{BASE}/v1/asset",
+        f"{BASE}/v1/content",
         json={
             "id": UUID,
             "endpoint_type": "s3",
@@ -30,8 +30,6 @@ def test_start_upload_posts_correct_body_and_returns_response():
             "secret_key": "SK",
             "session_token": "ST",
             "upload_path": "s3://miris-uploads-bucket/ws/up",
-            "total_bytes": 1024,
-            "file_count": 1,
         },
         status=200,
     )
@@ -53,18 +51,18 @@ def test_start_upload_posts_correct_body_and_returns_response():
         "tags": ["vams"],
         "total_bytes": 1024,
     }
-    auth_header = responses.calls[0].request.headers["Authorization"]
-    assert auth_header == f"Bearer {KEY}"
+    assert responses.calls[0].request.headers["Miris-Integration-Key"] == KEY
+    assert "Authorization" not in responses.calls[0].request.headers
     assert resp["id"] == UUID
 
 
 @responses.activate
-def test_mark_upload_complete_puts_status_completed():
+def test_mark_upload_complete_puts_status_completed_to_content_endpoint():
     from miris_uploader import MirisClient
 
     responses.add(
         responses.PUT,
-        f"{BASE}/v1/asset/upload/{UUID}",
+        f"{BASE}/v1/content/{UUID}",
         json={"id": UUID, "upload_status": "completed"},
         status=200,
     )
@@ -76,7 +74,7 @@ def test_mark_upload_complete_puts_status_completed():
 
 
 @responses.activate
-def test_trigger_generate_posts_no_body():
+def test_trigger_generate_best_effort_returns_response_on_2xx():
     from miris_uploader import MirisClient
 
     responses.add(
@@ -87,19 +85,33 @@ def test_trigger_generate_posts_no_body():
     )
 
     client = MirisClient(BASE, KEY)
-    result = client.trigger_generate(UUID)
+    result = client.trigger_generate_best_effort(UUID)
     assert result["state"] == "processing_streamable"
-    # The POST body is empty
     body = responses.calls[0].request.body
     assert body in (None, b"", "")
 
 
 @responses.activate
-def test_poll_until_streamable_breaks_on_ready_state():
+def test_trigger_generate_best_effort_returns_none_on_4xx():
     from miris_uploader import MirisClient
 
-    # Two "processing" responses then a "streamable_ready"
-    for state in ("processing_streamable", "processing_streamable"):
+    responses.add(
+        responses.POST,
+        f"{BASE}/v1/asset/{UUID}/generate",
+        json={"detail": "not found"},
+        status=404,
+    )
+
+    client = MirisClient(BASE, KEY)
+    result = client.trigger_generate_best_effort(UUID)
+    assert result is None
+
+
+@responses.activate
+def test_poll_until_terminal_breaks_on_preview_state():
+    from miris_uploader import MirisClient
+
+    for state in ("processing_preview", "processing_preview"):
         responses.add(
             responses.GET,
             f"{BASE}/v1/asset/{UUID}",
@@ -109,32 +121,68 @@ def test_poll_until_streamable_breaks_on_ready_state():
     responses.add(
         responses.GET,
         f"{BASE}/v1/asset/{UUID}",
-        json={"id": UUID, "state": "streamable_ready"},
+        json={"id": UUID, "state": "preview"},
         status=200,
     )
 
     client = MirisClient(BASE, KEY)
-    result = client.poll_until_streamable(
+    result = client.poll_until_terminal(
         UUID, timeout_seconds=10, poll_interval_seconds=0
     )
-    assert result["state"] == "streamable_ready"
+    assert result["state"] == "preview"
     assert len(responses.calls) == 3
 
 
 @responses.activate
-def test_poll_until_streamable_times_out():
+def test_poll_until_terminal_accepts_streamable_as_success():
     from miris_uploader import MirisClient
 
     responses.add(
         responses.GET,
         f"{BASE}/v1/asset/{UUID}",
-        json={"id": UUID, "state": "processing_streamable"},
+        json={"id": UUID, "state": "streamable"},
+        status=200,
+    )
+
+    client = MirisClient(BASE, KEY)
+    result = client.poll_until_terminal(
+        UUID, timeout_seconds=10, poll_interval_seconds=0
+    )
+    assert result["state"] == "streamable"
+
+
+@responses.activate
+def test_poll_until_terminal_raises_on_error_state():
+    from miris_uploader import MirisClient, MirisError
+
+    responses.add(
+        responses.GET,
+        f"{BASE}/v1/asset/{UUID}",
+        json={"id": UUID, "state": "failed"},
+        status=200,
+    )
+
+    client = MirisClient(BASE, KEY)
+    with pytest.raises(MirisError, match="failed"):
+        client.poll_until_terminal(
+            UUID, timeout_seconds=10, poll_interval_seconds=0
+        )
+
+
+@responses.activate
+def test_poll_until_terminal_times_out():
+    from miris_uploader import MirisClient
+
+    responses.add(
+        responses.GET,
+        f"{BASE}/v1/asset/{UUID}",
+        json={"id": UUID, "state": "processing_preview"},
         status=200,
     )
 
     client = MirisClient(BASE, KEY)
     with pytest.raises(TimeoutError):
-        client.poll_until_streamable(
+        client.poll_until_terminal(
             UUID, timeout_seconds=0, poll_interval_seconds=0
         )
 
@@ -159,7 +207,6 @@ def test_redact_response_masks_secret_triple():
 
 
 def test_redact_response_is_pure():
-    """Does not mutate the input."""
     from miris_uploader import _redact_response
 
     original = {"secret_key": "SK"}

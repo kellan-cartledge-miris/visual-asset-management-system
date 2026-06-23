@@ -62,6 +62,9 @@ export class MirisUploadConstruct extends Construct {
          * The container needs: read from all VAMS asset buckets, Secrets Manager for the API key,
          * and Step Functions task token callbacks.
          */
+        // Asset-bucket policy: read the source file AND write the .mrx manifest to
+        // outputS3AssetFilesPath (which lives in the asset bucket). Same pattern as
+        // splatToolbox — "input" is a misnomer; this policy covers both directions.
         const inputBucketPolicy = new iam.PolicyDocument({
             statements: [
                 ...s3AssetBuckets.getS3AssetBucketRecords().map((record) => {
@@ -69,7 +72,13 @@ export class MirisUploadConstruct extends Construct {
                     const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
                     return new iam.PolicyStatement({
                         effect: iam.Effect.ALLOW,
-                        actions: ["s3:GetObject", "s3:HeadObject", "s3:ListBucket"],
+                        actions: [
+                            "s3:GetObject",
+                            "s3:GetObjectVersion",
+                            "s3:HeadObject",
+                            "s3:ListBucket",
+                            "s3:PutObject",
+                        ],
                         resources: [
                             record.bucket.bucketArn,
                             `${record.bucket.bucketArn}${normalizedPrefix}*`,
@@ -226,11 +235,14 @@ export class MirisUploadConstruct extends Construct {
             containerOverrides: {
                 command: [...sfn.JsonPath.listAt("$.definition")],
                 environment: {
-                    TASK_TOKEN: sfn.JsonPath.taskToken,
                     AWS_REGION: region,
                 },
             },
             integrationPattern: sfn.IntegrationPattern.RUN_JOB,
+            // Preserve the constructPipeline output (externalSfnTaskToken, etc.) so
+            // MirisUploadEnd can read them. Without this the BatchSubmitJob result
+            // replaces the entire state and the JSONPath '$.externalSfnTaskToken' is lost.
+            resultPath: sfn.JsonPath.DISCARD,
         });
 
         const endTask = new tasks.LambdaInvoke(this, "MirisUploadEnd", {
@@ -238,7 +250,6 @@ export class MirisUploadConstruct extends Construct {
             payload: sfn.TaskInput.fromObject({
                 "externalSfnTaskToken.$": "$.externalSfnTaskToken",
                 status: "success",
-                "mirisAssetUuid.$": "$.mirisAssetUuid",
             }),
         });
 
