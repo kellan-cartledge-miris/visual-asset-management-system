@@ -65,6 +65,9 @@ def main():
     definition = json.loads(sys.argv[1])
     stage = definition["stages"][0]
     asset_id = stage["assetId"]
+    # databaseId added in a later iteration; tolerate older pipeline definitions
+    # that don't include it by defaulting to "".
+    database_id = stage.get("databaseId", "")
     trigger = stage["triggerInput"]
     output_files = stage["outputFiles"]
     miris_base = stage["mirisApiBaseUrl"]
@@ -103,11 +106,14 @@ def main():
 
     # 4. POST /v1/content
     name_no_ext = os.path.splitext(filename)[0]
+    miris_tags = ["vams", f"vams-asset-{asset_id}"]
+    if database_id:
+        miris_tags.append(f"vams-database-{database_id}")
     start = client.start_upload(
         name=name_no_ext,
         content_path=filename,
         total_bytes=size,
-        tags=["vams", f"vams-asset-{asset_id}"],
+        tags=miris_tags,
     )
     _log("start_upload", resp=_redact_response(start))
     asset_uuid = start["id"]
@@ -150,11 +156,14 @@ def main():
         _log("generate_triggered", state=gen.get("state"))
 
     # 9. Write the .mrx manifest
+    manifest_tags = ["vams", f"vams-asset-{asset_id}", "vams-pipeline"]
+    if database_id:
+        manifest_tags.append(f"vams-database-{database_id}")
     manifest = {
         "schemaVersion": 1,
         "mirisAssetUuid": asset_uuid,
         "displayName": name_no_ext,
-        "tags": ["vams", f"vams-asset-{asset_id}", "vams-pipeline"],
+        "tags": manifest_tags,
         "uploadedAt": datetime.datetime.utcnow()
         .replace(microsecond=0)
         .isoformat()

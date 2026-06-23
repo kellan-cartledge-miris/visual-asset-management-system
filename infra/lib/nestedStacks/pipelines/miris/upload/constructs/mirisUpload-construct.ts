@@ -6,6 +6,7 @@
 import * as cdk from "aws-cdk-lib";
 import { Duration, Stack } from "aws-cdk-lib";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
+import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
@@ -192,6 +193,14 @@ export class MirisUploadConstruct extends Construct {
                 dockerfileName: "Dockerfile",
                 batchJobDefinitionName:
                     "MirisUploadJob" + props.config.name + "_" + props.config.app.baseStackName,
+                // Right-size for an I/O-bound workload (S3 download + Miris API HTTPS
+                // upload + state polling). Graviton (ARM64) is ~20% cheaper than x86
+                // for equivalent Fargate vCPU/memory.
+                cpu: 1,
+                memoryMiB: 2048,
+                ephemeralStorageGiB: 21,
+                dockerPlatform: cdk.aws_ecr_assets.Platform.LINUX_ARM64,
+                fargateCpuArchitecture: ecs.CpuArchitecture.ARM64,
             }
         );
 

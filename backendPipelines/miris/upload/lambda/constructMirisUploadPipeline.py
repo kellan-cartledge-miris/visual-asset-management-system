@@ -54,6 +54,7 @@ def lambda_handler(event, context):
     aux_uri = event.get("inputOutputS3AssetAuxiliaryFilesPath", "")
     output_files_uri = event.get("outputS3AssetFilesPath", "")
     asset_id = event.get("assetId", "")
+    database_id = event.get("databaseId", "")
 
     aux_bucket = ""
     aux_key = ""
@@ -88,6 +89,7 @@ def lambda_handler(event, context):
             {
                 "type": "MIRIS_UPLOAD",
                 "assetId": asset_id,
+                "databaseId": database_id,
                 "triggerInput": {
                     "bucketName": input_bucket,
                     "objectKey": input_key,
