@@ -13,6 +13,7 @@ The VAMS web interface is a React 17 application built with Vite and the AWS Clo
 VAMS includes 17 built-in viewer plugins across five categories (3D, Media, Document, Data, and Preview). The plugin-based architecture supports lazy loading, per-plugin dependency management, automatic viewer selection based on file extension, and fullscreen mode. Two additional licensed viewers (VNTANA and VEERUM) provide commercial-grade rendering for GLB models and point clouds.
 
 -   **Miris Spatial Streaming** — Stream 3D assets at progressive levels of detail via the Miris platform (`.mrx` manifest files trigger the viewer).
+-   **Miris Auto-Upload Pipeline** — Auto-uploads supported source assets to the Miris Spatial Streaming platform and emits a `.mrx` manifest, so the assets become streamable in the VAMS viewer without manual steps.
 
 For the complete list of supported file viewers and extensions, see [File Viewers](../concepts/viewers.md).
 
@@ -203,6 +204,7 @@ VAMS includes twelve built-in processing pipelines, each deployable through conf
 | RapidPipeline (ECS/EKS)      | `useRapidPipeline`                       | Licensed spatial data optimization                                                                                                                                                            | Disabled |
 | VNTANA ModelOps              | `useModelOps`                            | Licensed ModelOps optimization                                                                                                                                                                | Disabled |
 | NVIDIA Isaac Lab Training    | `useIsaacLabTraining`                    | Reinforcement learning training and evaluation                                                                                                                                                | Disabled |
+| Miris Auto-Upload            | `app.miris.upload`                       | Upload USD assets to Miris Spatial Streaming; emit `.mrx` manifest                                                                                                                           | Disabled |
 
 ### Pipeline Capabilities
 

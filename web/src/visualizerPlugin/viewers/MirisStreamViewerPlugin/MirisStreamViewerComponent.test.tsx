@@ -97,10 +97,12 @@ jest.mock("./dependencies", () => ({
     },
 }));
 
-// --- Mock downloadAsset ---
+// --- Mock downloadAsset and getMirisAssetStatus ---
 const mockDownloadAsset = jest.fn();
+const mockGetMirisAssetStatus = jest.fn();
 jest.mock("../../../services/APIService", () => ({
     downloadAsset: (...args: unknown[]) => mockDownloadAsset(...args),
+    getMirisAssetStatus: (...args: unknown[]) => mockGetMirisAssetStatus(...args),
 }));
 
 // --- Mock appCache ---
@@ -126,6 +128,11 @@ beforeEach(() => {
             ),
     }) as unknown as typeof fetch;
     mockDownloadAsset.mockResolvedValue([true, "https://signed.example.com/manifest"]);
+    // Default: asset is already streamable — happy-path tests don't need the overlay.
+    mockGetMirisAssetStatus.mockResolvedValue([
+        true,
+        { state: "streamable", isStreamable: true },
+    ]);
 });
 afterAll(() => {
     global.fetch = realFetch;
@@ -186,5 +193,39 @@ describe("MirisStreamViewerComponent", () => {
         const events = mockStreamAddEventListener.mock.calls.map((c) => c[0]);
         expect(events).toContain("streamloaded");
         expect(events).toContain("sceneloaded");
+    });
+
+    it("shows the processing overlay when Miris is still preparing the asset", async () => {
+        mockGetMirisAssetStatus.mockResolvedValue([
+            true,
+            { state: "preview", isStreamable: false },
+        ]);
+        render(<MirisStreamViewerComponent {...baseProps} />);
+        await waitFor(() => expect(screen.getByText(/preparing this asset/i)).toBeInTheDocument());
+        // Renderer should NOT be initialized while we're showing the overlay.
+        expect(mockSceneCtor).not.toHaveBeenCalled();
+    });
+
+    it("renders normally when the status check fails (endpoint not deployed)", async () => {
+        // Simulate the endpoint not being deployed: throw synchronously.
+        mockGetMirisAssetStatus.mockRejectedValue(new Error("network"));
+        render(<MirisStreamViewerComponent {...baseProps} />);
+        await waitFor(() => expect(mockSceneCtor).toHaveBeenCalledTimes(1));
+    });
+
+    it("surfaces a Miris-side error when status returns errorMessage", async () => {
+        mockGetMirisAssetStatus.mockResolvedValue([
+            true,
+            {
+                state: "failed",
+                isStreamable: false,
+                errorMessage: "Miris processing failed. Check this asset in app.miris.com.",
+            },
+        ]);
+        render(<MirisStreamViewerComponent {...baseProps} />);
+        await waitFor(() =>
+            expect(screen.getByText(/miris processing failed/i)).toBeInTheDocument()
+        );
+        expect(mockSceneCtor).not.toHaveBeenCalled();
     });
 });

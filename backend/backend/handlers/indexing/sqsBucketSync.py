@@ -8,6 +8,7 @@ import os
 import boto3
 import time
 import hashlib
+from urllib.parse import unquote_plus
 from customLogging.logger import safeLogger
 from handlers.assets.createAsset import create_asset
 from models.assetsV3 import CreateAssetRequestModel
@@ -1209,10 +1210,12 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
         if not record.get('s3'):
             return False, False, "Record does not contain S3 information"
 
-        # Extract bucket name and object key
+        # Extract bucket name and object key. S3 event notifications deliver
+        # URL-encoded keys (`+` and `%XX`); S3 APIs and downstream consumers
+        # expect literal characters, so decode here.
         bucket_name = record['s3']['bucket']['name']
-        object_key = record['s3']['object']['key']
-        
+        object_key = unquote_plus(record['s3']['object']['key'])
+
         logger.info(f"Processing S3 record for bucket {bucket_name}, key {object_key}")
 
         #Copy prefix
@@ -1586,10 +1589,11 @@ def lambda_handler_deleted(event, context):
                         logger.warning("Record does not contain S3 information, skipping")
                         continue
                     
-                    # Extract bucket name and object key
+                    # Extract bucket name and object key. S3 event notifications
+                    # deliver URL-encoded keys; downstream consumers expect literals.
                     bucket_name = record['s3']['bucket']['name']
-                    object_key = record['s3']['object']['key']
-                    
+                    object_key = unquote_plus(record['s3']['object']['key'])
+
                     # Skip init files entirely (both processing and indexing)
                     if object_key.endswith('init') or object_key.endswith('init/'):
                         logger.info(f"Skipping init file: {object_key}")

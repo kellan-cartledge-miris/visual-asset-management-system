@@ -240,6 +240,7 @@ if (config.featuresEnabled.includes("NEW_FEATURE")) {
 | `ALLOWUNSAFEEVAL`               | Permits `unsafe-eval` in CSP; required by certain viewer plugins (CesiumJS, Needle USD WASM, ThreeJS CAD, Miris Spatial Streaming) |
 | `LOCATIONSERVICES`              | Amazon Location Service map visualization                                                                        |
 | `MIRIS_STREAMING`               | Enables the Miris Spatial Streaming viewer plugin (requires `app.miris.viewerKey` AND `app.webUi.allowUnsafeEvalFeatures: true`; incompatible with GovCloud) |
+| `MIRIS_UPLOAD`                  | Enables the Miris auto-upload pipeline (requires `app.miris.enabled` AND `app.webUi.allowUnsafeEvalFeatures: true`; incompatible with GovCloud) |
 | `ALBDEPLOY`                     | ALB-based static website distribution                                                                            |
 | `CLOUDFRONTDEPLOY`              | CloudFront-based static website distribution                                                                     |
 | `NOOPENSEARCH`                  | OpenSearch is not deployed; disables search-dependent UI                                                         |

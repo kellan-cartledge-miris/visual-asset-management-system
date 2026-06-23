@@ -344,6 +344,7 @@ export class VPCBuilderNestedStack extends NestedStack {
                 props.config.app.pipelines.useRapidPipeline.useEks.enabled ||
                 props.config.app.pipelines.useModelOps.enabled ||
                 props.config.app.pipelines.useSplatToolbox.enabled ||
+                props.config.app.miris.upload.enabled ||
                 props.config.app.pipelines.useIsaacLabTraining.enabled ||
                 props.config.app.pipelines.useNvidiaCosmos.enabled ||
                 props.config.app.pipelines.useNvidiaGr00t.enabled
@@ -547,6 +548,7 @@ export class VPCBuilderNestedStack extends NestedStack {
                 props.config.app.pipelines.useRapidPipeline.useEks.enabled ||
                 props.config.app.pipelines.useModelOps.enabled ||
                 props.config.app.pipelines.useSplatToolbox.enabled ||
+                props.config.app.miris.upload.enabled ||
                 props.config.app.pipelines.useIsaacLabTraining?.enabled ||
                 props.config.app.pipelines.useNvidiaCosmos.enabled ||
                 props.config.app.pipelines.useNvidiaGr00t.enabled
@@ -626,6 +628,7 @@ export class VPCBuilderNestedStack extends NestedStack {
                 props.config.app.pipelines.useRapidPipeline.useEcs.enabled ||
                 props.config.app.pipelines.useRapidPipeline.useEks.enabled ||
                 props.config.app.pipelines.useSplatToolbox.enabled ||
+                props.config.app.miris.upload.enabled ||
                 props.config.app.pipelines.useNvidiaCosmos.enabled ||
                 props.config.app.pipelines.useNvidiaGr00t.enabled;
             const needsEcsIsolated = props.config.app.pipelines.useIsaacLabTraining?.enabled;

@@ -180,16 +180,28 @@ export const runWorkflow = async ({
     workflowId,
     fileKey,
     isGlobalWorkflow = false,
+    inputParameters,
+}: {
+    databaseId: string;
+    assetId: string;
+    workflowId: string;
+    fileKey?: string;
+    isGlobalWorkflow?: boolean;
+    inputParameters?: string;
 }) => {
     try {
         let endpoint;
-        let eventBody = {};
+        let eventBody: Record<string, unknown> = {};
         endpoint = `database/${databaseId}/assets/${assetId}/workflows/${workflowId}`;
 
         if (isGlobalWorkflow) {
             eventBody = { workflowDatabaseId: "GLOBAL", fileKey: fileKey };
         } else {
             eventBody = { workflowDatabaseId: databaseId, fileKey: fileKey };
+        }
+
+        if (inputParameters !== undefined) {
+            eventBody.inputParameters = inputParameters;
         }
 
         const response = await apiClient.post(endpoint, {
@@ -210,6 +222,71 @@ export const runWorkflow = async ({
             return false;
         }
     } catch (error) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+/**
+ * Trigger the Miris auto-upload workflow on a single asset, bypassing the
+ * per-database gate via inputParameters.manual=true. Returns the execution
+ * record from the existing workflow-execute endpoint.
+ */
+export const triggerMirisUpload = async ({
+    databaseId,
+    assetId,
+}: {
+    databaseId: string;
+    assetId: string;
+}) => {
+    return await runWorkflow({
+        databaseId,
+        assetId,
+        workflowId: "miris-upload-streamable",
+        // The gate Lambda checks inputParameters.manual to bypass the allow-list
+        inputParameters: JSON.stringify({ manual: true }),
+    });
+};
+
+/**
+ * Query Miris for the current processing state of an asset referenced by an
+ * .mrx manifest. Used by the Phase 1 viewer to show a "still processing"
+ * overlay and auto-refresh when the asset becomes streamable.
+ *
+ * Returns [true, { state, isStreamable, errorMessage? }] on success, or
+ * [false, errorMessage] on failure. The endpoint is only deployed when the
+ * Miris upload pipeline is enabled; consumers should treat a missing endpoint
+ * as "feature not deployed, render the viewer anyway."
+ */
+export const getMirisAssetStatus = async ({
+    databaseId,
+    assetId,
+    mirisAssetUuid,
+}: {
+    databaseId: string;
+    assetId: string;
+    mirisAssetUuid: string;
+}) => {
+    try {
+        const response = await apiClient.get(
+            `database/${databaseId}/assets/${assetId}/miris/asset-status/${mirisAssetUuid}`,
+            {}
+        );
+        if (response && typeof response === "object" && "state" in response) {
+            return [true, response];
+        }
+        if (response && response.message) {
+            if (
+                response.message.indexOf("error") !== -1 ||
+                response.message.indexOf("Error") !== -1
+            ) {
+                console.log(response.message);
+                return [false, response.message];
+            }
+            return [true, response.message];
+        }
+        return [false, "Unknown response shape"];
+    } catch (error: any) {
         console.log(error);
         return [false, error?.message];
     }

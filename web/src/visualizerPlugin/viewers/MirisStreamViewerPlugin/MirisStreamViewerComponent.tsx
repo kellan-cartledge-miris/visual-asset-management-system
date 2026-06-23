@@ -7,7 +7,7 @@ import { MirisScene, MirisStream } from "@miris-inc/three";
 import { PerspectiveCamera, Vector3, WebGLRenderer } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { ViewerPluginProps } from "../../core/types";
-import { downloadAsset } from "../../../services/APIService";
+import { downloadAsset, getMirisAssetStatus } from "../../../services/APIService";
 import { appCache } from "../../../services/appCache";
 import { parseMirisManifest, MirisManifest, MirisManifestErrorReason } from "./manifestParser";
 import styles from "./MirisStreamViewer.module.css";
@@ -17,7 +17,14 @@ type ViewerError =
     | { kind: "MANIFEST_PARSE"; reason: MirisManifestErrorReason }
     | { kind: "MANIFEST_FETCH" }
     | { kind: "STREAM_TIMEOUT"; uuid: string }
-    | { kind: "WEBGL_UNAVAILABLE" };
+    | { kind: "WEBGL_UNAVAILABLE" }
+    | { kind: "MIRIS_PROCESSING_ERROR"; message: string };
+
+type ProcessingState = { state: string };
+
+// Poll Miris status every 90s while an asset is still being prepared on the
+// Miris side. Typical promotion to streamable takes 1–2 hours.
+const PROCESSING_POLL_INTERVAL_MS = 90_000;
 
 /**
  * Position the camera so the streamed asset fits comfortably in the view, and set the
@@ -79,9 +86,15 @@ function errorMessage(err: ViewerError): string {
         case "MANIFEST_FETCH":
             return "Could not download the manifest file. Try again.";
         case "STREAM_TIMEOUT":
-            return `Could not stream from Miris (asset ${err.uuid}). The asset may have been removed or the viewer key may be revoked.`;
+            return (
+                `Timed out waiting for Miris to start streaming asset ${err.uuid}. ` +
+                "The asset reached a streamable state but the first frame didn't arrive in time. " +
+                "Try reloading; if it keeps timing out, verify the asset still exists in app.miris.com."
+            );
         case "WEBGL_UNAVAILABLE":
             return "Your browser does not support WebGL 2.0. Required browsers: Chrome 90+, Firefox 88+, Safari 14+, Edge 90+.";
+        case "MIRIS_PROCESSING_ERROR":
+            return err.message;
     }
 }
 
@@ -95,6 +108,10 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<ViewerError | null>(null);
     const [manifest, setManifest] = useState<MirisManifest | null>(null);
+    const [processingState, setProcessingState] = useState<ProcessingState | null>(null);
+    // Bumped when the status poll detects streamable so the main effect re-runs and
+    // sets up the renderer. The dep on this var is what triggers re-entry into load().
+    const [statusFlipTrigger, setStatusFlipTrigger] = useState(0);
 
     // Refs to instantiated SDK / Three.js objects for cleanup
     const sceneRef = useRef<MirisScene | null>(null);
@@ -105,6 +122,7 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
     const loadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const resizeObserverRef = useRef<ResizeObserver | null>(null);
     const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     useEffect(() => {
         let cancelled = false;
@@ -139,6 +157,90 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                 }
                 if (cancelled) return;
                 setManifest(parsed.manifest);
+
+                // 2b. Ask the backend whether the Miris asset is streamable yet. The
+                // endpoint is only deployed when the upload pipeline is enabled; if
+                // the call fails we proceed optimistically (matches Phase 1 behavior).
+                let isStreamable = true;
+                try {
+                    const statusResult = await getMirisAssetStatus({
+                        databaseId,
+                        assetId,
+                        mirisAssetUuid: parsed.manifest.mirisAssetUuid,
+                    });
+                    if (Array.isArray(statusResult) && statusResult[0] === true) {
+                        const status = statusResult[1] as {
+                            state: string;
+                            isStreamable: boolean;
+                            errorMessage?: string;
+                        };
+                        if (status.errorMessage) {
+                            if (!cancelled) {
+                                setError({
+                                    kind: "MIRIS_PROCESSING_ERROR",
+                                    message: status.errorMessage,
+                                });
+                            }
+                            return;
+                        }
+                        isStreamable = status.isStreamable === true;
+                        if (!isStreamable) {
+                            if (cancelled) return;
+                            setProcessingState({ state: status.state });
+                            setLoading(false);
+                            // Start polling. Cleared by the unmount cleanup or when
+                            // the state flips and triggers a re-render.
+                            if (pollIntervalRef.current) {
+                                clearInterval(pollIntervalRef.current);
+                            }
+                            pollIntervalRef.current = setInterval(async () => {
+                                try {
+                                    const r = await getMirisAssetStatus({
+                                        databaseId,
+                                        assetId,
+                                        mirisAssetUuid: parsed.manifest.mirisAssetUuid,
+                                    });
+                                    if (cancelled) return;
+                                    if (Array.isArray(r) && r[0] === true) {
+                                        const s = r[1] as {
+                                            state: string;
+                                            isStreamable: boolean;
+                                            errorMessage?: string;
+                                        };
+                                        if (s.errorMessage) {
+                                            if (pollIntervalRef.current) {
+                                                clearInterval(pollIntervalRef.current);
+                                                pollIntervalRef.current = null;
+                                            }
+                                            setError({
+                                                kind: "MIRIS_PROCESSING_ERROR",
+                                                message: s.errorMessage,
+                                            });
+                                        } else if (s.isStreamable) {
+                                            if (pollIntervalRef.current) {
+                                                clearInterval(pollIntervalRef.current);
+                                                pollIntervalRef.current = null;
+                                            }
+                                            setProcessingState(null);
+                                            // Trigger effect re-run to set up the renderer
+                                            setStatusFlipTrigger((c) => c + 1);
+                                        } else {
+                                            setProcessingState({ state: s.state });
+                                        }
+                                    }
+                                } catch (_pollErr) {
+                                    // Swallow transient poll errors; the next tick will retry.
+                                }
+                            }, PROCESSING_POLL_INTERVAL_MS);
+                            return;
+                        }
+                    }
+                } catch (_statusErr) {
+                    // Endpoint may not be deployed; render optimistically.
+                }
+
+                if (cancelled) return;
+                setProcessingState(null);
 
                 // 3. Viewer key check
                 const appConfig = appCache.getItem("config") as
@@ -205,13 +307,16 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                 //     stream.getBounds() returns the final WASM bounding box. Box3.setFromObject
                 //     does NOT work on Miris geometry — getBounds() is the only reliable path
                 //     (documented as a stable undocumented API in Miris technical docs).
+                // First-frame load includes WebSocket handshake + JWT validation +
+                // initial octree fetch from the content CDN; 60s gives cold connections
+                // headroom while still failing fast on a genuinely unreachable asset.
                 const loadTimer = setTimeout(() => {
                     if (!cancelled)
                         setError({
                             kind: "STREAM_TIMEOUT",
                             uuid: parsed.manifest.mirisAssetUuid,
                         });
-                }, 10_000);
+                }, 60_000);
                 loadTimerRef.current = loadTimer;
                 stream.addEventListener("streamloaded", () => clearTimeout(loadTimer));
                 stream.addEventListener("sceneloaded", () => {
@@ -266,6 +371,10 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
             cancelled = true;
             if (loadTimerRef.current) clearTimeout(loadTimerRef.current);
             if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
+            if (pollIntervalRef.current) {
+                clearInterval(pollIntervalRef.current);
+                pollIntervalRef.current = null;
+            }
             if (resizeObserverRef.current) {
                 resizeObserverRef.current.disconnect();
                 resizeObserverRef.current = null;
@@ -283,13 +392,29 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
             rendererRef.current = null;
             cameraRef.current = null;
         };
-    }, [assetId, databaseId, assetKey, versionId]);
+    }, [assetId, databaseId, assetKey, versionId, statusFlipTrigger]);
 
     return (
         <div ref={containerRef} className={styles.container}>
             {error && <div className={styles.errorOverlay}>{errorMessage(error)}</div>}
-            {loading && !error && <div className={styles.errorOverlay}>Loading…</div>}
-            {manifest?.displayName && !error && !loading && (
+            {processingState && !error && (
+                <div className={styles.errorOverlay}>
+                    <div>Miris is preparing this asset.</div>
+                    <div style={{ marginTop: 16, opacity: 0.85 }}>
+                        This usually takes 1&ndash;2 hours.
+                    </div>
+                    <div style={{ marginTop: 16, opacity: 0.85 }}>
+                        The viewer will refresh automatically when it&rsquo;s ready.
+                    </div>
+                    <div style={{ marginTop: 16, opacity: 0.6 }}>
+                        Current state: {processingState.state}
+                    </div>
+                </div>
+            )}
+            {loading && !error && !processingState && (
+                <div className={styles.errorOverlay}>Loading…</div>
+            )}
+            {manifest?.displayName && !error && !loading && !processingState && (
                 <div style={{ position: "absolute", top: 8, left: 8, color: "#fff" }}>
                     {manifest.displayName}
                 </div>

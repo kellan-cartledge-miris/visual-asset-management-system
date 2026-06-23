@@ -250,7 +250,18 @@
         },
         "miris": {
             "enabled": false,
-            "viewerKey": "UNDEFINED"
+            "viewerKey": "UNDEFINED",
+            "upload": {
+                "enabled": false,
+                "autoRegisterWithVAMS": true,
+                "autoRegisterAutoTriggerOnFileUpload": true,
+                "triggerExtensions": ".usd,.usda,.usdc,.usdz",
+                "apiKeySecretArn": "UNDEFINED",
+                "mirisApiBaseUrl": "https://api.miris.com",
+                "enabledDatabaseIds": [],
+                "taskTimeoutSeconds": 1800,
+                "maxAssetSizeBytes": 5000000000
+            }
         },
         "api": {
             "globalRateLimit": 50,
