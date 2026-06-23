@@ -32,6 +32,13 @@ def test_local_download_plan_skips_keys_without_asset_prefix():
     assert plan == [(f"{ASSET_ID}/root.usda", "root.usda")]
 
 
+def test_local_download_plan_requires_prefix_at_start():
+    # asset id appearing mid-key (not as a leading prefix) must be rejected
+    keys = [f"someOtherPrefix/{ASSET_ID}/file.usda", f"{ASSET_ID}/root.usda"]
+    plan = local_download_plan(keys, ASSET_ID)
+    assert plan == [(f"{ASSET_ID}/root.usda", "root.usda")]
+
+
 def test_should_skip_packaging_true_when_no_dependencies():
     # one layer (the root itself), no asset deps
     assert should_skip_packaging(1, 0) is True

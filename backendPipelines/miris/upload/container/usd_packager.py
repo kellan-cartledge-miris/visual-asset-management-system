@@ -21,9 +21,9 @@ def local_download_plan(keys: List[str], asset_id: str) -> List[Tuple[str, str]]
     for key in keys:
         if key.endswith("/"):
             continue
-        if prefix not in key:
+        if not key.startswith(prefix):
             continue
-        rel = key.split(prefix, 1)[1]
+        rel = key[len(prefix):]
         if not rel:
             continue
         plan.append((key, rel))
