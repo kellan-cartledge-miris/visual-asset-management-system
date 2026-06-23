@@ -41,6 +41,10 @@ VAMS ships with 17 viewer plugins across five categories: 3D, Media, Document, D
 
 For the complete list of all viewers, supported extensions, priority resolution, and extension-to-viewer mapping, see [File Viewers](../concepts/viewers.md).
 
+:::info[Miris Spatial Streaming Viewer]
+VAMS includes the `miris-stream-viewer` plugin, which streams 3D assets hosted on the [Miris Spatial Streaming](https://miris.com) platform. The viewer is triggered by `.mrx` manifest files inside a VAMS asset. The plugin requires the `MIRIS_STREAMING` feature flag and a deployment-configured viewer key. See [Configuration Reference](../deployment/configuration-reference.md) for setup, and the plugin's local `SMOKE_TEST.md` for Phase 1 verification.
+:::
+
 :::info[Priority System]
 When multiple viewers support the same file extension, the viewer with the lowest `priority` number is preferred. For example, `.ply` files match both BabylonJS Gaussian Splat (priority 1) and PlayCanvas Gaussian Splat (priority 2).
 :::
@@ -318,6 +322,7 @@ To enable this viewer, set `app.webUi.allowUnsafeEvalFeatures` to `true` in the 
 | ------------------ | ----------------------------------------------------------------------------- |
 | `ALLOWUNSAFEEVAL`  | Enables CesiumJS and Needle USD viewers (require `unsafe-eval` CSP directive) |
 | `LOCATIONSERVICES` | Can be used to gate geospatial viewers                                        |
+| `MIRIS_STREAMING`  | Enables the Miris Spatial Streaming viewer for `.mrx` manifest files          |
 
 ### Multiple Requirements
 

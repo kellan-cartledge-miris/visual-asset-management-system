@@ -248,6 +248,10 @@
             "optionalBannerHtmlMessage": "",
             "allowUnsafeEvalFeatures": false
         },
+        "miris": {
+            "enabled": false,
+            "viewerKey": "UNDEFINED"
+        },
         "api": {
             "globalRateLimit": 50,
             "globalBurstLimit": 100

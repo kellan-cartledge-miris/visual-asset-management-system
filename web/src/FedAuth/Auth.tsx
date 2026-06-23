@@ -141,6 +141,12 @@ interface Config {
     locationServiceApiUrl?: string;
 
     /**
+     * Miris Spatial Streaming viewer key (deployment-wide). Only present when
+     * the MIRIS_STREAMING feature flag is enabled in the backend.
+     */
+    mirisViewerKey?: string;
+
+    /**
      * Content Security Policy to apply (generally for ALB deployment where CSP may not be injected)
      */
     contentSecurityPolicy?: string;
@@ -598,12 +604,17 @@ const Auth: React.FC<AuthProps> = (props) => {
     //Both Effect
     //Once logged in, get/set other configuration and profile information
     useEffect(() => {
-        //Secure Config Fetch - fetch if featuresEnabled, locationServiceApiUrl, or webDeployedUrl is missing
+        //Secure Config Fetch - fetch if featuresEnabled, locationServiceApiUrl, or webDeployedUrl is missing.
+        //Also fetch if MIRIS_STREAMING is enabled but mirisViewerKey isn't yet cached — handles the
+        //upgrade path where users have a cached config from before the field was added to the response.
+        const mirisFlagOnButKeyMissing =
+            config?.featuresEnabled?.includes("MIRIS_STREAMING") && !config?.mirisViewerKey;
         if (
             config &&
             (!config.featuresEnabled ||
                 !config.locationServiceApiUrl ||
-                config.webDeployedUrl === undefined) &&
+                config.webDeployedUrl === undefined ||
+                mirisFlagOnButKeyMissing) &&
             isLoggedIn
         ) {
             getSecureConfig()
@@ -611,6 +622,17 @@ const Auth: React.FC<AuthProps> = (props) => {
                     config.featuresEnabled = value.featuresEnabled;
                     config.locationServiceApiUrl = value.locationServiceApiUrl;
                     config.webDeployedUrl = value.webDeployedUrl || "";
+                    // Only overwrite the cached viewer key when the backend supplied
+                    // a value. The /secure-config response omits mirisViewerKey when
+                    // MIRIS_VIEWER_KEY env is unset, so an unconditional assignment
+                    // would clobber a valid key with `undefined` and re-fire the
+                    // self-heal refetch every render if MIRIS_STREAMING is in
+                    // featuresEnabled but the env var is missing (degenerate
+                    // deployment inconsistency — gated by getConfig() in normal
+                    // flow, but worth defending against here).
+                    if (value.mirisViewerKey) {
+                        config.mirisViewerKey = value.mirisViewerKey;
+                    }
                     appCache.setItem("config", config);
                     // nosemgrep: calling-set-state-on-current-state
                     setConfig(config);

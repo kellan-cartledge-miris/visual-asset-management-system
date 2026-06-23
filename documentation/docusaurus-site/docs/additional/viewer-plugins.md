@@ -29,6 +29,24 @@ Viewer plugins are configured in `web/src/visualizerPlugin/config/viewerConfig.j
 
 ---
 
+## Miris Spatial Streaming Viewer
+
+The `miris-stream-viewer` plugin adds support for streaming 3D assets hosted on the Miris Spatial Streaming platform.
+
+| Field              | Value                                                             |
+| ------------------ | ----------------------------------------------------------------- |
+| Plugin ID          | `miris-stream-viewer`                                             |
+| Category           | 3D                                                                |
+| Supported extension | `.mrx`                                                           |
+| Feature flag       | `MIRIS_STREAMING`                                                 |
+| Description        | Streams 3D assets hosted on the Miris Spatial Streaming platform. |
+
+:::note
+The Miris viewer requires a viewer key configured at deployment time via `app.mirisStreaming.viewerKey` in the CDK configuration. See [Configuration Reference](../deployment/configuration-reference.md) for details.
+:::
+
+---
+
 ## Creating Custom Viewers
 
 For instructions on developing and registering custom viewer plugins, refer to the viewer plugin development guide at `web/src/visualizerPlugin/README.md` and the [FAQ](../troubleshooting/faq.md#how-do-i-add-a-custom-3d-viewer).

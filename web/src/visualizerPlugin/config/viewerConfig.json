@@ -324,6 +324,25 @@
             "enabled": true
         },
         {
+            "id": "miris-stream-viewer",
+            "name": "Miris Spatial Streaming",
+            "description": "Stream 3D assets uploaded to the Miris platform.",
+            "componentPath": "./viewers/MirisStreamViewerPlugin/MirisStreamViewerComponent",
+            "dependencyManager": "./viewers/MirisStreamViewerPlugin/dependencies",
+            "dependencyManagerClass": "MirisStreamDependencyManager",
+            "dependencyManagerMethod": "loadMirisStream",
+            "dependencyCleanupMethod": "cleanup",
+            "supportedExtensions": [".mrx"],
+            "supportsMultiFile": false,
+            "canFullscreen": true,
+            "priority": 1,
+            "dependencies": ["@miris-inc/three", "three"],
+            "loadStrategy": "lazy",
+            "category": "3d",
+            "featuresEnabledRestriction": ["MIRIS_STREAMING"],
+            "enabled": true
+        },
+        {
             "id": "preview-viewer",
             "name": "Preview Viewer",
             "description": "View generated preview images",

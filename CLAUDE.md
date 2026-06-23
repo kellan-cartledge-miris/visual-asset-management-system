@@ -214,6 +214,7 @@ if not enforcer.check_permission(object_type, resource_id, action):
 export enum VAMS_APP_FEATURES {
     GOVCLOUD = "GOVCLOUD",
     LOCATIONSERVICES = "LOCATIONSERVICES",
+    MIRIS_STREAMING = "MIRIS_STREAMING",
     NEW_FEATURE = "NEW_FEATURE",
 }
 
@@ -230,6 +231,21 @@ if (config.featuresEnabled.includes("NEW_FEATURE")) {
     // Show feature-specific UI
 }
 ```
+
+**Known feature flags** (defined in `infra/common/vamsAppFeatures.ts`):
+
+| Feature Flag                    | Description                                                                                                      |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `GOVCLOUD`                      | GovCloud deployment mode (no CloudFront, no Location Service, FIPS endpoints)                                    |
+| `ALLOWUNSAFEEVAL`               | Permits `unsafe-eval` in CSP; required by certain viewer plugins (CesiumJS, Needle USD WASM, ThreeJS CAD, Miris Spatial Streaming) |
+| `LOCATIONSERVICES`              | Amazon Location Service map visualization                                                                        |
+| `MIRIS_STREAMING`               | Enables the Miris Spatial Streaming viewer plugin (requires `app.miris.viewerKey` AND `app.webUi.allowUnsafeEvalFeatures: true`; incompatible with GovCloud) |
+| `ALBDEPLOY`                     | ALB-based static website distribution                                                                            |
+| `CLOUDFRONTDEPLOY`              | CloudFront-based static website distribution                                                                     |
+| `NOOPENSEARCH`                  | OpenSearch is not deployed; disables search-dependent UI                                                         |
+| `AUTHPROVIDER_COGNITO`          | Amazon Cognito authentication provider                                                                           |
+| `AUTHPROVIDER_COGNITO_SAML`     | SAML federation through Amazon Cognito                                                                           |
+| `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth 2.0 / OIDC identity provider                                                                      |
 
 ### **Pattern 4: DynamoDB Table Names Are Environment Variables**
 

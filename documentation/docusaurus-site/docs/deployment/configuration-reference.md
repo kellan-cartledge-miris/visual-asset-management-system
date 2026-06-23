@@ -280,7 +280,24 @@ When external OAuth IdP is enabled, **all** fields in this section are required.
 | Field                                 | Type    | Default | Description                                                                                                                                                                                                          |
 | ------------------------------------- | ------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `app.webUi.optionalBannerHtmlMessage` | string  | `""`    | Optional HTML message displayed as a banner in the web interface. Use for system notifications or compliance messages (for example, `"AWS Sandbox System. Do not upload sensitive information."`).                   |
-| `app.webUi.allowUnsafeEvalFeatures`   | boolean | `false` | Allows `unsafe-eval` in the Content Security Policy for script execution. Required for certain viewer plugins (for example, Needle USD WASM viewer, ThreeJS CAD viewer). Consult your security team before enabling. |
+| `app.webUi.allowUnsafeEvalFeatures`   | boolean | `false` | Allows `unsafe-eval` in the Content Security Policy for script execution. Required for certain viewer plugins (for example, Needle USD WASM viewer, ThreeJS CAD viewer, Miris Spatial Streaming viewer). Consult your security team before enabling. |
+
+## Miris Spatial Streaming viewer (`app.miris`)
+
+Enables the Miris Spatial Streaming viewer plugin for rendering `.mrx` manifest files stored in VAMS assets. When enabled, the `MIRIS_STREAMING` feature flag is pushed to the frontend so the viewer plugin is activated at runtime.
+
+| Field                  | Type    | Default | Description                                                                                                                                                                                     |
+| ---------------------- | ------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.miris.enabled`    | boolean | `false` | Enables the Miris Spatial Streaming viewer plugin. Requires `app.webUi.allowUnsafeEvalFeatures: true` (the SDK calls `eval()` at runtime). Cannot be combined with `app.govCloud.enabled`.       |
+| `app.miris.viewerKey`  | string  | `""`    | Miris viewer key used by the streaming viewer. Required when `enabled` is `true`. Generate via the Miris Portal or `miris viewerkey create`. Use `"UNDEFINED"` as a placeholder when disabled. |
+
+:::warning[GovCloud incompatibility]
+Miris Spatial Streaming requires outbound WebSocket connections to `*.miris.com`. It cannot be enabled in AWS GovCloud deployments where external internet egress is restricted.
+:::
+
+:::warning[CSP requirement]
+The `@miris-inc/three` SDK uses `eval()` at runtime, so enabling Miris also requires `app.webUi.allowUnsafeEvalFeatures: true`. `getConfig()` rejects deployments that enable Miris without that flag. This trust boundary matches the Cesium and Needle USD viewer plugins.
+:::
 
 ## Metadata schema (`app.metadataSchema`)
 
