@@ -103,6 +103,10 @@ export class CoreVAMSStack extends cdk.Stack {
             this.enabledFeatures.push(VAMS_APP_FEATURES.MIRIS_STREAMING);
         }
 
+        if (props.config.app.miris.upload.enabled) {
+            this.enabledFeatures.push(VAMS_APP_FEATURES.MIRIS_UPLOAD);
+        }
+
         //Deploy VPC (nested stack)
         if (props.config.app.useGlobalVpc.enabled) {
             const vpcBuilderNestedStack = new VPCBuilderNestedStack(this, "VPCBuilder", {

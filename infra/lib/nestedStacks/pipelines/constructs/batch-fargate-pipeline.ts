@@ -28,6 +28,28 @@ export interface BatchFargatePipelineConstructProps extends cdk.StackProps {
      * Fargate supports 21-200 GiB. Default is 60 GiB.
      */
     ephemeralStorageGiB?: number;
+    /**
+     * vCPU for the Fargate container. Default is 16. Valid combinations with memory
+     * are constrained by Fargate; consult AWS docs when overriding. Useful for
+     * right-sizing lightweight I/O-bound pipelines (e.g., Miris upload uses 1 vCPU).
+     */
+    cpu?: number;
+    /**
+     * Memory in MiB for the Fargate container. Default is 65536 (64 GiB). Must
+     * match a valid Fargate vCPU/memory combination.
+     */
+    memoryMiB?: number;
+    /**
+     * Docker build platform for the container image. Default is LINUX_AMD64 (x86_64)
+     * for shared toolchain compatibility. Set to LINUX_ARM64 to build a Graviton
+     * image; must be paired with `fargateCpuArchitecture: ARM64`.
+     */
+    dockerPlatform?: cdk.aws_ecr_assets.Platform;
+    /**
+     * Fargate task CPU architecture. Default is X86_64. Set to ARM64 to run on
+     * Graviton; must be paired with a Docker image built for LINUX_ARM64.
+     */
+    fargateCpuArchitecture?: ecs.CpuArchitecture;
 }
 
 const defaultProps: Partial<BatchFargatePipelineConstructProps> = {
@@ -58,12 +80,14 @@ export class BatchFargatePipelineConstruct extends Construct {
             }
         );
 
-        // Docker container image
+        // Docker container image. Default x86_64 keeps the toolchain identical to
+        // the historical shared-pipeline behavior; pipelines that want Graviton
+        // pass `dockerPlatform: LINUX_ARM64` (and the matching CPU architecture below).
         const containerImage = ecs.AssetImage.fromAsset(
             path.join(__dirname, props.imageAssetPath),
             {
                 file: props.dockerfileName,
-                platform: cdk.aws_ecr_assets.Platform.LINUX_AMD64, //Fix to the LINUX_AMD64 platform to standardize instruction set across all loads
+                platform: props.dockerPlatform ?? cdk.aws_ecr_assets.Platform.LINUX_AMD64,
             }
         );
 
@@ -80,10 +104,12 @@ export class BatchFargatePipelineConstruct extends Construct {
             jobDefinitionName: batchJobName,
             retryAttempts: 1,
             container: new batch.EcsFargateContainerDefinition(this, "PipelineBatchContainer", {
-                cpu: 16,
-                memory: cdk.Size.mebibytes(65536),
+                cpu: props.cpu ?? 16,
+                memory: cdk.Size.mebibytes(props.memoryMiB ?? 65536),
                 ephemeralStorageSize: cdk.Size.gibibytes(props.ephemeralStorageGiB ?? 60),
                 image: containerImage,
+                fargateCpuArchitecture:
+                    props.fargateCpuArchitecture ?? ecs.CpuArchitecture.X86_64,
                 environment: {
                     AWS_REGION: region,
                     AWS_ACCOUNT: account,

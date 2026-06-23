@@ -15,6 +15,7 @@ import { ApiGatewayV2LambdaConstruct } from "./constructs/apigatewayv2-lambda-co
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import { storageResources } from "../storage/storageBuilder-nestedStack";
 import { buildConfigService } from "../../lambdaBuilder/configFunctions";
+import { buildGetMirisAssetStatusFunction } from "../../lambdaBuilder/mirisFunctions";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import * as cdk from "aws-cdk-lib";
 import {
@@ -1378,6 +1379,25 @@ export class ApiBuilderNestedStack extends NestedStack {
                     config: config,
                 }
             );
+        }
+
+        // Miris asset-status query endpoint (gated on the upload pipeline, which is
+        // where the integration-key Secrets Manager ARN is configured)
+        if (config.app.miris.enabled && config.app.miris.upload.enabled) {
+            const mirisGetAssetStatus = buildGetMirisAssetStatusFunction(
+                this,
+                lambdaCommonBaseLayer,
+                storageResources,
+                config,
+                vpc,
+                subnets
+            );
+            attachFunctionToApi(this, mirisGetAssetStatus, {
+                routePath:
+                    "/database/{databaseId}/assets/{assetId}/miris/asset-status/{mirisAssetUuid}",
+                method: apigateway.HttpMethod.GET,
+                api: api,
+            });
         }
 
         //Nag Supressions
