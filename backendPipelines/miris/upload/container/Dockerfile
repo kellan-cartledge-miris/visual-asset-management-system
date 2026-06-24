@@ -15,6 +15,7 @@ COPY entrypoint.sh .
 COPY config.json .
 COPY pipeline_vams.py .
 COPY miris_uploader.py .
+COPY usd_packager.py .
 COPY utils/ utils/
 
 RUN chmod +x entrypoint.sh
