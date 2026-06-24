@@ -38,3 +38,30 @@ def should_skip_packaging(num_layers: int, num_assets: int) -> bool:
     In that case we upload the original file unchanged.
     """
     return num_layers <= 1 and num_assets == 0
+
+
+def compute_dependencies(root_path: str):
+    """Resolve the full dependency set of a root USD file.
+
+    Returns (layer_identifiers, asset_paths, unresolved_paths). A non-empty
+    unresolved_paths means a reference (commonly an absolute texture path)
+    could not be located on disk — the caller should fail clean rather than
+    ship an incomplete package to Miris.
+    """
+    from pxr import UsdUtils
+
+    layers, assets, unresolved = UsdUtils.ComputeAllDependencies(root_path)
+    return (
+        [layer.identifier for layer in layers],
+        list(assets),
+        list(unresolved),
+    )
+
+
+def package_usdz(root_path: str, out_path: str) -> None:
+    """Bundle the root USD and all resolved dependencies into a .usdz package."""
+    from pxr import Sdf, UsdUtils
+
+    ok = UsdUtils.CreateNewUsdzPackage(Sdf.AssetPath(root_path), out_path)
+    if not ok:
+        raise RuntimeError(f"usdz packaging failed for {root_path}")

@@ -47,3 +47,74 @@ def test_should_skip_packaging_true_when_no_dependencies():
 def test_should_skip_packaging_false_with_sublayer_or_textures():
     assert should_skip_packaging(2, 0) is False   # has a sublayer/reference
     assert should_skip_packaging(1, 3) is False    # has texture assets
+
+
+import zipfile
+
+import pytest
+
+
+def _write_usda_with_texture(dir_path: str, texture_name: str = "tex.png") -> str:
+    """Create root.usda referencing a texture asset + the texture file itself.
+    Returns the root .usda path."""
+    tex_path = os.path.join(dir_path, texture_name)
+    with open(tex_path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + b"0" * 64)  # dummy but present
+    root = os.path.join(dir_path, "root.usda")
+    with open(root, "w") as f:
+        f.write(
+            '#usda 1.0\n'
+            'def Material "M" {\n'
+            '    def Shader "T" {\n'
+            '        uniform token info:id = "UsdUVTexture"\n'
+            f'        asset inputs:file = @./{texture_name}@\n'
+            '    }\n'
+            '}\n'
+        )
+    return root
+
+
+def test_compute_dependencies_finds_texture(tmp_path):
+    pytest.importorskip("pxr")
+    from usd_packager import compute_dependencies
+
+    root = _write_usda_with_texture(str(tmp_path))
+    layers, assets, unresolved = compute_dependencies(root)
+
+    assert unresolved == []
+    assert any(a.endswith("tex.png") for a in assets)
+
+
+def test_compute_dependencies_reports_unresolved_for_missing_ref(tmp_path):
+    pytest.importorskip("pxr")
+    from usd_packager import compute_dependencies
+
+    # reference a texture that does not exist on disk
+    root = os.path.join(str(tmp_path), "root.usda")
+    with open(root, "w") as f:
+        f.write(
+            '#usda 1.0\n'
+            'def Material "M" {\n'
+            '    def Shader "T" {\n'
+            '        uniform token info:id = "UsdUVTexture"\n'
+            '        asset inputs:file = @/nonexistent/abs/missing.png@\n'
+            '    }\n'
+            '}\n'
+        )
+    layers, assets, unresolved = compute_dependencies(root)
+    assert unresolved, "expected the missing absolute reference to be unresolved"
+
+
+def test_package_usdz_bundles_root_and_texture(tmp_path):
+    pytest.importorskip("pxr")
+    from usd_packager import package_usdz
+
+    root = _write_usda_with_texture(str(tmp_path))
+    out = os.path.join(str(tmp_path), "out.usdz")
+    package_usdz(root, out)
+
+    assert os.path.exists(out)
+    with zipfile.ZipFile(out) as z:
+        names = z.namelist()
+    assert any(n.endswith("root.usda") for n in names)
+    assert any(n.endswith("tex.png") for n in names)
