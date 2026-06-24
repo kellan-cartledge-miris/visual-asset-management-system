@@ -10,11 +10,15 @@ import hashlib
 import json
 import os
 import sys
-import urllib.parse
-
 import boto3
 
 from miris_uploader import MirisClient, _redact_response
+from usd_packager import (
+    compute_dependencies,
+    local_download_plan,
+    package_usdz,
+    should_skip_packaging,
+)
 from utils.secrets import get_miris_integration_key
 
 _USD_MEDIA_TYPES = {
@@ -58,6 +62,23 @@ def _stripped_upload_path(upload_path: str) -> tuple[str, str]:
     return bucket, prefix.rstrip("/")
 
 
+def _download_asset_folder(s3, bucket: str, asset_id: str, dest_dir: str) -> int:
+    """Download every object under '{asset_id}/' into dest_dir, preserving the
+    relative layout so USD relative references resolve. Returns total bytes."""
+    paginator = s3.get_paginator("list_objects_v2")
+    keys = []
+    for page in paginator.paginate(Bucket=bucket, Prefix=f"{asset_id}/"):
+        for obj in page.get("Contents", []):
+            keys.append(obj["Key"])
+    total = 0
+    for key, rel in local_download_plan(keys, asset_id):
+        local = os.path.join(dest_dir, rel)
+        os.makedirs(os.path.dirname(local), exist_ok=True)
+        s3.download_file(bucket, key, local)
+        total += os.path.getsize(local)
+    return total
+
+
 def main():
     if len(sys.argv) < 2:
         _log("usage: __main__.py <definition-json>")
@@ -82,46 +103,81 @@ def main():
         _log("unsupported_extension", extension=extension)
         sys.exit(3)
     filename = os.path.basename(trigger_key)
-    content_type = _USD_MEDIA_TYPES[extension]
 
     s3 = boto3.client("s3")
-
-    # 1. Size pre-check
-    head = s3.head_object(Bucket=trigger_bucket, Key=trigger_key)
-    size = int(head["ContentLength"])
-    if size > max_bytes:
-        _log("file_too_large", size=size, max_bytes=max_bytes)
-        sys.exit(4)
-
-    # 2. Download the single trigger file
-    local_path = f"/workdir/{filename}"
     os.makedirs("/workdir", exist_ok=True)
-    s3.download_file(trigger_bucket, trigger_key, local_path)
-    sha = _sha256_of_file(local_path)
-    _log("downloaded", path=local_path, size=size, sha256=sha[:16])
+    name_no_ext = os.path.splitext(filename)[0]
 
-    # 3. Secrets Manager
+    # Resolve the single self-contained artifact to upload to Miris.
+    if extension == ".usdz":
+        # Already a self-contained package — upload as-is.
+        head = s3.head_object(Bucket=trigger_bucket, Key=trigger_key)
+        if int(head["ContentLength"]) > max_bytes:
+            _log("file_too_large", size=int(head["ContentLength"]), max_bytes=max_bytes)
+            sys.exit(4)
+        upload_local = f"/workdir/{filename}"
+        s3.download_file(trigger_bucket, trigger_key, upload_local)
+        upload_filename = filename
+        upload_content_type = _USD_MEDIA_TYPES[".usdz"]
+    else:
+        # Text/binary USD root: download the whole asset folder, resolve deps.
+        asset_dir = "/workdir/asset"
+        total = _download_asset_folder(s3, trigger_bucket, asset_id, asset_dir)
+        if total > max_bytes:
+            _log("file_too_large", size=total, max_bytes=max_bytes)
+            sys.exit(4)
+        root_rel = trigger_key.split(f"{asset_id}/", 1)[1]
+        root_local = os.path.join(asset_dir, root_rel)
+        layers, assets, unresolved = compute_dependencies(root_local)
+        if unresolved:
+            _log("unresolved_references", count=len(unresolved), paths=unresolved[:20])
+            sys.exit(5)
+        if should_skip_packaging(len(layers), len(assets)):
+            _log("packaging_skipped", reason="no_external_dependencies")
+            upload_local = root_local
+            upload_filename = filename
+            upload_content_type = _USD_MEDIA_TYPES[extension]
+        else:
+            upload_local = f"/workdir/{name_no_ext}.usdz"
+            package_usdz(root_local, upload_local)
+            upload_filename = f"{name_no_ext}.usdz"
+            upload_content_type = _USD_MEDIA_TYPES[".usdz"]
+            _log(
+                "packaged_usdz",
+                file=upload_filename,
+                layers=len(layers),
+                assets=len(assets),
+            )
+
+    size = os.path.getsize(upload_local)
+    sha = _sha256_of_file(upload_local)
+    _log("artifact_ready", path=upload_local, size=size, sha256=sha[:16])
+
+    # Secrets Manager
     key = get_miris_integration_key(secret_arn, region_name=os.environ.get("AWS_REGION"))
     client = MirisClient(miris_base, key)
 
-    # 4. POST /v1/content
-    name_no_ext = os.path.splitext(filename)[0]
+    # POST /v1/content
     miris_tags = ["vams", f"vams-asset-{asset_id}"]
     if database_id:
         miris_tags.append(f"vams-database-{database_id}")
     start = client.start_upload(
         name=name_no_ext,
-        content_path=filename,
+        content_path=upload_filename,
         total_bytes=size,
         tags=miris_tags,
     )
     _log("start_upload", resp=_redact_response(start))
     asset_uuid = start["id"]
 
-    # 5. SigV4 S3 PUT to the temp endpoint
+    # SigV4 S3 PUT to the temp endpoint.
+    # The object key MUST match the declared content_path verbatim — Miris resolves
+    # the asset's materials/textures by content_path, so a percent-encoded key
+    # (e.g. "Coral%20House.usdz" for content_path "Coral House.usdz") makes Miris
+    # extract geometry but silently drop materials (renders flat/untextured).
+    # boto3 handles wire-level encoding; the logical Key stays raw.
     temp_bucket, temp_prefix = _stripped_upload_path(start["upload_path"])
-    encoded_name = urllib.parse.quote(filename, safe="")
-    temp_key = f"{temp_prefix}/{encoded_name}"
+    temp_key = f"{temp_prefix}/{upload_filename}"
 
     temp_s3 = boto3.client(
         "s3",
@@ -131,12 +187,12 @@ def main():
         aws_secret_access_key=start["secret_key"],
         aws_session_token=start["session_token"],
     )
-    with open(local_path, "rb") as f:
+    with open(upload_local, "rb") as f:
         temp_s3.put_object(
             Bucket=temp_bucket,
             Key=temp_key,
             Body=f,
-            ContentType=content_type,
+            ContentType=upload_content_type,
         )
     _log("sigv4_put_complete", bucket=temp_bucket, key=temp_key)
 

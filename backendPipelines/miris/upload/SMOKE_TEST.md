@@ -83,6 +83,22 @@ Should print the JSON array of allowed databaseIds.
       `file_too_large` log entry. Outer workflow records failure.
       Revert the config after.
 
+### 8. Multi-file USD (textures / sublayers)
+
+- [ ] Upload a USD asset folder: a root `.usda` plus a `textures/` subfolder it
+      references by relative path.
+- [ ] Container logs show, in order: `artifact_ready`, `packaged_usdz`
+      (with `assets` >= 1), `start_upload`, `sigv4_put_complete`,
+      `upload_marked_complete`, `terminal_state_reached`.
+- [ ] The Miris asset reaches `preview`/`streamable` (textures resolved).
+
+### 9. Unresolved references (clean failure)
+
+- [ ] Upload a `.usda` that references an absolute texture path
+      (e.g. `@/Users/.../tex.png@`).
+- [ ] Container exits non-zero; logs show `unresolved_references` with the
+      offending path(s). No partial/broken asset is left streamable.
+
 ## Sign-off
 
 When all checkboxes pass, mark the smoke test complete in the PR description.

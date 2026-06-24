@@ -19,6 +19,21 @@ The pipeline auto-triggers when a file with a supported extension is uploaded to
 5. Poll GET /v1/asset/{id} until the state field indicates streamable-ready.
 6. Write a `.mrx` manifest with `mirisAssetUuid = <id>` to the asset's output files path.
 
+## Multi-file USD assets
+
+A root `.usd`, `.usda`, or `.usdc` that references external files (textures,
+sublayers) is automatically packaged into a single `.usdz` inside the pipeline
+container before upload — Miris's content API accepts one self-contained file
+per asset. Dependency discovery uses OpenUSD's `UsdUtils.ComputeAllDependencies`,
+so only referenced files are included (incidental files like `.DS_Store` are
+dropped). A `.usda/.usdc/.usd` with no external references is uploaded as-is;
+a `.usdz` you upload directly is passed through unchanged.
+
+**References must be relative.** If a root file references an absolute path
+(e.g. `/Users/you/textures/wood.png`) the dependency cannot be resolved and the
+pipeline fails fast with an `unresolved_references` log entry rather than
+producing a broken asset. Re-export with relative paths and re-upload.
+
 ## Configuration
 
 See `app.miris.upload.*` in the [Configuration Reference](../deployment/configuration-reference.md).

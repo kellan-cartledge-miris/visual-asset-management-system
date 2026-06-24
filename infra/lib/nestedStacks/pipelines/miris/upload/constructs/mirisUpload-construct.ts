@@ -194,13 +194,13 @@ export class MirisUploadConstruct extends Construct {
                 batchJobDefinitionName:
                     "MirisUploadJob" + props.config.name + "_" + props.config.app.baseStackName,
                 // Right-size for an I/O-bound workload (S3 download + Miris API HTTPS
-                // upload + state polling). Graviton (ARM64) is ~20% cheaper than x86
-                // for equivalent Fargate vCPU/memory.
+                // upload + state polling). x86_64 is required: usd-core ships no
+                // aarch64 Linux wheel, so ARM64/Graviton cannot install it.
                 cpu: 1,
                 memoryMiB: 2048,
                 ephemeralStorageGiB: 21,
-                dockerPlatform: cdk.aws_ecr_assets.Platform.LINUX_ARM64,
-                fargateCpuArchitecture: ecs.CpuArchitecture.ARM64,
+                dockerPlatform: cdk.aws_ecr_assets.Platform.LINUX_AMD64,
+                fargateCpuArchitecture: ecs.CpuArchitecture.X86_64,
             }
         );
 
