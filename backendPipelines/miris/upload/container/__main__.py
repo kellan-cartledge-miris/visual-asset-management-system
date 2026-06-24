@@ -10,8 +10,6 @@ import hashlib
 import json
 import os
 import sys
-import urllib.parse
-
 import boto3
 
 from miris_uploader import MirisClient, _redact_response
@@ -172,10 +170,14 @@ def main():
     _log("start_upload", resp=_redact_response(start))
     asset_uuid = start["id"]
 
-    # SigV4 S3 PUT to the temp endpoint
+    # SigV4 S3 PUT to the temp endpoint.
+    # The object key MUST match the declared content_path verbatim — Miris resolves
+    # the asset's materials/textures by content_path, so a percent-encoded key
+    # (e.g. "Coral%20House.usdz" for content_path "Coral House.usdz") makes Miris
+    # extract geometry but silently drop materials (renders flat/untextured).
+    # boto3 handles wire-level encoding; the logical Key stays raw.
     temp_bucket, temp_prefix = _stripped_upload_path(start["upload_path"])
-    encoded_name = urllib.parse.quote(upload_filename, safe="")
-    temp_key = f"{temp_prefix}/{encoded_name}"
+    temp_key = f"{temp_prefix}/{upload_filename}"
 
     temp_s3 = boto3.client(
         "s3",
