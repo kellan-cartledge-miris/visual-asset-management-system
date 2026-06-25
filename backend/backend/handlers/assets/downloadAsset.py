@@ -230,10 +230,18 @@ def download_asset_file(databaseId, assetId, request_model):
     if not asset:
         raise VAMSGeneralErrorResponse("Asset not found in database")
         
-    # Check if asset is distributable
-    if not asset.get('isDistributable', False):
+    # Check if asset is distributable. Exempt Miris streaming manifests (.mrx):
+    # these are small VAMS-generated pointers (a Miris asset UUID + tags), not the
+    # asset's raw geometry, which lives on Miris and is never downloaded through
+    # VAMS. The Miris stream viewer must fetch the .mrx to begin streaming, and
+    # Miris-streamable assets are commonly marked non-distributable (stream, don't
+    # download). Per-asset GET authorization is already enforced upstream in
+    # lambda_handler, so this only lets users who can already access the asset read
+    # its streaming pointer.
+    is_mrx_manifest = bool(request_model.key) and request_model.key.endswith('.mrx')
+    if not is_mrx_manifest and not asset.get('isDistributable', False):
         raise VAMSGeneralErrorResponse("Asset not distributable")
-        
+
     # Get asset location
     asset_location = asset.get('assetLocation')
     if not asset_location:
