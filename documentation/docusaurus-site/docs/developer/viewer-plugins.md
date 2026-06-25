@@ -41,8 +41,8 @@ VAMS ships with 17 viewer plugins across five categories: 3D, Media, Document, D
 
 For the complete list of all viewers, supported extensions, priority resolution, and extension-to-viewer mapping, see [File Viewers](../concepts/viewers.md).
 
-:::info[Miris Spatial Streaming Viewer]
-VAMS includes the `miris-stream-viewer` plugin, which streams 3D assets hosted on the [Miris Spatial Streaming](https://miris.com) platform. The viewer is triggered by `.mrx` manifest files inside a VAMS asset. The plugin requires the `MIRIS_STREAMING` feature flag and a deployment-configured viewer key. See [Configuration Reference](../deployment/configuration-reference.md) for setup, and the plugin's local `SMOKE_TEST.md` for Phase 1 verification.
+:::info[Miris Spatial Streaming Viewers]
+VAMS includes two Miris viewer plugins. The `miris-stream-viewer` plugin streams 3D assets hosted on the [Miris Spatial Streaming](https://miris.com) platform and is triggered by `.mrx` manifest files; it requires the `MIRIS_STREAMING` feature flag. The `miris-upload-viewer` plugin handles USD source files (`.usd`, `.usda`, `.usdc`, `.usdz`): it streams the asset when a `.mrx` already exists (delegating to the stream viewer) or offers a one-click **Stream with Miris** upload otherwise; it requires the `MIRIS_UPLOAD` feature flag and is auto-selected for USD files (priority `0`). Both require a deployment-configured viewer key (`app.miris.viewerKey`). See [Configuration Reference](../deployment/configuration-reference.md) for setup, the [Miris Auto-Upload Pipeline](../pipelines/miris-upload.md) for the upload flow, and the stream plugin's local `SMOKE_TEST.md` for verification.
 :::
 
 :::info[Priority System]
@@ -322,7 +322,8 @@ To enable this viewer, set `app.webUi.allowUnsafeEvalFeatures` to `true` in the 
 | ------------------ | ----------------------------------------------------------------------------- |
 | `ALLOWUNSAFEEVAL`  | Enables CesiumJS and Needle USD viewers (require `unsafe-eval` CSP directive) |
 | `LOCATIONSERVICES` | Can be used to gate geospatial viewers                                        |
-| `MIRIS_STREAMING`  | Enables the Miris Spatial Streaming viewer for `.mrx` manifest files          |
+| `MIRIS_STREAMING`  | Enables the Miris stream viewer (`miris-stream-viewer`) for `.mrx` manifest files |
+| `MIRIS_UPLOAD`     | Enables the Miris upload/USD viewer (`miris-upload-viewer`) for USD files — streams via an existing `.mrx` or offers a one-click upload |
 
 ### Multiple Requirements
 

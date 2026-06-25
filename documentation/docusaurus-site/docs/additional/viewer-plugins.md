@@ -29,20 +29,47 @@ Viewer plugins are configured in `web/src/visualizerPlugin/config/viewerConfig.j
 
 ---
 
-## Miris Spatial Streaming Viewer
+## Miris Spatial Streaming Viewers
 
-The `miris-stream-viewer` plugin adds support for streaming 3D assets hosted on the Miris Spatial Streaming platform.
+VAMS includes two complementary Miris viewer plugins. Together they let a user upload a USD asset to Miris Spatial Streaming and then stream it back, by selecting either the generated `.mrx` manifest or the original USD source file.
 
-| Field              | Value                                                             |
-| ------------------ | ----------------------------------------------------------------- |
-| Plugin ID          | `miris-stream-viewer`                                             |
-| Category           | 3D                                                                |
-| Supported extension | `.mrx`                                                           |
-| Feature flag       | `MIRIS_STREAMING`                                                 |
-| Description        | Streams 3D assets hosted on the Miris Spatial Streaming platform. |
+### Stream viewer
+
+The `miris-stream-viewer` plugin streams 3D assets hosted on the Miris Spatial Streaming platform.
+
+| Field               | Value                                                         |
+| ------------------- | ------------------------------------------------------------- |
+| Plugin ID           | `miris-stream-viewer`                                         |
+| Category            | 3D                                                            |
+| Supported extension | `.mrx`                                                        |
+| Feature flag        | `MIRIS_STREAMING`                                             |
+| Description         | Streams a Miris-hosted asset referenced by a `.mrx` manifest. |
+
+The viewer downloads the `.mrx` manifest to read the Miris asset UUID, then streams the asset. While Miris is still preparing the asset (typically 1–2 hours after upload), it shows a "preparing" overlay and refreshes automatically when the asset becomes streamable.
+
+### Upload / USD viewer
+
+The `miris-upload-viewer` plugin handles USD source files and bridges upload and streaming.
+
+| Field                | Value                                                               |
+| -------------------- | ------------------------------------------------------------------- |
+| Plugin ID            | `miris-upload-viewer`                                               |
+| Category             | 3D                                                                  |
+| Supported extensions | `.usd`, `.usda`, `.usdc`, `.usdz`                                   |
+| Feature flag         | `MIRIS_UPLOAD`                                                      |
+| Priority             | `0` (auto-selected over other USD viewers when enabled)             |
+| Description          | Streams a USD asset already on Miris, or offers a one-click upload. |
+
+When a USD file is selected, this viewer fetches the asset's file list and:
+
+- **A `.mrx` exists and streaming is configured** — streams the asset by delegating to the stream viewer, so selecting the USD file behaves the same as selecting the `.mrx`.
+- **A `.mrx` exists but streaming is not configured** — shows an "Already on Miris" note.
+- **No `.mrx` yet** — shows a **Stream with Miris** action that uploads the asset's root USD file to Miris (see the [Miris Auto-Upload Pipeline](../pipelines/miris-upload.md)).
+
+Because it has priority `0`, this viewer is auto-selected for USD files when `MIRIS_UPLOAD` is enabled. The viewer selector remains available to switch to another USD viewer (for example, Needle USD).
 
 :::note
-The Miris viewer requires a viewer key configured at deployment time via `app.mirisStreaming.viewerKey` in the CDK configuration. See [Configuration Reference](../deployment/configuration-reference.md) for details.
+Both Miris viewers require a viewer key configured at deployment time via `app.miris.viewerKey` in the CDK configuration. The upload viewer additionally requires the `MIRIS_UPLOAD` feature (`app.miris.upload.enabled`). See [Configuration Reference](../deployment/configuration-reference.md) for details.
 :::
 
 ---
