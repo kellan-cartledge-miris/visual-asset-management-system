@@ -42,7 +42,7 @@ VAMS ships with 17 viewer plugins across five categories: 3D, Media, Document, D
 For the complete list of all viewers, supported extensions, priority resolution, and extension-to-viewer mapping, see [File Viewers](../concepts/viewers.md).
 
 :::info[Miris Spatial Streaming Viewers]
-VAMS includes two Miris viewer plugins. The `miris-stream-viewer` plugin streams 3D assets hosted on the [Miris Spatial Streaming](https://miris.com) platform and is triggered by `.mrx` manifest files; it requires the `MIRIS_STREAMING` feature flag. The `miris-upload-viewer` plugin handles USD source files (`.usd`, `.usda`, `.usdc`, `.usdz`): it streams the asset when a `.mrx` already exists (delegating to the stream viewer) or offers a one-click **Stream with Miris** upload otherwise; it requires the `MIRIS_UPLOAD` feature flag and is auto-selected for USD files (priority `0`). Both require a deployment-configured viewer key (`app.miris.viewerKey`). See [Configuration Reference](../deployment/configuration-reference.md) for setup, the [Miris Auto-Upload Pipeline](../pipelines/miris-upload.md) for the upload flow, and the stream plugin's local `SMOKE_TEST.md` for verification.
+VAMS includes two Miris viewer plugins: `miris-stream-viewer` (streams `.mrx` manifests, `MIRIS_STREAMING`) and `miris-upload-viewer` (handles USD files, `MIRIS_UPLOAD`, priority `0`). For the full integration — viewer behavior, the **Stream with Miris** upload flow, configuration, and architecture — see the dedicated [Miris Spatial Streaming Integration](miris-spatial-streaming.md) guide and the [Miris Auto-Upload Pipeline](../pipelines/miris-upload.md).
 :::
 
 :::info[Priority System]

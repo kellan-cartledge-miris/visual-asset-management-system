@@ -47,7 +47,7 @@ producing a broken asset. Re-export with relative paths and re-upload.
 
 ## Configuration
 
-See `app.miris.upload.*` in the [Configuration Reference](../deployment/configuration-reference.md).
+See `app.miris.upload.*` in the [Configuration Reference](../deployment/configuration-reference.md), and the [Miris Spatial Streaming Integration](../developer/miris-spatial-streaming.md) guide for the end-to-end viewer and upload setup.
 
 ## Requirements
 

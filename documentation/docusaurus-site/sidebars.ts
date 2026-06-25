@@ -95,7 +95,7 @@ const sidebars: SidebarsConfig = {
                     type: "category",
                     label: "Addons",
                     collapsed: true,
-                    items: ["developer/garnet-framework"],
+                    items: ["developer/garnet-framework", "developer/miris-spatial-streaming"],
                 },
                 {
                     type: "category",
