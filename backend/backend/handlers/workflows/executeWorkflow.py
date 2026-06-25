@@ -309,18 +309,21 @@ def get_separate_metadata(databaseId, assetId, filePath, event):
         }
 
 
-def launchWorkflow(inputAssetBucket, inputAssetLocationKey, inputAssetFileKey, workflow_arn, database_id, asset_id, workflow_database_id, workflow_id, executingUserName, executingRequestContext, inputMetadata = {}):
+def launchWorkflow(inputAssetBucket, inputAssetLocationKey, inputAssetFileKey, workflow_arn, database_id, asset_id, workflow_database_id, workflow_id, executingUserName, executingRequestContext, inputMetadata = {}, inputParameters = ""):
 
     logger.info("Launching workflow with arn: "+workflow_arn)
 
     #Modify asset key to turn + sympbols into spaces for the final processing entry
     inputAssetFileKey = unquote_plus(inputAssetFileKey)
 
+    # Forward caller-supplied inputParameters into the state machine input so the
+    # first workflow step (e.g. a gate Lambda) can act on them. Passed through
+    # verbatim; downstream steps that don't use it simply ignore the extra field.
     response = sfn_client.start_execution(
         stateMachineArn=workflow_arn,
         input=json.dumps({'bucketAsset': inputAssetBucket, 'bucketAssetAuxiliary': bucket_name_assetAuxiliary, 'inputAssetLocationKey': inputAssetLocationKey, 'inputAssetFileKey': inputAssetFileKey, 'databaseId': database_id,
                           'assetId': asset_id, 'inputMetadata': json.dumps(inputMetadata), 'workflowDatabaseId': workflow_database_id,
-                          'workflowId': workflow_id, 'executingUserName': executingUserName, 'executingRequestContext': executingRequestContext})
+                          'workflowId': workflow_id, 'executingUserName': executingUserName, 'executingRequestContext': executingRequestContext, 'inputParameters': inputParameters})
     )
     logger.info("Workflow Response: ")
     logger.info(response)
@@ -670,7 +673,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         logger.info("Launching Workflow:")
         executionId = launchWorkflow(asset_bucket, asset_file_key, file_key, workflow['workflow_arn'], pathParams['databaseId'],
                                      pathParams['assetId'], request_body.get('workflowDatabaseId'), workflow['workflowId'],
-                                     executingUserName, executingRequestContext, inputMetadata)
+                                     executingUserName, executingRequestContext, inputMetadata,
+                                     request_body.get('inputParameters', ''))
         return success(body={'message': executionId})
 
     except botocore.exceptions.ClientError as err:
