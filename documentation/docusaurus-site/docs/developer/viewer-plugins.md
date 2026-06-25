@@ -42,7 +42,7 @@ VAMS ships with 17 viewer plugins across five categories: 3D, Media, Document, D
 For the complete list of all viewers, supported extensions, priority resolution, and extension-to-viewer mapping, see [File Viewers](../concepts/viewers.md).
 
 :::info[Miris Spatial Streaming Viewers]
-VAMS includes two Miris viewer plugins: `miris-stream-viewer` (streams `.mrx` manifests, `MIRIS_STREAMING`) and `miris-upload-viewer` (handles USD files, `MIRIS_UPLOAD`, priority `0`). For the full integration — viewer behavior, the **Stream with Miris** upload flow, configuration, and architecture — see the dedicated [Miris Spatial Streaming Integration](miris-spatial-streaming.md) guide and the [Miris Auto-Upload Pipeline](../pipelines/miris-upload.md).
+VAMS includes two Miris viewer plugins: `miris-stream-viewer` (streams `.mrx` manifests, `MIRIS_STREAMING`) and `miris-upload-viewer` (handles USD files, `MIRIS_UPLOAD`, priority `0`). For the full integration — viewer behavior, the **Stream with Miris** upload flow, configuration, and architecture — see the dedicated [Miris Spatial Streaming Integration](external-integrations/miris-spatial-streaming.md) guide and the [Miris Auto-Upload Pipeline](../pipelines/miris-upload.md).
 :::
 
 :::info[Priority System]

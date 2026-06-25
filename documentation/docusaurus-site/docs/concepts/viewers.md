@@ -243,5 +243,5 @@ For more information on partner integrations, see [Partner Integrations](../addi
 -   [Viewer Plugin Development](../developer/viewer-plugins.md) -- How to create custom viewer plugins
 -   [Web Interface Overview](../user-guide/web-interface.md) -- Using viewers in the web UI
 -   [Viewer Plugins Reference](../additional/viewer-plugins.md) -- Detailed configuration field reference
--   [Miris Spatial Streaming Integration](../developer/miris-spatial-streaming.md) -- Streaming USD assets via the Miris viewers and upload pipeline
+-   [Miris Spatial Streaming Integration](../developer/external-integrations/miris-spatial-streaming.md) -- Streaming USD assets via the Miris viewers and upload pipeline
 -   [Files and Versions](files-and-versions.md) -- File concepts and operations

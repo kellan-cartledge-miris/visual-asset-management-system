@@ -9,7 +9,7 @@
 The integration has two halves that work together:
 
 - **Viewer plugins** render Miris-hosted assets in the VAMS file viewer. A `.mrx` manifest file (a small pointer to a Miris asset) triggers streaming, and USD source files can stream the same asset or start an upload.
-- **The Miris Auto-Upload pipeline** uploads supported USD source assets to Miris, waits for processing, and writes the `.mrx` manifest back to the asset's file list. See the [Miris Auto-Upload Pipeline](../pipelines/miris-upload.md) for the pipeline details.
+- **The Miris Auto-Upload pipeline** uploads supported USD source assets to Miris, waits for processing, and writes the `.mrx` manifest back to the asset's file list. See the [Miris Auto-Upload Pipeline](../../pipelines/miris-upload.md) for the pipeline details.
 
 The end-to-end flow is: a USD asset is uploaded to Miris (automatically on file upload, or on demand from the viewer) → Miris processes it into a streamable asset → a `.mrx` manifest is added to the VAMS asset → the viewer streams the asset when a user opens the `.mrx` or the USD source file.
 
@@ -95,7 +95,7 @@ Enabling these options sets the corresponding feature flags, which the frontend 
 | `MIRIS_STREAMING` | `app.miris.viewerKey` + `allowUnsafeEvalFeatures`     | Enables the `miris-stream-viewer` plugin for `.mrx` files.              |
 | `MIRIS_UPLOAD`    | `app.miris.upload.enabled` + `allowUnsafeEvalFeatures` | Enables the `miris-upload-viewer` plugin and the auto-upload pipeline.  |
 
-For the complete configuration reference, see the [Configuration Reference](../deployment/configuration-reference.md).
+For the complete configuration reference, see the [Configuration Reference](../../deployment/configuration-reference.md).
 
 ---
 
@@ -104,8 +104,8 @@ For the complete configuration reference, see the [Configuration Reference](../d
 ```mermaid
 flowchart LR
     subgraph VAMS
-        UP["USD upload / Stream with Miris action"]
-        PIPE["Miris Auto-Upload pipeline (AWS Batch container)"]
+        UP["USD upload or Stream with Miris action"]
+        PIPE["Miris Auto-Upload pipeline\nAWS Batch container"]
         MRX[".mrx manifest in asset files"]
         VIEW["Miris viewer plugins"]
     end
@@ -115,10 +115,10 @@ flowchart LR
     end
 
     UP --> PIPE
-    PIPE -->|"package + upload USD"| API
-    API -->|"asset UUID"| MRX
-    VIEW -->|"read UUID from .mrx"| MRX
-    VIEW -->|"stream via viewer key"| STREAM
+    PIPE -->|package and upload USD| API
+    API -->|asset UUID| MRX
+    VIEW -->|read UUID from .mrx| MRX
+    VIEW -->|stream via viewer key| STREAM
 ```
 
 The upload pipeline packages a multi-file USD root into a single `.usdz` (using OpenUSD dependency resolution) before upload, since the Miris content API accepts one self-contained file per asset. The viewer plugins stream the prepared asset directly from the Miris platform using the deployment's viewer key — VAMS never proxies or stores the streamed geometry.
@@ -163,7 +163,7 @@ No change is planned for the current release. This section records the rationale
 
 ## Related resources
 
-- [Miris Auto-Upload Pipeline](../pipelines/miris-upload.md) — the upload pipeline that produces `.mrx` manifests
-- [File Viewers](../concepts/viewers.md) — master viewer table and extension mapping
-- [Viewer Plugins Reference](../additional/viewer-plugins.md) — viewer configuration fields
-- [Configuration Reference](../deployment/configuration-reference.md) — full `app.miris.*` configuration options
+- [Miris Auto-Upload Pipeline](../../pipelines/miris-upload.md) — the upload pipeline that produces `.mrx` manifests
+- [File Viewers](../../concepts/viewers.md) — master viewer table and extension mapping
+- [Viewer Plugins Reference](../../additional/viewer-plugins.md) — viewer configuration fields
+- [Configuration Reference](../../deployment/configuration-reference.md) — full `app.miris.*` configuration options
