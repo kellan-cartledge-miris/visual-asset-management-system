@@ -125,6 +125,31 @@ The upload pipeline packages a multi-file USD root into a single `.usdz` (using 
 
 ---
 
+## Implementation notes and future improvements
+
+The integration registers two viewer plugins, `miris-stream-viewer` (`.mrx`) and `miris-upload-viewer` (USD). The USD viewer is, in practice, a small controller: the viewer-plugin registry selects a plugin by **file extension** alone, but whether a USD asset already has a `.mrx` is **per-asset runtime data**. So the component fetches the asset's file list at render time and branches between streaming an existing asset and offering the upload action.
+
+As a result, the USD viewer currently carries two distinct concerns in one component:
+
+- **Viewing** — resolving the associated `.mrx` and delegating to the stream viewer.
+- **Pipeline triggering** — resolving the root USD file and running the upload workflow.
+
+This structure exists because the viewer-plugin registry is the only feature-gated UI extension point in VAMS that does not require modifying core components. VAMS has **no dedicated "asset action" plugin slot** — asset actions otherwise live in core components (the file manager Operations menus) or are run through the standard Workflows and Executions feature. The Miris upload pipeline already auto-registers a `miris-upload-streamable` workflow, which is the canonical way to trigger the pipeline on an asset.
+
+The integration works as designed and is intentionally kept as-is for now. A future refactor could separate the viewing and triggering responsibilities along one of these lines:
+
+| Direction | Idea | Trade-off |
+| --------- | ---- | --------- |
+| Stream viewer + thin router | Extend the stream viewer to stream from `.mrx` **or** USD; split the USD entry into a thin router plus an isolated upload-prompt component. | Keeps the one-click in-viewer button with no core edits; adds one small component. |
+| Action in Operations menu | Stream viewer handles all viewing; the upload trigger moves to the file manager Operations dropdown (gated by `MIRIS_UPLOAD`). | Cleanest separation (action lives with other actions); requires a core-component edit. |
+| Trigger via Workflows | Stream viewer handles all viewing; rely on the standard Workflows/Executions feature and auto-trigger-on-upload for triggering. | Least custom code; removes the in-viewer one-click upload button. |
+
+:::note
+No change is planned for the current release. This section records the rationale and the options so a future refactor can cleanly separate the viewing and pipeline-triggering responsibilities.
+:::
+
+---
+
 ## Requirements and limitations
 
 - `app.miris.enabled` must be `true`, with a valid `app.miris.viewerKey`.
