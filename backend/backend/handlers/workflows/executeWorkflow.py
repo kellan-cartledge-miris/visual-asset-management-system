@@ -12,7 +12,6 @@ from common.validators import validate
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
-from urllib.parse import unquote_plus
 from models.common import (
     APIGatewayProxyResponseV2,
     internal_error,
@@ -313,8 +312,13 @@ def launchWorkflow(inputAssetBucket, inputAssetLocationKey, inputAssetFileKey, w
 
     logger.info("Launching workflow with arn: "+workflow_arn)
 
-    #Modify asset key to turn + sympbols into spaces for the final processing entry
-    inputAssetFileKey = unquote_plus(inputAssetFileKey)
+    # NOTE: inputAssetFileKey is already the literal S3 object key by this point —
+    # the API/manual caller passes the raw key (JSON body, no URL-encoding) and the
+    # auto-trigger path already decodes the S3-event key in sqsAutoExecuteWorkflow.
+    # We must NOT unquote_plus() it again here: that turns a literal '+' (and '%XX')
+    # in a filename into a space/other char, so the downstream pipeline looks for a
+    # key that doesn't exist in S3 (e.g. S3 'Foo+Bar.usda' vs decoded 'Foo Bar.usda').
+    # Pass the key through verbatim so it matches the actual S3 object.
 
     # Forward caller-supplied inputParameters into the state machine input so the
     # first workflow step (e.g. a gate Lambda) can act on them. Passed through
