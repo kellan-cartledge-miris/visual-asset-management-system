@@ -388,7 +388,17 @@ export class MirisUploadConstruct extends Construct {
                     taskHeartbeatTimeout: "",
                     inputParameters: "",
                     workflowId: "miris-upload-streamable",
-                    workflowDescription: "Auto-upload USD assets to Miris Spatial Streaming",
+                    // NOTE: the import custom resource only regenerates the workflow's
+                    // Step Functions ASL when it detects a change in the workflow
+                    // definition (description / pipeline / lambda). It does NOT diff the
+                    // generated ASL template, so changes to the shared ASL builder
+                    // (stepfunctions_builder.build_payload) do not propagate to an
+                    // already-registered workflow on their own. Bump this description
+                    // when the generated ASL must be regenerated — e.g. the addition of
+                    // the runtime `executionInputParameters` passthrough that lets the
+                    // manual "Stream with Miris" trigger reach the upload gate.
+                    workflowDescription:
+                        "Auto-upload USD assets to Miris Spatial Streaming (manual trigger supported)",
                     autoTriggerOnFileExtensionsUpload: props.config.app.miris.upload
                         .autoRegisterAutoTriggerOnFileUpload
                         ? props.config.app.miris.upload.triggerExtensions

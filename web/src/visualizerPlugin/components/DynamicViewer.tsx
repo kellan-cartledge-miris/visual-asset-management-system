@@ -128,14 +128,26 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
         );
         setCompatibleViewers(viewerMetadata);
 
-        // Auto-select only if there's exactly one viewer available
-        // If multiple viewers exist, force user to choose to avoid loading performance-heavy viewers
+        // Auto-select the preferred viewer when there's a clear winner.
+        // viewerMetadata is sorted ascending by priority (lower number = preferred),
+        // so [0] is the most-preferred viewer. We auto-select it when its priority is
+        // STRICTLY lower than the next viewer's (a unique preferred viewer, e.g. the
+        // Miris viewer at priority 0 vs the Needle USD viewer at priority 1 for USD
+        // files). When the top two share the same priority (a genuine tie, e.g. the
+        // .ply splat/point-cloud viewers), we leave selection to the user so we don't
+        // arbitrarily pick among equally-ranked, potentially performance-heavy viewers.
         if (viewerMetadata.length === 1 && !selectedViewerId) {
             setSelectedViewerId(viewerMetadata[0].config.id);
         } else if (viewerMetadata.length > 1 && !selectedViewerId) {
-            // Multiple viewers available - don't auto-select, force user choice
-            setSelectedViewerId(null);
-            setLoading(false); // Stop loading state to show the selector
+            const hasUniquePreferred =
+                viewerMetadata[0].config.priority < viewerMetadata[1].config.priority;
+            if (hasUniquePreferred) {
+                setSelectedViewerId(viewerMetadata[0].config.id);
+            } else {
+                // Tie at the top — force user choice rather than picking arbitrarily.
+                setSelectedViewerId(null);
+                setLoading(false); // Stop loading state to show the selector
+            }
         } else if (viewerMetadata.length === 0) {
             // Customize error message based on whether multiple files are selected
             const errorMessage = isMultiFile

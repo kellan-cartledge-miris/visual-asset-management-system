@@ -344,6 +344,11 @@ class TaskStateBuilder(ABC):
                 "outputType": pipeline.get("outputType", ""),
                 "inputMetadata.$": "$.inputMetadata",
                 "inputParameters": pipeline.get('inputParameters', ''),
+                # Per-execution parameters supplied at runtime via the workflow-execute
+                # call (e.g. a manual-trigger flag), passed through separately from the
+                # static per-pipeline `inputParameters` above so neither clobbers the
+                # other. Pipelines that don't need it simply ignore the extra field.
+                "executionInputParameters.$": "$.inputParameters",
                 "executingUserName.$": "$.executingUserName",
                 "executingRequestContext.$": "$.executingRequestContext"
             }

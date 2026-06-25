@@ -1,10 +1,21 @@
 # Miris Auto-Upload Pipeline
 
-The Miris Auto-Upload pipeline streams supported source assets into the Miris Spatial Streaming platform and emits a `.mrx` manifest back to the asset's file list. Users can then open the `.mrx` to view the asset via the Miris Spatial Streaming viewer (Phase 1).
+The Miris Auto-Upload pipeline streams supported source assets into the Miris Spatial Streaming platform and emits a `.mrx` manifest back to the asset's file list. Once the asset is on Miris, users can stream it from the VAMS viewer by selecting either the generated `.mrx` manifest or the original USD source file.
 
 ## When it fires
 
-The pipeline auto-triggers when a file with a supported extension is uploaded to a VAMS asset in a database listed in `app.miris.upload.enabledDatabaseIds`. A user can also trigger it manually by clicking the "Stream with Miris" button on an asset detail page.
+The pipeline runs in two ways:
+
+- **Automatically** — when a file with a supported extension is uploaded to a VAMS asset in a database listed in `app.miris.upload.enabledDatabaseIds`.
+- **Manually** — when a user opens a USD file that is not yet on Miris and clicks **Stream with Miris** in the viewer pane. This action is provided by the `miris-upload-viewer` plugin (requires the `MIRIS_UPLOAD` feature) and uploads the asset regardless of the per-database allow-list. See [Viewer Plugins Reference](../additional/viewer-plugins.md#miris-spatial-streaming-viewers).
+
+The manual trigger invokes the pipeline's workflow with the asset's **root USD file** as input. The pipeline requires a single source file — it does not accept a folder.
+
+## Viewing the result
+
+After upload, Miris processes the asset (typically 1–2 hours) before it becomes streamable. In the meantime the viewer shows a "preparing" overlay and refreshes automatically when the asset is ready. Selecting either the `.mrx` manifest or the USD source file opens the same Miris stream viewer.
+
+The viewer downloads the small `.mrx` manifest to obtain the Miris asset UUID. This manifest download is permitted even when the asset is marked non-distributable, since the `.mrx` is only a streaming pointer (the geometry is hosted on Miris and is never downloaded through VAMS). Per-asset access authorization still applies.
 
 ## Supported source formats
 
@@ -36,7 +47,7 @@ producing a broken asset. Re-export with relative paths and re-upload.
 
 ## Configuration
 
-See `app.miris.upload.*` in the [Configuration Reference](../deployment/configuration-reference.md).
+See `app.miris.upload.*` in the [Configuration Reference](../deployment/configuration-reference.md), and the [Miris Spatial Streaming Integration](../developer/miris-spatial-streaming.md) guide for the end-to-end viewer and upload setup.
 
 ## Requirements
 

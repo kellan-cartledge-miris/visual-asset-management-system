@@ -235,14 +235,27 @@ export const runWorkflow = async ({
 export const triggerMirisUpload = async ({
     databaseId,
     assetId,
+    fileKey,
 }: {
     databaseId: string;
     assetId: string;
+    fileKey: string;
 }) => {
     return await runWorkflow({
         databaseId,
         assetId,
         workflowId: "miris-upload-streamable",
+        // The Miris upload pipeline requires a specific USD source file as input — it
+        // rejects a folder (asset root prefix). Pass the full S3 key of the root USD
+        // file (e.g. "assetId/model.usdz"); the execute handler resolves it against
+        // the asset base key. The key form (not the leading-slash relativePath) is
+        // required to satisfy the backend ASSET_PATH validator.
+        fileKey,
+        // The Miris upload workflow is auto-registered as a GLOBAL workflow (one
+        // definition, cross-database), so it must be invoked as global — the
+        // execute handler resolves the definition by the body's workflowDatabaseId.
+        // Without this the lookup uses the asset's databaseId and 404s.
+        isGlobalWorkflow: true,
         // The gate Lambda checks inputParameters.manual to bypass the allow-list
         inputParameters: JSON.stringify({ manual: true }),
     });
