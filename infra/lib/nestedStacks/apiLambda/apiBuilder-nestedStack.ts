@@ -1336,7 +1336,7 @@ export class ApiBuilderNestedStack extends NestedStack {
                 routePath:
                     "/database/{databaseId}/assets/{assetId}/miris/asset-status/{mirisAssetUuid}",
                 method: apigateway.HttpMethod.GET,
-                api: api,
+                registry: registry,
             });
         }
 

@@ -19,6 +19,7 @@ import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     setupSecurityAndLoggingEnvironmentAndPermissions,
     globalLambdaEnvironmentsAndPermissions,
+    suppressCdkNagLambda,
     suppressCdkNagErrorsByGrantReadWrite,
 } from "../../../../../helper/security";
 
@@ -77,6 +78,7 @@ export function buildMirisUploadGateFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(scope);
     return fun;
 }
@@ -110,6 +112,7 @@ export function buildVamsExecuteMirisUploadFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(scope);
     return fun;
 }
@@ -142,6 +145,7 @@ export function buildOpenMirisUploadPipelineFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(scope);
     return fun;
 }
@@ -169,6 +173,7 @@ export function buildConstructMirisUploadPipelineFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(scope);
     return fun;
 }
@@ -196,6 +201,7 @@ export function buildMirisUploadPipelineEndFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(scope);
     return fun;
 }

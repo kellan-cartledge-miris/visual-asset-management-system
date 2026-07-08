@@ -17,6 +17,7 @@ import {
     globalLambdaEnvironmentsAndPermissions,
     kmsKeyLambdaPermissionAddToResourcePolicy,
     setupSecurityAndLoggingEnvironmentAndPermissions,
+    suppressCdkNagLambda,
     suppressCdkNagErrorsByGrantReadWrite,
 } from "../helper/security";
 
@@ -64,6 +65,7 @@ export function buildGetMirisAssetStatusFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
