@@ -115,8 +115,7 @@ export class BatchFargatePipelineConstruct extends Construct {
                 memory: cdk.Size.mebibytes(props.memoryMiB ?? 65536),
                 ephemeralStorageSize: cdk.Size.gibibytes(props.ephemeralStorageGiB ?? 60),
                 image: containerImage,
-                fargateCpuArchitecture:
-                    props.fargateCpuArchitecture ?? ecs.CpuArchitecture.X86_64,
+                fargateCpuArchitecture: props.fargateCpuArchitecture ?? ecs.CpuArchitecture.X86_64,
                 environment: {
                     AWS_REGION: region,
                     AWS_ACCOUNT: account,
