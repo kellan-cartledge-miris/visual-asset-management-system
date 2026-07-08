@@ -352,5 +352,13 @@ Combined.pem
 #Claude
 .claude/settings.local.*
 docs/superpowers/*
+docs/*
+.claude.json
+.superpower/
+.playwright-mcp/
+
+.codegraph/
+*.bak*
+
 # Miris REST API scratch dumps (local only, never commit)
 miris_assets_*.json

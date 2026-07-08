@@ -14,7 +14,19 @@ from botocore.exceptions import ClientError
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_upload
-from common.s3 import validateS3AssetExtensionsAndContentType
+from common.s3 import validateS3AssetExtensionsAndContentType, list_all_objects, is_object_version_archived
+from common.s3MetadataKeys import (
+    ASSET_ID_METADATA_KEY,
+    DATABASE_ID_METADATA_KEY,
+    UPLOAD_ID_METADATA_KEY,
+    VAMS_CHANGE_SOURCE_METADATA_KEY,
+    VAMS_CHANGE_USER_ID_METADATA_KEY,
+    VAMS_CHANGE_SOURCE_UPLOAD,
+)
+from common.s3PathPatterns import (
+    PREVIEW_FILE_PATTERN,
+    ALLOWED_PREVIEW_FILE_EXTENSIONS,
+)
 from models.common import VAMSGeneralErrorResponse
 
 # Configure AWS clients with retry configuration
@@ -32,21 +44,33 @@ lambda_client = boto3.client('lambda', config=retry_config)
 logger = safeLogger(service_name="SqsUploadFileLarge")
 
 # Constants
-TEMPORARY_UPLOAD_PREFIX = 'temp-uploads/'
-PREVIEW_PREFIX = 'previews/'
 MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024  # 5MB maximum size for preview files
-allowed_preview_extensions = ['.png', '.jpg', '.jpeg', '.svg', '.gif']
+# Sample size for asset-type detection. This is a best-effort visibility
+# classification (empty vs. single-file vs. folder), not a correctness-critical
+# read, so it is intentionally capped rather than scanning the entire asset —
+# paging every object of a very large asset would add latency to the upload path.
+ASSET_TYPE_DETECTION_SAMPLE_SIZE = 1000
+allowed_preview_extensions = ALLOWED_PREVIEW_FILE_EXTENSIONS
 
 # Load environment variables
 try:
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
+    from common.resourceNames import ResourceKeys, get_table_name
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
     send_email_function_name = os.environ["SEND_EMAIL_FUNCTION_NAME"]
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
 # Initialize DynamoDB tables
 asset_table = dynamodb.Table(asset_storage_table_name)
+
+
+def build_upload_change_metadata(user_id):
+    """Build change-provenance metadata for an uploaded file version."""
+    return {
+        VAMS_CHANGE_SOURCE_METADATA_KEY: VAMS_CHANGE_SOURCE_UPLOAD,
+        VAMS_CHANGE_USER_ID_METADATA_KEY: user_id or "SYSTEM_USER",
+    }
 
 
 def validate_sqs_message(message_data: Dict[str, Any], correlation_id: str = None) -> bool:
@@ -132,18 +156,19 @@ def validate_sqs_message(message_data: Dict[str, Any], correlation_id: str = Non
         logger.exception(f"Error validating SQS message{correlation_suffix}: {e}")
         return False
 
-def create_zero_byte_file(bucket_name: str, key: str, upload_id: str, database_id: str, asset_id: str) -> bool:
+def create_zero_byte_file(bucket_name: str, key: str, upload_id: str, database_id: str, asset_id: str, user_id: str = None) -> bool:
     """
     Create a zero-byte file in S3.
     Ported from uploadFile.py.
-    
+
     Args:
         bucket_name: The S3 bucket name
         key: The S3 object key
         upload_id: The upload ID for metadata
         database_id: The database ID for metadata
         asset_id: The asset ID for metadata
-        
+        user_id: The user ID for change-provenance metadata
+
     Returns:
         True if successful, False otherwise
     """
@@ -154,9 +179,10 @@ def create_zero_byte_file(bucket_name: str, key: str, upload_id: str, database_i
             Body=b'',  # Empty content for zero-byte file
             ContentType='application/octet-stream',
             Metadata={
-                "databaseid": database_id,
-                "assetid": asset_id,
-                "uploadid": upload_id,
+                DATABASE_ID_METADATA_KEY: database_id,
+                ASSET_ID_METADATA_KEY: asset_id,
+                UPLOAD_ID_METADATA_KEY: upload_id,
+                **build_upload_change_metadata(user_id)
             }
         )
         logger.info(f"Created zero-byte file: {key}")
@@ -196,14 +222,14 @@ def is_preview_file(file_path: str) -> bool:
     Returns:
         True if the file is a preview file, False otherwise
     """
-    return '.previewFile.' in file_path
+    return PREVIEW_FILE_PATTERN in file_path
 
-def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_key: str, 
-                   database_id: str, asset_id: str) -> bool:
+def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_key: str,
+                   database_id: str, asset_id: str, user_id: str = None) -> bool:
     """
     Copy an object from one S3 location to another with replaced metadata.
     Ported from uploadFile.py.
-    
+
     Args:
         source_bucket: Source S3 bucket name
         source_key: Source S3 object key
@@ -211,7 +237,8 @@ def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_k
         dest_key: Destination S3 object key
         database_id: Database ID to set in metadata
         asset_id: Asset ID to set in metadata
-        
+        user_id: The user ID for change-provenance metadata
+
     Returns:
         True if successful, False otherwise
     """
@@ -222,15 +249,16 @@ def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_k
             'Bucket': source_bucket,
             'Key': source_key
         }
-        
+
         extra_args = {
             'MetadataDirective': 'REPLACE',
             'Metadata': {
-                "databaseid": database_id,
-                "assetid": asset_id
+                DATABASE_ID_METADATA_KEY: database_id,
+                ASSET_ID_METADATA_KEY: asset_id,
+                **build_upload_change_metadata(user_id)
             }
         }
-        
+
         s3_resource.meta.client.copy(
             CopySource=copy_source,
             Bucket=dest_bucket,
@@ -255,12 +283,12 @@ def validate_preview_file_extension(file_path: str) -> bool:
         True if the file has an allowed extension, False otherwise
     """
     import os
-    
+
     # Extract the extension after .previewFile.
-    if '.previewFile.' in file_path:
-        extension = '.' + file_path.split('.previewFile.')[1].lower()
+    if PREVIEW_FILE_PATTERN in file_path:
+        extension = '.' + file_path.split(PREVIEW_FILE_PATTERN)[1].lower()
         return extension in allowed_preview_extensions
-    
+
     # For direct assetPreview uploads, check the file extension
     file_extension = os.path.splitext(file_path)[1].lower()
     return file_extension in allowed_preview_extensions
@@ -391,15 +419,12 @@ def determine_asset_type(asset_id: str, bucket: str, prefix: str) -> str:
         import os
         
         logger.info(f"Determining asset type from bucket: {bucket}, prefix: {prefix}")
-        
-        # List all objects with the specified prefix
-        response = s3.list_objects_v2(
-            Bucket=bucket,
-            Prefix=prefix,
-        )
-        
-        # Get the contents and filter out folder markers (objects ending with '/')
-        contents = response.get('Contents', [])
+
+        # Sample objects under the prefix to classify the asset (empty / single
+        # file / folder). Capped at ASSET_TYPE_DETECTION_SAMPLE_SIZE — this is a
+        # best-effort visibility classification, so a sample is sufficient and
+        # avoids adding upload latency by scanning a very large asset in full.
+        contents = list_all_objects(bucket, prefix, client=s3, max_objects=ASSET_TYPE_DETECTION_SAMPLE_SIZE)
         
         # Filter out archived files and count non-archived files
         non_archived_files = []
@@ -459,51 +484,12 @@ def determine_asset_type(asset_id: str, bucket: str, prefix: str) -> str:
         return None
 
 def is_file_archived(bucket: str, key: str, version_id: str = None) -> bool:
+    """Determine if file is archived based on S3 delete markers.
+
+    Delegates to the shared head_object-based helper, which is O(1) per check
+    regardless of how many versions the key has.
     """
-    Determine if file is archived based on S3 delete markers.
-    Simplified version from uploadFile.py for async processing.
-    
-    Args:
-        bucket: The S3 bucket name
-        key: The S3 object key
-        version_id: Optional specific version ID to check
-        
-    Returns:
-        True if file is archived (has delete marker), False otherwise
-    """
-    try:
-        if version_id:
-            # Check if specific version is a delete marker
-            response = s3.list_object_versions(
-                Bucket=bucket,
-                Prefix=key,
-                MaxKeys=1000
-            )
-            
-            # Check if the specified version is a delete marker
-            for marker in response.get('DeleteMarkers', []):
-                if marker['Key'] == key and marker['VersionId'] == version_id:
-                    return True
-            return False
-        else:
-            # Check if current version is deleted (has delete marker as latest)
-            try:
-                s3.head_object(Bucket=bucket, Key=key)
-                return False  # Object exists, not archived
-            except ClientError as e:
-                if e.response['Error']['Code'] == 'NoSuchKey':
-                    # Object doesn't exist, check if it has delete markers
-                    response = s3.list_object_versions(
-                        Bucket=bucket,
-                        Prefix=key,
-                        MaxKeys=1
-                    )
-                    return len(response.get('DeleteMarkers', [])) > 0
-                else:
-                    raise
-    except Exception as e:
-        logger.warning(f"Error checking archive status for {key}: {e}")
-        return False
+    return is_object_version_archived(bucket, key, version_id, client=s3)
 
 def send_subscription_email(database_id: str, asset_id: str):
     """
@@ -678,11 +664,11 @@ def validate_and_move_large_file(file_info: Dict[str, Any], correlation_ids: Dic
     """
     Validate file content and MIME type, then move file from temporary to final location.
     Ported from uploadFile.py complete_upload function.
-    
+
     Args:
         file_info: Dictionary containing file processing information
         correlation_ids: Dictionary containing correlation IDs for logging
-        
+
     Returns:
         True if validation and movement was successful, False otherwise
     """
@@ -694,16 +680,17 @@ def validate_and_move_large_file(file_info: Dict[str, Any], correlation_ids: Dic
         upload_type = file_info['uploadType']
         database_id = file_info['databaseId']
         asset_id = file_info['assetId']
-        
+        change_user_id = file_info.get('changeUserId')
+
         logger.info(f"Validating and moving file {relative_key} from {temp_s3_key} to {final_s3_key}")
-        
+
         # Validate file content type and check for malicious executables
         if not validateS3AssetExtensionsAndContentType(bucket_name, temp_s3_key):
             logger.error(f"File {relative_key} contains a potentially malicious executable type object")
             # Delete the uploaded file
             delete_s3_object(bucket_name, temp_s3_key)
             return False
-        
+
         # Additional validation for preview files
         if upload_type == "assetPreview":
             # Validate preview file extension
@@ -712,7 +699,7 @@ def validate_and_move_large_file(file_info: Dict[str, Any], correlation_ids: Dic
                 # Delete the uploaded file
                 delete_s3_object(bucket_name, temp_s3_key)
                 return False
-        
+
         # Check if this is a preview file in an assetFile upload
         if upload_type == "assetFile" and is_preview_file(relative_key):
             # Validate preview file extension
@@ -721,22 +708,23 @@ def validate_and_move_large_file(file_info: Dict[str, Any], correlation_ids: Dic
                 # Delete the uploaded file
                 delete_s3_object(bucket_name, temp_s3_key)
                 return False
-            
+
             # For preview files, we need to validate that the base file exists
             # This validation is simplified for async processing - we assume the base file exists
             # since the original upload validation would have caught missing base files
             logger.info(f"Preview file {relative_key} validation passed (base file existence assumed)")
-        
+
         # Copy file from temporary to final location
         logger.info(f"Copying file from {temp_s3_key} to {final_s3_key}")
-        
+
         copy_success = copy_s3_object(
-            bucket_name, 
-            temp_s3_key, 
-            bucket_name, 
+            bucket_name,
+            temp_s3_key,
+            bucket_name,
             final_s3_key,
             database_id,
-            asset_id
+            asset_id,
+            user_id=change_user_id
         )
         
         if not copy_success:
@@ -787,12 +775,13 @@ def complete_multipart_upload_for_large_file(file_info: Dict[str, Any], correlat
         # Handle zero-byte files (identified by uploadIdS3 = "zero-byte")
         if upload_id_s3 == "zero-byte":
             logger.info(f"Creating zero-byte file {relative_key} during async processing")
-            return create_zero_byte_file(bucket_name, temp_s3_key, upload_id, database_id, asset_id)
+            change_user_id = file_info.get('changeUserId')
+            return create_zero_byte_file(bucket_name, temp_s3_key, upload_id, database_id, asset_id, user_id=change_user_id)
         
         # Handle abandoned uploads (no parts provided) - create empty file
         if not parts or len(parts) == 0:
             logger.info(f"No parts provided for file {relative_key}, creating empty file")
-            
+
             # Abort the existing multipart upload
             try:
                 s3.abort_multipart_upload(
@@ -802,9 +791,10 @@ def complete_multipart_upload_for_large_file(file_info: Dict[str, Any], correlat
                 )
             except Exception as abort_error:
                 logger.warning(f"Error aborting multipart upload for abandoned file: {abort_error}")
-            
+
             # Create empty file in temporary location
-            return create_zero_byte_file(bucket_name, temp_s3_key, upload_id, database_id, asset_id)
+            change_user_id = file_info.get('changeUserId')
+            return create_zero_byte_file(bucket_name, temp_s3_key, upload_id, database_id, asset_id, user_id=change_user_id)
         
         # Regular multipart upload completion
         actual_parts = sorted([p['PartNumber'] for p in parts])
@@ -850,7 +840,7 @@ def complete_multipart_upload_for_large_file(file_info: Dict[str, Any], correlat
             
             # Extract metadata
             metadata = head_response.get('Metadata', {})
-            s3_upload_id = metadata.get('uploadid')
+            s3_upload_id = metadata.get(UPLOAD_ID_METADATA_KEY)
             
             # Verify the uploadId matches
             if s3_upload_id != upload_id:

@@ -15,6 +15,7 @@ import * as kms from "aws-cdk-lib/aws-kms";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
+    suppressCdkNagLambda,
     setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
@@ -46,13 +47,7 @@ export function buildAssetLinksService(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            ASSET_LINKS_STORAGE_TABLE_V2_NAME:
-                storageResources.dynamo.assetLinksStorageTableV2.tableName,
-            ASSET_LINKS_METADATA_STORAGE_TABLE_NAME:
-                storageResources.dynamo.assetLinksMetadataStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-        },
+        environment: {},
     });
     storageResources.dynamo.assetLinksStorageTableV2.grantReadWriteData(fun);
     storageResources.dynamo.assetLinksMetadataStorageTable.grantReadWriteData(fun);
@@ -60,6 +55,7 @@ export function buildAssetLinksService(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -89,13 +85,7 @@ export function buildCreateAssetLinkFunction(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            ASSET_LINKS_STORAGE_TABLE_V2_NAME:
-                storageResources.dynamo.assetLinksStorageTableV2.tableName,
-            ASSET_LINKS_METADATA_STORAGE_TABLE_NAME:
-                storageResources.dynamo.assetLinksMetadataStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-        },
+        environment: {},
     });
     storageResources.dynamo.assetLinksStorageTableV2.grantReadWriteData(fun);
     storageResources.dynamo.assetLinksMetadataStorageTable.grantReadWriteData(fun);
@@ -103,6 +93,7 @@ export function buildCreateAssetLinkFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -132,13 +123,7 @@ export function buildAssetLinksMetadataFunction(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            ASSET_LINKS_STORAGE_TABLE_V2_NAME:
-                storageResources.dynamo.assetLinksStorageTableV2.tableName,
-            ASSET_LINKS_METADATA_STORAGE_TABLE_NAME:
-                storageResources.dynamo.assetLinksMetadataStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-        },
+        environment: {},
     });
     storageResources.dynamo.assetLinksStorageTableV2.grantReadWriteData(fun);
     storageResources.dynamo.assetLinksMetadataStorageTable.grantReadWriteData(fun);
@@ -146,5 +131,6 @@ export function buildAssetLinksMetadataFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     return fun;
 }

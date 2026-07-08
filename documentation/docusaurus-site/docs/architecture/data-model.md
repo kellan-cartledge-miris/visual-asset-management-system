@@ -77,6 +77,51 @@ Stores metadata snapshots per asset version for point-in-time metadata recovery.
 | ------------------------ | -------------------- | -------- | ---------- |
 | `databaseIdAssetIdIndex` | `databaseId:assetId` | --       | ALL        |
 
+### Asset File Version History Storage Table
+
+Records per-version file change provenance (who created a version and how). Populated as new file versions are created; legacy versions created before this table existed have no record.
+
+| Attribute                     | Type   | Key           |
+| ----------------------------- | ------ | ------------- |
+| `databaseId:assetId:filePath` | String | Partition Key |
+| `versionId`                   | String | Sort Key      |
+
+**Global Secondary Indexes:**
+
+| GSI Name                 | Partition Key        | Sort Key    | Projection |
+| ------------------------ | -------------------- | ----------- | ---------- |
+| `DatabaseIdAssetIdIndex` | `databaseId:assetId` | `versionId` | ALL        |
+
+### Asset History Storage Table
+
+Records asset lifecycle operations (create, edit, archive, unarchive, permanent delete), one record per operation, queried newest first. Records are permanent: they survive asset permanent deletion, and an asset recreated with the same asset ID continues the same history partition.
+
+| Attribute            | Type   | Key           |
+| -------------------- | ------ | ------------- |
+| `databaseId:assetId` | String | Partition Key |
+| `historyRecordId`    | String | Sort Key      |
+
+The sort key is `{recordDate}#{suffix}` (ISO-8601 UTC timestamp plus a uniqueness suffix), so records sort chronologically. Each record carries `recordDate`, `changeSource` (`create`, `createDirect`, `edit`, `archive`, `unarchive`, `unarchiveDirect`, `permanentDelete` — the `*Direct` variants mark changes originated from S3 bucket-sync ingestion), `changeUserId`, and `assetSnapshot`, an open-schema map of the asset fields as they stood after the operation (`assetName`, `description`, `isDistributable`, `tags`, `bucketId`, `assetLocationKey`, and `archivedReason`/`unarchivedReason` when applicable). Records backfilled by the deployment data migration carry `migratedRecord: true`.
+
+### Sync Tracking Outbound Storage Table
+
+Records outbound synchronizations of VAMS objects to external systems (for example, Physna and the Garnet Framework), one append-only record per sync attempt, queried newest first. Written best-effort by the addon sync handlers; the object data itself is not stored.
+
+| Attribute      | Type   | Key           |
+| -------------- | ------ | ------------- |
+| `objectId`     | String | Partition Key |
+| `syncRecordId` | String | Sort Key      |
+
+The partition key is the hierarchical object identifier by `objectType`: `databaseId` (database), `databaseId:assetId` (asset), or `databaseId:assetId:/filePath` (assetFile). The sort key is `{recordDate}#{suffix}` (ISO-8601 UTC timestamp plus a uniqueness suffix), so records sort chronologically. Each record carries `objectType` (`database`, `asset`, `assetFile`), `systemType` and `systemUniqueId` (open-text identifiers of the target system — each sync handler defines its own system type constant, e.g. `physna`, `garnetFramework`), `action` (`create`, `modify`, `delete`), `syncStatus` (`pending`, `success`, `failed`, `skipped`), `errorMessage` (failed records), `s3VersionId` (assetFile records when known), `syncSystemEntityId` (the target system's own ID for the object when the sync response provides one), and `recordDate`.
+
+**Global Secondary Indexes:**
+
+| GSI Name              | Partition Key                          | Sort Key       | Projection |
+| --------------------- | -------------------------------------- | -------------- | ---------- |
+| `DatabaseIdIndex`     | `databaseId`                           | `syncRecordId` | ALL        |
+| `DatabaseSystemIndex` | `databaseId:systemType:systemUniqueId` | `syncRecordId` | ALL        |
+| `SystemIndex`         | `systemType:systemUniqueId`            | `syncRecordId` | ALL        |
+
 ### Asset Uploads Storage Table
 
 Tracks in-progress file uploads.

@@ -68,7 +68,7 @@ aws codebuild batch-get-builds --ids <build-id>
 ```
 
 :::warning[CodeBuild Internet Access]
-CodeBuild runs in the same private VPC subnets used by the Cosmos pipeline Batch compute environments. These private subnets require a NAT Gateway for internet egress, which is automatically provisioned when the Cosmos pipeline is enabled. For GovCloud deployments, organizations should validate that CodeBuild is configured with the correct private VPC settings for their environment.
+CodeBuild runs in the same private VPC subnets used by the Cosmos pipeline Batch compute environments. These private subnets require a NAT Gateway for internet egress, which is automatically provisioned when the Cosmos pipeline is enabled. For GovCloud and EU Sovereign Cloud deployments, organizations should validate that CodeBuild is configured with the correct private VPC settings for their environment.
 :::
 
 :::warning[Docker Hub Rate Limiting]
@@ -388,7 +388,7 @@ For commercial use, review the NVIDIA Open Model License terms to ensure complia
 
 ## Related pages
 
--   [NVIDIA Cosmos Predict](nvidia-cosmos.md)
+-   [NVIDIA Cosmos Predict](nvidia-cosmos-predict.md)
 -   [NVIDIA Cosmos Transfer](nvidia-cosmos-transfer.md)
 -   [Pipeline overview](overview.md)
 -   [Custom pipelines](custom-pipelines.md)

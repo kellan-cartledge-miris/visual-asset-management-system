@@ -22,8 +22,10 @@ import * as s3AssetBuckets from "../helper/s3AssetBuckets";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
+    suppressCdkNagLambda,
     setupSecurityAndLoggingEnvironmentAndPermissions,
     kmsKeyPolicyStatementGenerator,
+    grantExternalAssetBucketKmsKeys,
 } from "../helper/security";
 import { PropagatedTagSource } from "aws-cdk-lib/aws-ecs";
 
@@ -59,11 +61,8 @@ export function buildCreatePipelineFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            PIPELINE_STORAGE_TABLE_NAME: storageResources.dynamo.pipelineStorageTable.tableName,
-            WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
             ENABLE_PIPELINE_FUNCTION_NAME: enablePipelineFunction.functionName,
             ENABLE_PIPELINE_FUNCTION_ARN: enablePipelineFunction.functionArn,
-            LAMBDA_PIPELINE_SAMPLE_FUNCTION_BUCKET: storageResources.s3.artefactsBucket.bucketName,
             LAMBDA_PIPELINE_SAMPLE_FUNCTION_KEY:
                 "sample_lambda_pipeline/lambda_pipeline_deployment_package.zip",
             ROLE_TO_ATTACH_TO_LAMBDA_PIPELINE: newPipelineLambdaRole.roleArn,
@@ -72,7 +71,7 @@ export function buildCreatePipelineFunction(
             SECURITYGROUP_IDS: newPipelineLambdaSecurityGroup
                 ? newPipelineLambdaSecurityGroup.securityGroupId
                 : "", //used if subnet IDs are passed in,
-            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
+            AWS_PARTITION: config.env.partition,
         },
     });
     enablePipelineFunction.grantInvoke(fun);
@@ -83,6 +82,7 @@ export function buildCreatePipelineFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
@@ -141,8 +141,12 @@ function createRoleToAttachToLambdaPipelines(scope: Construct, kmsKey?: kms.IKey
                     // Add permissions for all asset buckets from the global array
                     ...s3AssetBuckets.getS3AssetBucketRecords().map((record) => {
                         const prefix = record.prefix || "/";
-                        // Ensure the prefix ends with a slash for proper path construction
-                        const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
+                        // Build the object-level resource as {bucketArn}/{prefix}*.
+                        // The object ARN always needs a '/' separator after the bucket
+                        // ARN; strip any leading slash from the prefix so the root
+                        // prefix ('/') yields {bucketArn}/* and a non-root prefix
+                        // ('vams-assets/') yields {bucketArn}/vams-assets/*.
+                        const objectPrefix = prefix.replace(/^\/+/, "");
 
                         return new iam.PolicyStatement({
                             effect: iam.Effect.ALLOW,
@@ -155,7 +159,7 @@ function createRoleToAttachToLambdaPipelines(scope: Construct, kmsKey?: kms.IKey
                             ],
                             resources: [
                                 record.bucket.bucketArn,
-                                `${record.bucket.bucketArn}${normalizedPrefix}*`,
+                                `${record.bucket.bucketArn}/${objectPrefix}*`,
                             ],
                         });
                     }),
@@ -171,6 +175,10 @@ function createRoleToAttachToLambdaPipelines(scope: Construct, kmsKey?: kms.IKey
     if (kmsKey) {
         newPipelineLambdaRole.addToPolicy(kmsKeyPolicyStatementGenerator(kmsKey));
     }
+
+    // Grant access to any external asset bucket customer managed KMS keys
+    // (no-op when no external keys are configured)
+    grantExternalAssetBucketKmsKeys(newPipelineLambdaRole);
 
     return newPipelineLambdaRole;
 }
@@ -199,12 +207,7 @@ export function buildPipelineService(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            PIPELINE_STORAGE_TABLE_NAME: storageResources.dynamo.pipelineStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
-            WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
-        },
+        environment: {},
     });
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
     storageResources.dynamo.pipelineStorageTable.grantReadWriteData(fun);
@@ -212,6 +215,7 @@ export function buildPipelineService(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
 
     const deletePipelineResources = [IAMArn("*" + config.name + "*").lambda];
 
@@ -249,14 +253,13 @@ export function buildEnablePipelineFunction(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            PIPELINE_STORAGE_TABLE_NAME: storageResources.dynamo.pipelineStorageTable.tableName,
-        },
+        environment: {},
     });
     storageResources.dynamo.pipelineStorageTable.grantReadWriteData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     return fun;
 }
 

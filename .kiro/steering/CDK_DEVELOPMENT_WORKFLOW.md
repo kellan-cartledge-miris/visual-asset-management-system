@@ -2,6 +2,8 @@
 
 This document provides comprehensive guidelines for developing and extending the VAMS CDK infrastructure. Follow these rules to ensure consistency, quality, and maintainability across all CDK implementations.
 
+> **Steering Document Sync (bidirectional):** This document mirrors the Claude Code steering in `infra/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Whenever you change a rule, pattern, or convention here, make the equivalent change in `infra/CLAUDE.md` in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
+
 ## 🏗️ **Architecture Overview**
 
 ### **CDK Project Structure Standards**
@@ -32,10 +34,124 @@ infra/
 │   │   └── featureEnabled/   # Dynamic feature switch management
 │   ├── constructs/           # Reusable CDK constructs
 │   ├── helper/               # Service helpers and utility functions
+│   │   ├── const.ts          # Partition-aware service endpoints
+│   │   ├── s3AssetBuckets.ts # Global asset bucket registry
+│   │   └── security.ts       # KMS, CDK Nag, CSP, TLS enforcement, presigned URL bucket policy restrictions
 │   ├── aspects/              # CDK aspects for cross-cutting concerns
 │   └── artefacts/            # Build artifacts and templates
 ├── test/                     # CDK unit and integration tests
 └── gen/                      # Generated code and endpoints
+```
+
+### **Nested Stack Dependency Chain**
+
+```
+CoreVAMSStack (root)
+  |
+  +-- VPCBuilder (conditional: useGlobalVpc.enabled)
+  +-- LambdaLayers
+  +-- StorageResourcesBuilder (foundation: DynamoDB, S3, SNS, SQS, KMS, CloudWatch)
+  |     |
+  |     +-- AuthBuilder (depends on Storage)
+  |     |     |
+  |     |     +-- ApiGatewayV2Amplify (API Gateway + authorizer)
+  |     |     |     |
+  |     |     |     +-- ApiBuilder (primary API route Lambda wiring; includes pipeline + workflow)
+  |     |     |     +-- ApiBuilder2 (secondary API stack: Tags, Tag Types; depends on ApiBuilder)
+  |     |     |     +-- StaticWeb (CloudFront or ALB hosting)
+  |     |     |     +-- SearchBuilder (OpenSearch)
+  |     |     |     +-- PipelineBuilder (all use-case pipelines)
+  |     |     |     +-- AddonBuilder (Garnet, Physna Sync)
+  |     |
+  +-- LocationService (conditional: useLocationService.enabled)
+  +-- CustomFeatureEnabledConfig (writes enabled features to DynamoDB)
+```
+
+### **Cross-Stack Shared Interfaces**
+
+**`storageResources`** (defined in `storageBuilder-nestedStack.ts`):
+
+```typescript
+interface storageResources {
+    encryption: { kmsKey?: kms.IKey };
+    s3: {
+        assetAuxiliaryBucket: s3.Bucket;
+        artefactsBucket: s3.Bucket;
+        accessLogsBucket: s3.Bucket;
+    };
+    sqs: { workflowAutoExecuteQueue: sqs.Queue };
+    sns: {
+        eventEmailSubscriptionTopic: sns.Topic;
+        fileIndexerSnsTopic: sns.Topic;
+        assetIndexerSnsTopic: sns.Topic;
+        databaseIndexerSnsTopic: sns.Topic;
+    };
+    eventBridge: {
+        orchestrationBus: events.EventBus; // Top-level VAMS orchestration event bus
+        orchestrationBusAuditLogGroup: logs.LogGroup; // Starter audit rule target
+        eventSourcePrefix: string; // Deployment-unique source prefix, e.g. "vams.prod-us-east-1"
+    };
+    cloudWatchAuditLogGroups: {
+        authentication;
+        authorization;
+        fileUpload;
+        fileDownload;
+        fileDownloadStreamed;
+        authOther;
+        authChanges;
+        actions;
+        errors: logs.LogGroup;
+    };
+    dynamo: {
+        // 20+ DynamoDB tables -- see storageBuilder-nestedStack.ts lines 72-98
+        appFeatureEnabledStorageTable;
+        assetLinksStorageTableV2;
+        assetLinksMetadataStorageTable;
+        assetStorageTable;
+        assetUploadsStorageTable;
+        assetVersionsStorageTable;
+        assetFileVersionsStorageTable;
+        assetFileVersionHistoryStorageTable;
+        assetHistoryStorageTable;
+        syncTrackingOutboundStorageTable;
+        assetFileMetadataVersionsStorageTable;
+        authEntitiesStorageTable;
+        commentStorageTable;
+        constraintsStorageTable;
+        databaseStorageTable;
+        metadataSchemaStorageTableV2;
+        databaseMetadataStorageTable;
+        assetFileMetadataStorageTable;
+        fileAttributeStorageTable;
+        pipelineStorageTable;
+        rolesStorageTable;
+        s3AssetBucketsStorageTable;
+        subscriptionsStorageTable;
+        tagStorageTable;
+        tagTypeStorageTable;
+        userRolesStorageTable;
+        userStorageTable;
+        workflowExecutionsStorageTable;
+        apiKeyStorageTable: dynamodb.Table; // GSIs: apiKeyHashIndex (PK: apiKeyHash), userIdIndex (PK: userId)
+        workflowStorageTable: dynamodb.Table;
+        // assetVersionsStorageTable has GSI: databaseIdAssetIdIndex (PK: databaseId:assetId, SK: assetVersionId)
+    };
+}
+```
+
+**`authResources`** (defined in `authBuilder-nestedStack.ts`):
+
+```typescript
+interface authResources {
+    roles: { unAuthenticatedRole: iam.Role };
+    cognito: {
+        userPool: cognito.UserPool;
+        webClientUserPool: cognito.UserPoolClient;
+        userPoolId: string;
+        identityPoolId: string;
+        webClientId: string;
+    };
+}
 ```
 
 ## 📋 **Development Workflow Checklist**
@@ -55,7 +171,7 @@ infra/
 -   [ ] **Add Configuration Types**: Add new interfaces to `ConfigPublic` in `config.ts`
 -   [ ] **Add Feature Constants**: Add feature switches to `vamsAppFeatures.ts`
 -   [ ] **Add Validation Logic**: Include configuration validation in `getConfig()`
--   [ ] **Update Templates**: Update configuration templates for different environments
+-   [ ] **Update Templates**: Update **all** configuration templates — `config.template.commercial.json`, `config.template.govcloud.json`, **and** `config.template.eusovereign.json` — plus the active `config.json`. A missed template silently falls back to `getConfig()` defaults and drops any operator-set value.
 
 #### **Step 2: Service Helper Integration**
 
@@ -133,6 +249,11 @@ export interface ConfigPublic {
                 setting2: boolean;
             };
         };
+        // assetBuckets: createNewBucket, defaultNewBucketSyncDatabaseId,
+        // externalAssetBuckets (bucketArn, baseAssetsPrefix, defaultSyncDatabaseId,
+        // optional bucketAccountId/bucketRegion/bucketKmsKeyArn),
+        // presignedUrlNetworkRestrictions (allowedIpRanges/allowedVpceIds; mutually exclusive;
+        // non-empty list adds a presigned-only bucket policy Deny to the created asset + auxiliary buckets)
     };
 }
 
@@ -790,6 +911,20 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 4. **Network Security**: Use dedicated security groups for pipeline resources
 5. **Container Security**: Scan container images for vulnerabilities
 
+### **OpenSearch Serverless Connectivity**
+
+A **private** OpenSearch Serverless collection (`app.openSearch.useServerless.allowPublic = false`) is reached only through a VPC endpoint, and the endpoint **type is selected by the collection generation** because the two generations expose different endpoint hostnames:
+
+-   **NEXTGEN** (`nextGen = true`): hostname `{collection-id}.aoss.{region}.on.aws`, reached through a **standard EC2 interface endpoint** (`ec2.InterfaceVpcEndpoint`, service `com.amazonaws.{region}.aoss-data`, `privateDnsEnabled: true`), built via `new ec2.InterfaceVpcEndpointAwsService("aoss-data", "com.amazonaws", 443)`.
+-   **CLASSIC** (`nextGen = false`): hostname `{collection-id}.{region}.aoss.amazonaws.com`, reached through the OpenSearch Serverless-managed endpoint (`opensearchserverless.CfnVpcEndpoint`), which provisions its own Route 53 private hosted zone.
+
+The chosen endpoint's id populates the network policy `SourceVPCEs`. Only the OpenSearch-facing Lambdas (search, fileIndexer, assetIndexer, crOsReindexer, and the schema-deploy custom resource) run in the VPC — `useForAllLambdas` is not required for a private collection. The schema-deploy custom resource Lambda uses a long timeout (14 min) and a readiness poll because a freshly created collection/endpoint, plus a NEXTGEN scale-to-zero cold start (10–30s), can take minutes to become reachable. Backend Lambdas sign with SigV4 service name `aoss` when `OPENSEARCH_TYPE=serverless`.
+
+**`addVpcEndpoints` gating (NEXTGEN only).** The NEXTGEN endpoint is a standard EC2 interface endpoint, so it follows `useGlobalVpc.addVpcEndpoints` like every other interface endpoint. The construct computes `createEndpointResources = useVPCEndpoint && (!nextGen || addVpcEndpoints)`:
+
+-   When true, VAMS creates the endpoint, its security group, and the VPC network access policy, and runs the schema-deploy function in the VPC.
+-   When false (private NEXTGEN + `addVpcEndpoints = false`, the **deferred** case), VAMS skips the endpoint **and** the network policy. The schema-deploy function runs **outside** the VPC, writes the SSM parameters, and skips index creation (the `DeploySSMIndexSchema` custom resource passes `deferIndexCreation: "true"`). The operator creates the `aoss-data` endpoint and a matching network policy manually. To then create the index mappings, set `app.openSearch.useServerless.deployDeferredIndexSchema = true` for one deployment (also overridable via CDK context); the construct computes `deferIndexCreation = deferVpcSetup && !deployDeferredIndexSchema` and runs schema-deploy in the VPC against the operator endpoint. Then reindex. The flag is ignored when `addVpcEndpoints = true`. CLASSIC's managed endpoint is not an EC2 interface endpoint, so it is not governed by `addVpcEndpoints` and is always created for a private collection. See `documentation/docusaurus-site/docs/developer/opensearch.md`.
+
 ## 🔧 **Lambda Builder and Constructs Patterns**
 
 ### **Lambda Builder Pattern**
@@ -838,20 +973,7 @@ export function build[FunctionName]Function(
 
         // Environment Variables Pattern
         environment: {
-            // DynamoDB Table Names
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
-
-            // S3 Bucket Names
-            S3_ASSET_AUXILIARY_BUCKET: storageResources.s3.assetAuxiliaryBucket.bucketName,
-
-            // Authentication Tables
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
-
-            // Configuration Values
+            // Handler-specific env vars only (resource names resolved from SSM)
             PRESIGNED_URL_TIMEOUT_SECONDS: config.app.authProvider.presignedUrlTimeoutSeconds.toString(),
         },
     });
@@ -859,10 +981,7 @@ export function build[FunctionName]Function(
     // Permissions Pattern - DynamoDB
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+    // SSM resource name parameters grant via globalLambdaEnvironmentsAndPermissions
 
     // Permissions Pattern - S3
     grantReadWritePermissionsToAllAssetBuckets(fun);
@@ -872,9 +991,11 @@ export function build[FunctionName]Function(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
 
     // Global Permissions and Environment
-    globalLambdaEnvironmentsAndPermissions(fun, config);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);  // Injects VAMS_RESOURCE_PARAM_PREFIX + SSM grant
 
     // CDK Nag Suppressions
+    suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
@@ -891,6 +1012,12 @@ grantReadPermissionsToAllAssetBuckets(lambdaFunction);
 
 // Grant read/write permissions to all asset buckets
 grantReadWritePermissionsToAllAssetBuckets(lambdaFunction);
+
+// Grant access to external asset bucket customer managed KMS keys (no-op when
+// no external bucket declares a bucketKmsKeyArn). The grant*AssetBuckets helpers
+// above already call this; call it directly for locally-built container/Batch/
+// ECS/EKS/Step Functions roles that read or write asset buckets.
+grantExternalAssetBucketKmsKeys(roleOrFunction);
 
 // Add KMS permissions for encryption/decryption
 kmsKeyLambdaPermissionAddToResourcePolicy(lambdaFunction, storageResources.encryption.kmsKey);
@@ -1019,6 +1146,16 @@ export class Wafv2BasicConstruct extends Construct {
 
 ### **Security Helper Integration**
 
+#### **What the Security Helpers Do**
+
+-   **`kmsKeyLambdaPermissionAddToResourcePolicy`**: Grants KMS Decrypt/Encrypt/GenerateDataKey/ReEncrypt/ListKeys/CreateGrant/ListAliases on the VAMS KMS key
+-   **`setupSecurityAndLoggingEnvironmentAndPermissions`**: Grants read on auth/constraints/userRoles/roles tables. Grants CloudWatch PutLogEvents on all 9 audit log groups. **No longer injects table or log group environment variables** (non-pipeline handlers resolve these from SSM).
+-   **`globalLambdaEnvironmentsAndPermissions`**: Adds `VAMS_RESOURCE_PARAM_PREFIX` env var (SSM parameter prefix for resource name resolution) and grants ssm:GetParameter, ssm:GetParameters, ssm:GetParametersByPath on the deployment's resource-name parameter prefix.
+-   **`isCognitoMfaCheckEnabled`** (used by the authorizer builder only): computes whether the API Gateway authorizer can reach Cognito for the MFA-preference check (Cognito enabled, and not in-VPC in a partition without Cognito PrivateLink — GovCloud/EU-Sovereign/ISO). Sets `COGNITO_AUTH_ENABLED` on the **authorizer Lambda only**; the authorizer resolves MFA status via `AdminGetUser` and passes `vams:mfaEnabled` to handlers through the authorizer context, so handler Lambdas need no Cognito access.
+-   **`suppressCdkNagLambda`**: Applies the standard per-Lambda IAM4/IAM5 suppressions (AWSLambdaBasicExecutionRole, AWSLambdaVPCAccessExecutionRole, wildcard KMS actions), scoped to the function instead of the whole stack
+-   **`suppressCdkNagErrorsByGrantReadWrite`**: Suppresses AwsSolutions-IAM5 for S3 and resource wildcards
+-   **`suppressCdkNagLambdaFrameworkResources`**: Called once on the core stack. Applies the same IAM4/IAM5 suppressions only to CDK-generated framework roles (custom-resource providers, bucket deployments, `AwsCustomResource`) and VAMS custom-resource roles that the per-function helper cannot reach
+
 #### **KMS Key Permissions Pattern**
 
 ```typescript
@@ -1146,17 +1283,12 @@ export class ApiBuilderNestedStack extends cdk.NestedStack {
             props.subnets
         );
 
-        // Create API Gateway integrations
-        const createAssetIntegration = new apigatewayv2.HttpLambdaIntegration(
-            "CreateAssetIntegration",
-            createAssetFunction
-        );
-
-        // Add routes to API Gateway
-        props.apiGatewayV2.addRoutes({
-            path: "/assets",
-            methods: [apigatewayv2.HttpMethod.POST],
-            integration: createAssetIntegration,
+        // Register routes into the cross-stack route registry. RestApiBuilder
+        // renders the full registry into one OpenAPI spec on a single SpecRestApi.
+        attachFunctionToApi(this, createAssetFunction, {
+            routePath: "/assets",
+            method: apigateway.HttpMethod.POST,
+            registry: props.registry,
         });
     }
 }
@@ -1198,12 +1330,15 @@ VAMS uses a unified custom Lambda authorizer pattern for all API Gateway endpoin
 
 ```
 infra/lib/lambdaBuilder/authFunctions.ts
-├── buildApiGatewayAuthorizerHttpFunction()     # HTTP API authorizer
-└── buildApiGatewayAuthorizerWebsocketFunction() # WebSocket API authorizer
+└── buildApiGatewayAuthorizerRestFunction()      # REST API REQUEST authorizer
 
 backend/backend/handlers/auth/
-├── apiGatewayAuthorizerHttp.py      # HTTP authorizer implementation
-└── apiGatewayAuthorizerWebsocket.py # WebSocket authorizer implementation
+└── apiGatewayAuthorizerRest.py      # REST REQUEST authorizer (returns IAM policy)
+
+backend/backend/common/auth/
+├── authorizerCore.py                # Shared auth logic (Cognito/external JWT, API key, IP)
+├── clientIp.py                      # Trusted client-IP resolution + IP-range check
+└── apiEvent.py                      # REST→canonical event normalization shim
 
 infra/config/config.ts
 └── CUSTOM_AUTHORIZER_IGNORED_PATHS  # Paths that bypass authorization
@@ -1256,14 +1391,14 @@ if (config.app.authProvider.authorizerOptions.allowedIpRanges) {
 
 ```typescript
 // ✅ CORRECT - Custom authorizer builder pattern
-export function buildApiGatewayAuthorizerHttpFunction(
+export function buildApiGatewayAuthorizerRestFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
 ): lambda.Function {
-    const name = "apiGatewayAuthorizerHttp";
+    const name = "apiGatewayAuthorizerRest";
 
     // Determine auth mode based on configuration
     const authMode = config.app.authProvider.useCognito.enabled
@@ -1329,7 +1464,7 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
         super(parent, name);
 
         // Create custom authorizer Lambda function
-        const customAuthorizerFunction = buildApiGatewayAuthorizerHttpFunction(
+        const customAuthorizerFunction = buildApiGatewayAuthorizerRestFunction(
             this,
             props.lambdaCommonBaseLayer,
             props.config,
@@ -1355,17 +1490,14 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
             customAuthorizerFunction,
             {
                 authorizerName: "VamsCustomAuthorizer",
-                resultsCacheTtl: cdk.Duration.seconds(300), // 5 minutes cache
-                identitySource: ["$request.header.Authorization"],
-                responseTypes: [apigwAuthorizers.HttpLambdaResponseType.IAM],
+                resultsCacheTtl: cdk.Duration.seconds(30),
+                identitySource: ["method.request.header.Authorization"],
             }
         );
 
-        // Use custom authorizer as default for API Gateway
-        const api = new apigw.HttpApi(this, "Api", {
-            defaultAuthorizer: apiGatewayAuthorizer,
-            // ... other API configuration
-        });
+        // The REST authorizer is declared as the OpenAPI security scheme applied
+        // to all non-anonymous routes; RestApiBuilder builds the SpecRestApi from
+        // the route registry and attaches this authorizer via the spec.
     }
 }
 ```
@@ -1376,21 +1508,28 @@ export class ApiGatewayV2AmplifyNestedStack extends NestedStack {
 // ✅ CORRECT - Define ignored paths as constants
 export const CUSTOM_AUTHORIZER_IGNORED_PATHS = ["/api/amplify-config", "/api/version"];
 
-// ✅ CORRECT - Remove no-op authorizers from constructs
+// ✅ CORRECT - Anonymous endpoints register with allowAnonymous: true so the
+// OpenAPI spec omits the authorizer security scheme for that route. The authorizer
+// also bypasses CUSTOM_AUTHORIZER_IGNORED_PATHS at runtime as defense-in-depth.
 export class AmplifyConfigLambdaConstruct extends Construct {
+    public readonly lambdaFn: lambda.Function;
     constructor(parent: Construct, name: string, props: AmplifyConfigLambdaConstructProps) {
-        // ... lambda function creation
-
-        // No authorizer needed - path is ignored by custom authorizer
-        props.api.addRoutes({
-            path: "/api/amplify-config",
-            methods: [apigatewayv2.HttpMethod.GET],
-            integration: lambdaFnIntegration,
-            // No authorizer property - uses default custom authorizer with path bypass
-        });
+        // ... lambda function creation; RestApiBuilder registers the route:
+        // registry.register({ path: "/api/amplify-config", method: HttpMethod.GET,
+        //                     lambdaFn: this.lambdaFn, allowAnonymous: true });
     }
 }
 ```
+
+#### **REST API CORS and Resource Policy**
+
+CORS on the REST API is set in **three** places because REST responses come from three layers (the migration from HTTP API v2 removed the automatic ACAO injection HTTP APIs performed):
+
+1. **OPTIONS preflight** — `buildOpenApiSpec.ts` emits a per-path OPTIONS **MOCK** method with **no `security`** (a preflight must be unauthenticated) that returns `Access-Control-Allow-Origin` (and allow-headers/methods). If OPTIONS carried an authorizer, the preflight itself would get 401/403 with no CORS headers.
+2. **Gateway-level responses** — `rest-api-gateway-construct.ts` adds `GatewayResponse` resources for `DEFAULT_4XX` and `DEFAULT_5XX` that inject ACAO. Authorizer denials (401/403), missing-auth-token, and errors are produced by API Gateway itself and never reach a Lambda, so `commonHeaders()` cannot cover them; without this a token-expiry 401 is CORS-blocked in the browser and looks like a CORS bug.
+3. **Lambda proxy response** — the handler adds ACAO to its own response body via `commonHeaders()`; API Gateway returns proxy responses verbatim.
+
+**Resource policy** is always written explicitly to match `endpointType` (`buildOpenApiSpec.ts`): an `aws:SourceVpce`-restricted policy for `PRIVATE`, a public allow-all policy for `REGIONAL`. Amazon API Gateway does **not** remove a previously-set resource policy when an update omits one, so emitting it for both endpoint types ensures a `PRIVATE`↔`REGIONAL` switch overwrites the prior policy. A stale `PRIVATE` policy left on a now-`REGIONAL` API denies every request (including the CORS preflight) with `403 AccessDeniedException` at the resource-policy layer — a browser misreports this as a failed CORS preflight rather than an authorization error.
 
 ### **Custom Authorizer Development Rules**
 
@@ -1496,29 +1635,14 @@ export function build[FunctionName]Function(
             ? { subnets: subnets } : undefined,
 
         environment: {
-            // DynamoDB Tables
-            [DOMAIN]_STORAGE_TABLE_NAME: storageResources.dynamo.[domain]StorageTable.tableName,
-
-            // Authentication Tables
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
-
-            // S3 Buckets
-            S3_ASSET_AUXILIARY_BUCKET: storageResources.s3.assetAuxiliaryBucket.bucketName,
-
-            // Configuration Values
+            // Handler-specific env vars only (resource names resolved from SSM)
             CUSTOM_CONFIG_VALUE: config.app.[feature].[setting].toString(),
         },
     });
 
     // DynamoDB Permissions
     storageResources.dynamo.[domain]StorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+    // SSM resource name parameters grant via globalLambdaEnvironmentsAndPermissions
 
     // S3 Permissions
     grantReadWritePermissionsToAllAssetBuckets(fun);
@@ -1528,9 +1652,11 @@ export function build[FunctionName]Function(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
 
     // Global Environment and Permissions
-    globalLambdaEnvironmentsAndPermissions(fun, config);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);  // Injects VAMS_RESOURCE_PARAM_PREFIX + SSM grant
 
     // CDK Nag Suppressions
+    suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
@@ -1909,18 +2035,32 @@ When making CDK infrastructure changes, update the corresponding documentation a
 #### **Docusaurus Documentation Updates:**
 
 -   **New config option** → Update `documentation/docusaurus-site/docs/deployment/configuration-reference.md`
+-   **New config option** → Also mirror it into the interactive **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/`) so the config generator stays in sync — see the component `README.md` for which files to touch (`schema.ts`, `defaults.ts`, `validation.ts`), then confirm the `infra/test/configBuilderSync.test.ts` drift check passes
 -   **New pipeline** → Create page in `pipelines/`, update `pipelines/overview.md`, `overview/features.md`, `sidebars.ts`
--   **New DynamoDB table** → Update `architecture/aws-resources.md`, `architecture/data-model.md`
+-   **New DynamoDB table** → Update `architecture/aws-resources.md`, `architecture/data-model.md`; add the resource-name constant to `infra/common/resourceParamKeys.ts`, `backend/backend/common/resourceNames.py`, AND `infra/deploymentDataMigration/tools/ssm_resource_lookup.py` (data-migration scripts resolve names from the published SSM parameters), then register the descriptor in `resourceNameRegistry` in `storageBuilder-nestedStack.ts`. Same three-way constants update for new audit CloudWatch log groups. Deprecated tables kept for migration move to `RESOURCE_PARAM_KEYS.dynamoTablesLegacy` (published under `dynamoTables/legacy/`).
+-   **New or changed S3 bucket** → Update the Amazon S3 Buckets table in `architecture/aws-resources.md` (including its removal policy and whether it has a custom/fixed name) and the bucket list in `deployment/uninstall.md`
+-   **New or changed CloudWatch log group** → Update the Amazon CloudWatch section in `architecture/aws-resources.md` and the log group cleanup in `deployment/uninstall.md`
 -   **New nested stack** → Update `architecture/details.md`
 -   **New feature switch** → Update `overview/features.md`
+-   **New external configuration/policy file** (e.g. `config/policy/iamRoleConfig.json`) → Add it to the "Additional configuration files" table in `deployment/configuration-reference.md`, document the `config.json` flag that enables it, and explain the file structure.
+
+:::note[Document two independent properties: removal policy and custom name]
+When adding or changing a storage resource (Amazon S3 bucket, Amazon DynamoDB table) or Amazon CloudWatch log group, document **both** of these properties in `architecture/aws-resources.md`, and reflect them in `deployment/uninstall.md`:
+
+1. **Removal on teardown** — `RemovalPolicy.RETAIN` (survives `cdk destroy`, needs manual deletion) vs. `RemovalPolicy.DESTROY` (removed automatically; pair S3 buckets with `autoDeleteObjects: true`).
+2. **Custom name (redeploy-collision flag)** — Whether the resource sets an explicit name (`bucketName`, `tableName`, `logGroupName`, including deterministic `generateUniqueNameHash` names). Only explicitly named resources can cause a **name collision on redeploy** with the same configuration name and account.
+
+These axes are independent. A resource that is **retained but auto-named** (for example, the VAMS asset, auxiliary, artefacts, and access logs buckets, and all DynamoDB tables) does **not** need to be deleted before redeploying with the same config — leave it unless you intend to remove the data. A resource with a **custom/fixed name** (for example, the ALB web app bucket and its access logs bucket, named for the domain host; and all `/aws/vendedlogs/...` log groups) **must** be flagged so operators delete any orphaned copy before redeploying.
+:::
 
 #### **Cross-Steering File Updates:**
 
 When changes affect development standards, architecture patterns, or quality requirements:
 
 1. Update **all** affected CLAUDE.md files (root, web/, backend/, infra/, tools/VamsCLI/, documentation/)
-2. Update **both** `.kiro/steering/` and `.clinerules/workflows/` versions of affected workflow files (they must stay in sync)
-3. Keep WEB_DEVELOPMENT_WORKFLOW.md, BACKEND_CDK_DEVELOPMENT_WORKFLOW.md, CDK_DEVELOPMENT_WORKFLOW.md, CLI_DEVELOPMENT_WORKFLOW.md, and DOCUMENTATION_WORKFLOW.md aligned when cross-component patterns change
+2. Update the `.kiro/steering/` version of affected workflow files
+3. Keep WEB_DEVELOPMENT_WORKFLOW.md, WEB_FRONTEND.md, BACKEND_CDK_DEVELOPMENT_WORKFLOW.md, CDK_DEVELOPMENT_WORKFLOW.md, CLI_DEVELOPMENT_WORKFLOW.md, and DOCUMENTATION_WORKFLOW.md aligned when cross-component patterns change
+4. Update any Claude Code skills in `.claude/commands/` that scaffold or reference the changed rule, pattern, checklist, or file path (see root `CLAUDE.md` Rule 12 for the skill-to-steering mapping) — a stale skill actively scaffolds outdated code
 
 ---
 
@@ -1979,6 +2119,17 @@ if (props.config.app.newFeature.enabled) {
     this.enabledFeatures.push(VAMS_APP_FEATURES.NEW_FEATURE);
 }
 ```
+
+#### **Step 4: Update Documentation and the ConfigBuilder**
+
+The docs-site config generator is a hand-maintained mirror of `config.ts` — it does **not** auto-update. After adding the option:
+
+1. Document it in `documentation/docusaurus-site/docs/deployment/configuration-reference.md`.
+2. Update the **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/`):
+    - `schema.ts` — add a `FIELDS` entry (path + label + input kind + section).
+    - `defaults.ts` — add the default (kept deep-equal to `config.template.commercial.json` / `config.template.govcloud.json`).
+    - `validation.ts` — add a `Rule` mirroring any new `throw new Error(...)` / `console.warn(...)` you added in `getConfig()`.
+3. Run `cd infra && npm test` — the `configBuilderSync.test.ts` drift check deep-equals `defaults.ts` against the templates and asserts every `ConfigPublic` leaf has a form field.
 
 ### **Creating New Nested Stacks**
 
@@ -2138,6 +2289,7 @@ dependentStack.addDependency(newFeatureStack);
 8. **Always** use service helper for cross-stack resource access
 9. **Always** write comprehensive tests
 10. **Always** update documentation
+11. **Always** match the surrounding comment density and style — describe **what** code is, not why it was added; never reference "upgrades", "new in vX", or the prompting change request in source comments (changelog narration belongs in `CHANGELOG.md` and the docs revision history, not in code)
 
 ## 🛠️ **Development Commands**
 

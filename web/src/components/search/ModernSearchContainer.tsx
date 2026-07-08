@@ -7,7 +7,7 @@ import React, { useEffect, useState, useCallback } from "react";
 import { useParams } from "react-router-dom";
 import { appCache } from "../../services/appCache";
 import { useNavigate } from "react-router-dom";
-import { Grid, Alert, SegmentedControl, Box } from "@cloudscape-design/components";
+import { Grid, SegmentedControl, Box } from "@cloudscape-design/components";
 import { featuresEnabled } from "../../common/constants/featuresEnabled";
 import { SearchContainerProps, MetadataFilter, getTotalResultCount } from "./types";
 import { useSearchState } from "./hooks/useSearchState";
@@ -371,7 +371,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
         setCurrentView(view);
 
         // When switching TO map view, add location metadata filters
-        if (view === "map" && previousView !== "map" && recordType === "asset") {
+        if (view === "map" && previousView !== "map") {
             // Add location metadata filters (disabled from editing)
             // Include both lowercase and capitalized versions to handle different capitalizations
             const locationFilters: MetadataFilter[] = [
@@ -429,9 +429,6 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
     if (useNoOpenSearch) {
         return (
             <Box>
-                <Alert type="info" header="Limited Search Mode">
-                    {`OpenSearch is disabled. Using basic ${Synonyms.asset} listing instead.`}
-                </Alert>
                 <ListPage
                     singularName={Synonyms.Asset}
                     singularNameTitleCase={Synonyms.Asset}
@@ -459,7 +456,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
         // if (allowedViews.includes('card')) {
         //     viewOptions.push({ text: 'Grid', id: 'card' });
         // }
-        if (allowedViews.includes("map") && useMapView && recordType === "asset") {
+        if (allowedViews.includes("map") && useMapView) {
             viewOptions.push({ text: "Map", id: "map" });
         }
 
@@ -503,7 +500,7 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                 );
 
             case "map":
-                if (useMapView && recordType === "asset") {
+                if (useMapView) {
                     return <SearchPageMapView state={searchState} dispatch={() => {}} />;
                 }
                 // Fall through to table view if map not available

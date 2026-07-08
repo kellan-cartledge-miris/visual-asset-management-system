@@ -32,8 +32,9 @@ tools/VamsCLI/
       cognito.py             # CognitoAuthenticator (SRP, USER_PASSWORD_AUTH)
     commands/
       setup.py               # Initial CLI configuration
-      auth.py                # Login, logout, status, set-override
-      assets.py              # Asset CRUD operations
+      auth.py                # Login, change-password, forgot-password, logout, status, refresh, set-override, routes (API route listing)
+      apiKey.py              # API key management (admin) + 'user' sub-group (self-service own keys)
+      assets.py              # Asset CRUD operations + lifecycle history lookup (history)
       asset_version.py       # Asset version management (list, get, create, update, archive, unarchive, revert)
       asset_links.py         # Asset relationship/link management
       file.py                # File management (upload, download, move, copy)
@@ -45,6 +46,7 @@ tools/VamsCLI/
       metadata_schema.py     # Metadata schema management
       features.py            # Feature switch inspection
       search.py              # Search (OpenSearch integration)
+      sync.py                # Directory sync (sync file push/pull)
       workflow.py            # Workflow execution
       user.py                # Cognito user management
       roleUserConstraints.py # Roles, constraints, user-role assignment
@@ -67,23 +69,29 @@ tools/VamsCLI/
       retry_config.py        # Retry settings with env var overrides
       features.py            # Feature switch utilities
       upload_manager.py      # Multi-part upload orchestration
-      download_manager.py    # Parallel download orchestration
+      download_manager.py    # Parallel download orchestration (atomic writes, size verify, mtime preservation)
       file_processor.py      # File validation and processing
+      sync_engine.py         # Sync plan computation (local/remote diff)
+      vamsignore.py          # .vamsignore gitignore-style pattern matching
       glb_combiner.py        # GLB binary file combination
   tests/
     conftest.py              # Shared fixtures (mock_logging, cli_runner, generic_command_mocks)
     test_*.py                # ~25 test files (includes test_asset_version_new_commands.py)
 ```
 
-### Command Groups (18 top-level)
+### Command Groups (20 top-level)
 
 All registered in `main.py` via `cli.add_command()`:
 
 ```
 setup, auth, assets, asset-version, asset-links, file, profile, database,
-tag, tag-type, metadata, metadata-schema, features, search, workflow,
-industry, user, role
+tag, tag-type, metadata, metadata-schema, features, search, sync, workflow,
+industry, user, role, api-key
 ```
+
+Sync has a nested sub-command group:
+
+-   `sync file push` / `sync file pull` -- directory synchronization with an asset (S3-sync-style size+mtime diff, `.vamsignore` support, archive/permanent-delete safeguards)
 
 Industry has nested sub-command groups:
 
@@ -119,6 +127,7 @@ VamsCLIError (base)
     AssetError (+ 5 subclasses)
     DatabaseError (+ 5 subclasses)
     FileError (+ 14 subclasses)
+    SyncError (+ 5 subclasses)
     TagError (+ 7 subclasses)
     AssetVersionError (+ 5 subclasses, includes AssetVersionArchiveError)
     AssetLinkError (+ 7 subclasses)
@@ -140,54 +149,25 @@ VamsCLIError (base)
 
 ### 2. Command Structure Pattern
 
-Every command follows this exact pattern:
+Every command follows this exact pattern (full skeleton in [Templates](#templates)):
 
 ```python
-"""Module docstring."""
-
-import json
-import click
-from typing import Dict, Any, Optional
-
-from ..constants import API_ENDPOINT_CONSTANT
-from ..utils.decorators import requires_setup_and_auth, get_profile_manager_from_context
-from ..utils.api_client import APIClient
-from ..utils.json_output import output_status, output_result, output_error
-from ..utils.exceptions import DomainSpecificException
-
-
-@click.group()
-def domain():
-    """Domain management commands."""
-    pass
-
-
 @domain.command()
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
 def list(ctx: click.Context, json_output: bool):
-    """List all items.
-
-    Examples:
-        vamscli domain list
-        vamscli domain list --json-output
-    """
-    # Setup/auth already validated by decorator
+    """List all items."""
     profile_manager = get_profile_manager_from_context(ctx)
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
 
     output_status("Retrieving items...", json_output)
-
     try:
         result = api_client.some_method()
-        output_result(result, json_output,
-                     success_message="Items retrieved successfully",
-                     cli_formatter=lambda r: format_output(r))
+        output_result(result, json_output, success_message="Items retrieved successfully")
     except DomainSpecificException as e:
-        output_error(e, json_output, error_type="Domain Error",
-                    helpful_message="Use 'vamscli domain list' to see available items.")
+        output_error(e, json_output, error_type="Domain Error")
         raise click.ClickException(str(e))
 ```
 
@@ -340,6 +320,14 @@ Login flow:
 3. Call `/auth/loginProfile/{userId}` to get user profile
 4. Call `/secure-config` for feature switches
 5. Store feature switches in profile config
+
+Password changes (Cognito only):
+
+-   `authenticate()` accepts `new_password` and `interactive`. A `NEW_PASSWORD_REQUIRED` challenge is answered with `new_password` when provided; otherwise it prompts (interactive) or raises `AuthenticationError` (non-interactive, e.g. `--json-output`).
+-   `vamscli auth login --new-password` completes a forced password change; the command passes `interactive=not json_output`.
+-   `CognitoAuthenticator.change_password(access_token, previous_password, proposed_password)` wraps the Cognito `ChangePassword` API. `vamscli auth change-password` signs in with the current password (`interactive=False`) and then changes it, also satisfying a forced change in one step.
+-   `CognitoAuthenticator.forgot_password(username)` and `confirm_forgot_password(username, code, new_password)` wrap the Cognito `ForgotPassword` / `ConfirmForgotPassword` APIs (self-service reset, no current password needed). `vamscli auth forgot-password` is a single two-phase command: with no `--code` it requests an emailed code; with `--code` + `--new-password` it confirms. Interactive mode prompts through both phases; `--json-output` requests-only or confirms when both are supplied.
+-   These flows call the `cognito-idp` client directly (boto3), not a VAMS API route, so they have no `constants.py` endpoint entry.
 
 Override tokens (external auth):
 
@@ -539,14 +527,16 @@ Follow this checklist:
 
 6. **Write tests** in `tests/test_my_resource.py` following the test class pattern above
 
-7. **Update user-facing documentation**:
+7. **Update user-facing documentation**. The official Docusaurus site (`documentation/docusaurus-site/docs/cli/`) is the **single source of truth** for CLI documentation. The legacy in-repo docs under `tools/VamsCLI/docs/` are deprecated — do not add or update content there.
 
     - Update the Docusaurus CLI reference page at `documentation/docusaurus-site/docs/cli/commands/` for the relevant command group
+    - Update the matching troubleshooting page at `documentation/docusaurus-site/docs/cli/troubleshooting/` if behavior or error scenarios changed (CLI troubleshooting lives under the CLI section, not the top-level `troubleshooting/`)
     - Update `documentation/docusaurus-site/docs/cli/command-reference.md` index if a new command group was added
-    - Update `documentation/docusaurus-site/sidebars.ts` if a new CLI command page was added
-    - Update `README.md` Quick Start examples if the command is commonly used
+    - Update `documentation/docusaurus-site/sidebars.ts` if a new CLI command or troubleshooting page was added
+    - Update `tools/VamsCLI/README.md` only for basic install/quick-start changes (it points to the official site for everything else)
     - Update `documentation/VAMS_API.yaml` with new/modified API endpoints and schemas
     - Update `documentation/docusaurus-site/docs/concepts/permissions-model.md` with new API route permissions
+    - Run `cd documentation/docusaurus-site && npm run build` to verify links and MDX
 
     **Documentation style**: Follow Docusaurus format with `:::note`/`:::warning` admonitions, escape `\{curly braces\}` outside code blocks, use `bash` language tags on code blocks. See `documentation/CLAUDE.md` for full style guide.
 
@@ -606,8 +596,7 @@ def my_resource():
 @click.pass_context
 @requires_setup_and_auth
 def list(ctx: click.Context, json_output: bool):
-    """
-    List all resources.
+    """List all resources.
 
     Examples:
         vamscli my-resource list
@@ -623,12 +612,11 @@ def list(ctx: click.Context, json_output: bool):
     try:
         result = api_client.list_my_resources()
         items = result.get('Items', [])
-
         output_result(
             result,
             json_output,
             success_message=f"Found {len(items)} resource(s)",
-            cli_formatter=lambda r: format_list_output(r)
+            cli_formatter=lambda r: format_list_output(r),
         )
     except MyResourceNotFoundError as e:
         output_error(e, json_output, error_type="Resource Not Found")
@@ -641,14 +629,7 @@ def list(ctx: click.Context, json_output: bool):
 @click.pass_context
 @requires_setup_and_auth
 def get(ctx: click.Context, resource_id: str, json_output: bool):
-    """
-    Get a specific resource.
-
-    Examples:
-        vamscli my-resource get RESOURCE_ID
-        vamscli my-resource get RESOURCE_ID --json-output
-    """
-    # Setup/auth already validated by decorator
+    """Get a specific resource."""
     profile_manager = get_profile_manager_from_context(ctx)
     config = profile_manager.load_config()
     api_client = APIClient(config['api_gateway_url'], profile_manager)
@@ -657,24 +638,24 @@ def get(ctx: click.Context, resource_id: str, json_output: bool):
 
     try:
         result = api_client.get_my_resource(resource_id)
-        output_result(result, json_output,
-                     success_message="Resource retrieved successfully")
+        output_result(result, json_output, success_message="Resource retrieved successfully")
     except MyResourceNotFoundError as e:
-        output_error(e, json_output,
-                    error_type="Resource Not Found",
-                    helpful_message="Use 'vamscli my-resource list' to see available resources.")
+        output_error(
+            e, json_output,
+            error_type="Resource Not Found",
+            helpful_message="Use 'vamscli my-resource list' to see available resources.",
+        )
         raise click.ClickException(str(e))
 
 
 def format_list_output(result: Dict[str, Any]) -> str:
-    """Format list result for CLI output."""
     items = result.get('Items', [])
     if not items:
         return "No resources found."
-    lines = []
-    for item in items:
-        lines.append(f"  {item.get('resourceId', 'N/A')} - {item.get('description', 'N/A')}")
-    return '\n'.join(lines)
+    return '\n'.join(
+        f"  {item.get('resourceId', 'N/A')} - {item.get('description', 'N/A')}"
+        for item in items
+    )
 ```
 
 ### New Test File Template
@@ -684,22 +665,17 @@ def format_list_output(result: Dict[str, Any]) -> str:
 
 import json
 import pytest
-from unittest.mock import Mock, patch
 from click.testing import CliRunner
 
 from vamscli.main import cli
-from vamscli.utils.exceptions import MyResourceNotFoundError, MyResourceAlreadyExistsError
+from vamscli.utils.exceptions import MyResourceNotFoundError
 
 
 class TestMyResourceList:
-    """Tests for my-resource list command."""
-
     def test_list_success(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('my_resource') as mocks:
             mocks['api_client'].list_my_resources.return_value = {
-                'Items': [
-                    {'resourceId': 'res-1', 'description': 'Test resource'}
-                ]
+                'Items': [{'resourceId': 'res-1', 'description': 'Test resource'}]
             }
             result = cli_runner.invoke(cli, ['my-resource', 'list'])
             assert result.exit_code == 0
@@ -707,33 +683,21 @@ class TestMyResourceList:
 
     def test_list_json_output(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('my_resource') as mocks:
-            expected = {'Items': [{'resourceId': 'res-1'}]}
-            mocks['api_client'].list_my_resources.return_value = expected
+            mocks['api_client'].list_my_resources.return_value = {'Items': [{'resourceId': 'res-1'}]}
             result = cli_runner.invoke(cli, ['my-resource', 'list', '--json-output'])
             assert result.exit_code == 0
-            data = json.loads(result.output)
-            assert data['Items'][0]['resourceId'] == 'res-1'
-
-    def test_list_empty(self, cli_runner, generic_command_mocks):
-        with generic_command_mocks('my_resource') as mocks:
-            mocks['api_client'].list_my_resources.return_value = {'Items': []}
-            result = cli_runner.invoke(cli, ['my-resource', 'list'])
-            assert result.exit_code == 0
+            assert json.loads(result.output)['Items'][0]['resourceId'] == 'res-1'
 
     def test_list_no_setup(self, cli_runner, no_setup_command_mocks):
-        with no_setup_command_mocks('my_resource') as mocks:
+        with no_setup_command_mocks('my_resource'):
             result = cli_runner.invoke(cli, ['my-resource', 'list'])
             assert result.exit_code != 0
 
 
 class TestMyResourceGet:
-    """Tests for my-resource get command."""
-
     def test_get_success(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('my_resource') as mocks:
-            mocks['api_client'].get_my_resource.return_value = {
-                'resourceId': 'res-1', 'description': 'Test'
-            }
+            mocks['api_client'].get_my_resource.return_value = {'resourceId': 'res-1'}
             result = cli_runner.invoke(cli, ['my-resource', 'get', 'res-1'])
             assert result.exit_code == 0
 
@@ -746,174 +710,38 @@ class TestMyResourceGet:
 
 ### New Exception Class Template
 
+Add in the correct tier section of `utils/exceptions.py`. Global tier for system-wide conditions; business tier for domain failures.
+
 ```python
-# In utils/exceptions.py, under the appropriate section
-
-# ---- For GlobalInfrastructureError (system-wide) ----
+# Global tier (system-wide)
 class MyNewGlobalError(GlobalInfrastructureError):
-    """Raised when <describe the global infrastructure condition>."""
-    pass
+    """Raised when <global infrastructure condition>."""
 
-# ---- For BusinessLogicError (domain-specific) ----
+# Business tier (domain-specific): base class + specific subclasses
 class MyDomainError(BusinessLogicError):
     """Base class for my-domain errors."""
-    pass
 
-class MyDomainNotFoundError(MyDomainError):
-    """Raised when a my-domain resource is not found."""
-    pass
-
-class MyDomainAlreadyExistsError(MyDomainError):
-    """Raised when trying to create a my-domain resource that already exists."""
-    pass
-
-class InvalidMyDomainDataError(MyDomainError):
-    """Raised when my-domain data is invalid."""
-    pass
+class MyDomainNotFoundError(MyDomainError): ...
+class MyDomainAlreadyExistsError(MyDomainError): ...
+class InvalidMyDomainDataError(MyDomainError): ...
 ```
 
 ---
 
 ## Anti-Patterns
 
-### Do NOT do these:
+Each item duplicates a Critical Rule; the rule is authoritative. Do NOT:
 
-1. **Direct print statements in commands**
-
-    ```python
-    # BAD - pollutes JSON output
-    print(f"Found {len(items)} items")
-    click.echo(f"Processing...")
-
-    # GOOD - respects JSON mode
-    output_status(f"Found {len(items)} items", json_output)
-    ```
-
-2. **Manual ProfileManager construction in commands**
-
-    ```python
-    # BAD - ignores --profile flag
-    pm = ProfileManager()
-    pm = ProfileManager("default")
-
-    # GOOD - reads from Click context
-    pm = get_profile_manager_from_context(ctx)
-    ```
-
-3. **Catching GlobalInfrastructureError in commands**
-
-    ```python
-    # BAD - intercepting global errors
-    try:
-        result = api_client.some_method()
-    except AuthenticationError:
-        click.echo("Auth failed")
-
-    # GOOD - only catch business logic exceptions
-    try:
-        result = api_client.some_method()
-    except AssetNotFoundError as e:
-        output_error(e, json_output)
-        raise click.ClickException(str(e))
-    ```
-
-4. **Hardcoded API endpoints**
-
-    ```python
-    # BAD
-    response = api_client._make_request('GET', '/database/db1/assets')
-
-    # GOOD
-    endpoint = API_DATABASE_ASSETS.format(databaseId='db1')
-    response = api_client._make_request('GET', endpoint)
-    ```
-
-5. **Raw requests calls**
-
-    ```python
-    # BAD - bypasses auth, retry, logging
-    response = requests.get(url, headers=headers)
-
-    # GOOD - uses APIClient
-    response = api_client._make_request('GET', endpoint)
-    ```
-
-6. **Manual mock patching in tests**
-
-    ```python
-    # BAD - fragile, misses injection points
-    with patch('vamscli.commands.database.ProfileManager') as mock_pm:
-        mock_pm.return_value.has_config.return_value = True
-        ...
-
-    # GOOD - comprehensive fixture
-    with generic_command_mocks('database') as mocks:
-        mocks['api_client'].list_databases.return_value = {...}
-        ...
-    ```
-
-7. **Using @requires_api_access on new commands**
-
-    ```python
-    # BAD - legacy decorator
-    @requires_api_access
-    def my_command(ctx):
-        ...
-
-    # GOOD - current decorator
-    @requires_setup_and_auth
-    def my_command(ctx):
-        ...
-    ```
-
-8. **Magic numbers for limits and configuration**
-
-    ```python
-    # BAD
-    if file_size > 5 * 1024 * 1024:
-        raise FileTooLargeError("Preview too large")
-
-    # GOOD
-    from ..constants import MAX_PREVIEW_FILE_SIZE
-    if file_size > MAX_PREVIEW_FILE_SIZE:
-        raise FileTooLargeError("Preview too large")
-    ```
-
-9. **Missing --json-output on commands that produce output**
-
-    ```python
-    # BAD - no JSON support
-    @domain.command()
-    @click.pass_context
-    @requires_setup_and_auth
-    def list(ctx):
-        click.echo(str(result))
-
-    # GOOD - full JSON support
-    @domain.command()
-    @click.option('--json-output', is_flag=True, help='Output raw JSON response')
-    @click.pass_context
-    @requires_setup_and_auth
-    def list(ctx, json_output):
-        output_result(result, json_output)
-    ```
-
-10. **Forgetting output_error + raise pattern**
-
-    ```python
-    # BAD - only raises, no JSON error output
-    except MyError as e:
-        raise click.ClickException(str(e))
-
-    # BAD - only outputs, doesn't raise for CLI mode
-    except MyError as e:
-        output_error(e, json_output)
-
-    # GOOD - output_error handles JSON mode (exits), raise handles CLI mode
-    except MyError as e:
-        output_error(e, json_output, error_type="My Error")
-        raise click.ClickException(str(e))
-    ```
+1. Use `print()` / bare `click.echo()` in commands with `--json-output` — pollutes JSON output. Use `output_status/result/error` (Rule 4).
+2. Construct `ProfileManager()` directly in commands — ignores `--profile`. Use `get_profile_manager_from_context(ctx)` (Rule 6).
+3. Catch `GlobalInfrastructureError` in commands — must propagate to the global handler (Rule 1).
+4. Hardcode API endpoints in commands or `api_client` — define a format-string constant in `constants.py` (Rule 7).
+5. Make raw `requests` calls — always route through `APIClient` (Rule 3).
+6. Manually patch `ProfileManager`/`APIClient` injection points in tests — use `generic_command_mocks(module)` (Testing section).
+7. Use the legacy `@requires_api_access` decorator on new commands — use `@requires_setup_and_auth` (Rule 5).
+8. Use magic numbers for size/count limits — import the named constant from `constants.py` (Rule 7, Key Constants).
+9. Ship a command that produces output without `--json-output` support — every output-producing command accepts `json_output: bool` (Rule 4).
+10. Forget the `output_error(...); raise click.ClickException(str(e))` pair — `output_error` exits in JSON mode; the raise handles CLI mode (Rule 4).
 
 ---
 
@@ -976,5 +804,7 @@ class InvalidMyDomainDataError(MyDomainError):
 | `vamscli/utils/upload_manager.py`    | Multi-part upload orchestration                        |
 | `vamscli/utils/download_manager.py`  | Parallel download orchestration                        |
 | `vamscli/utils/file_processor.py`    | File validation and processing                         |
+| `vamscli/utils/sync_engine.py`       | Sync plan computation (local/remote diff)              |
+| `vamscli/utils/vamsignore.py`        | `.vamsignore` gitignore-style pattern matching         |
 | `vamscli/utils/glb_combiner.py`      | GLB binary file combination                            |
 | `tests/conftest.py`                  | Shared fixtures: mock_logging, generic_command_mocks   |

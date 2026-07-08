@@ -19,6 +19,7 @@ import * as kms from "aws-cdk-lib/aws-kms";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
+    suppressCdkNagLambda,
     setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
 import * as Service from "../../lib/helper/service-helper";
@@ -51,12 +52,7 @@ export function buildSubscriptionService(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            SUBSCRIPTIONS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.subscriptionsStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            USER_STORAGE_TABLE_NAME: storageResources.dynamo.userStorageTable.tableName,
-        },
+        environment: {},
     });
 
     fun.addToRolePolicy(
@@ -82,6 +78,7 @@ export function buildSubscriptionService(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -110,11 +107,7 @@ export function buildCheckSubscriptionFunction(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            SUBSCRIPTIONS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.subscriptionsStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-        },
+        environment: {},
     });
     storageResources.dynamo.subscriptionsStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);
@@ -122,6 +115,7 @@ export function buildCheckSubscriptionFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     return fun;
 }
 
@@ -151,11 +145,7 @@ export function buildUnSubscribeFunction(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            SUBSCRIPTIONS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.subscriptionsStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-        },
+        environment: {},
     });
 
     fun.addToRolePolicy(
@@ -179,5 +169,6 @@ export function buildUnSubscribeFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     return fun;
 }

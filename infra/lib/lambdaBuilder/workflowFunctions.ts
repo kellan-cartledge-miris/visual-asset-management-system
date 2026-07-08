@@ -22,6 +22,7 @@ import * as s3AssetBuckets from "../helper/s3AssetBuckets";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
+    suppressCdkNagLambda,
     setupSecurityAndLoggingEnvironmentAndPermissions,
     kmsKeyPolicyStatementGenerator,
     generateUniqueNameHash,
@@ -29,6 +30,7 @@ import {
 import {
     grantReadWritePermissionsToAllAssetBuckets,
     grantReadPermissionsToAllAssetBuckets,
+    grantExternalAssetBucketKmsKeys,
 } from "../helper/security";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as cdk from "aws-cdk-lib";
@@ -57,17 +59,14 @@ export function buildWorkflowService(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
-        },
+        environment: {},
     });
     storageResources.dynamo.databaseStorageTable.grantReadData(fun);
     storageResources.dynamo.workflowStorageTable.grantReadWriteData(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
@@ -106,11 +105,7 @@ export function buildListWorkflowExecutionsFunction(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            WORKFLOW_EXECUTION_STORAGE_TABLE_NAME:
-                storageResources.dynamo.workflowExecutionsStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-        },
+        environment: {},
     });
     storageResources.dynamo.workflowExecutionsStorageTable.grantReadWriteData(fun); //Needs write permission to update execution status after a SFN fetch
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
@@ -127,6 +122,7 @@ export function buildListWorkflowExecutionsFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
 
     return fun;
 }
@@ -177,12 +173,12 @@ export function buildCreateWorkflowFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
             PROCESS_WORKFLOW_OUTPUT_LAMBDA_FUNCTION_NAME:
                 processWorkflowExecutionOutputFunction.functionName,
             VAMS_STACK_NAME: stackName,
             LAMBDA_ROLE_ARN: role.roleArn,
             LOG_GROUP_ARN: logGroupWorkflows.logGroupArn,
+            AWS_PARTITION: config.env.partition,
         },
     });
     storageResources.dynamo.workflowStorageTable.grantReadWriteData(fun);
@@ -207,6 +203,7 @@ export function buildCreateWorkflowFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(fun);
     return fun;
 }
@@ -237,14 +234,6 @@ export function buildExecuteWorkflowFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
-            WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
-            PIPELINE_STORAGE_TABLE_NAME: storageResources.dynamo.pipelineStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            WORKFLOW_EXECUTION_STORAGE_TABLE_NAME:
-                storageResources.dynamo.workflowExecutionsStorageTable.tableName,
-            S3_ASSETAUXILIARY_STORAGE_BUCKET: storageResources.s3.assetAuxiliaryBucket.bucketName,
             METADATA_SERVICE_LAMBDA_FUNCTION_NAME: metadataServiceFunction.functionName,
         },
     });
@@ -261,6 +250,7 @@ export function buildExecuteWorkflowFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(fun);
 
     fun.addToRolePolicy(
@@ -306,11 +296,6 @@ export function buildSqsAutoExecuteWorkflowFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            WORKFLOW_STORAGE_TABLE_NAME: storageResources.dynamo.workflowStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
             EXECUTE_WORKFLOW_LAMBDA_FUNCTION_NAME: executeWorkflowFunction.functionName,
         },
     });
@@ -331,6 +316,7 @@ export function buildSqsAutoExecuteWorkflowFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
@@ -363,13 +349,6 @@ export function buildProcessWorkflowExecutionOutputFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            S3_ASSET_BUCKETS_STORAGE_TABLE_NAME:
-                storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
-            DATABASE_STORAGE_TABLE_NAME: storageResources.dynamo.databaseStorageTable.tableName,
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
-            WORKFLOW_EXECUTION_STORAGE_TABLE_NAME:
-                storageResources.dynamo.workflowExecutionsStorageTable.tableName,
-            ASSET_UPLOAD_TABLE_NAME: storageResources.dynamo.assetUploadsStorageTable.tableName,
             FILE_UPLOAD_LAMBDA_FUNCTION_NAME: fileUploadLambdaFunction.functionName,
             METADATA_SERVICE_LAMBDA_FUNCTION_NAME: metadataServiceFunction.functionName,
         },
@@ -388,6 +367,7 @@ export function buildProcessWorkflowExecutionOutputFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(scope);
     return fun;
 }
@@ -453,15 +433,18 @@ export function buildWorkflowRole(
             // Add permissions for all asset buckets from the global array
             ...s3AssetBuckets.getS3AssetBucketRecords().map((record) => {
                 const prefix = record.prefix || "/";
-                // Ensure the prefix ends with a slash for proper path construction
+                // Build the object-level resource as {bucketArn}/{prefix}*. Strip any
+                // leading slash from the prefix so the '/' separator after the bucket
+                // ARN is always present (root prefix yields {bucketArn}/*).
                 const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
+                const objectPrefix = normalizedPrefix.replace(/^\/+/, "");
 
                 return new iam.PolicyStatement({
                     effect: iam.Effect.ALLOW,
                     actions: ["s3:ListBucket", "s3:PutObject", "s3:GetObject"],
                     resources: [
                         record.bucket.bucketArn,
-                        `${record.bucket.bucketArn}${normalizedPrefix}*`,
+                        `${record.bucket.bucketArn}/${objectPrefix}*`,
                     ],
                 });
             }),
@@ -523,6 +506,11 @@ export function buildWorkflowRole(
         ],
     });
 
+    // Grant access to any external asset bucket customer managed KMS keys so the
+    // workflow role can read/write objects in cross-account encrypted buckets
+    // (no-op when no external keys are configured)
+    grantExternalAssetBucketKmsKeys(role);
+
     return role;
 }
 
@@ -573,6 +561,7 @@ export function buildImportGlobalPipelineWorkflowFunction(
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;

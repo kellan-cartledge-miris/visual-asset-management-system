@@ -21,8 +21,26 @@ from botocore.exceptions import ClientError
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from common.resourceNames import get_table_name, ResourceKeys
 from customLogging.logger import safeLogger
+from common.syncTracking import (
+    SYNC_OBJECT_TYPE_ASSET_FILE,
+    SYNC_ACTION_CREATE,
+    SYNC_ACTION_DELETE,
+    SYNC_ACTION_MODIFY,
+    SYNC_STATUS_FAILED,
+    SYNC_STATUS_SUCCESS,
+    write_outbound_sync_record,
+)
 from common.validators import validate
+from common.s3MetadataKeys import (
+    ASSET_ID_METADATA_KEY,
+    DATABASE_ID_METADATA_KEY,
+    SEARCHABLE_VAMS_METADATA_KEYS,
+    is_system_metadata_key,
+)
+from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS
+from common.dynamoDbMetadataKeys import is_excluded_metadata_record
 from models.common import VAMSGeneralErrorResponse
 
 # Helper function to convert Decimal to int/float for JSON serialization
@@ -45,27 +63,68 @@ s3_client = boto3.client('s3', config=retry_config)
 sqs = boto3.client('sqs', config=retry_config)
 logger = safeLogger(service_name="GarnetFileIndexer")
 
-# Excluded patterns or prefixes from file paths to exclude
-excluded_prefixes = ['pipeline', 'pipelines', 'preview', 'previews', 'temp-upload', 'temp-uploads', 'workspace', 'workspaces']
-excluded_patterns = ['.previewFile.']
+# System type identifier for outbound sync tracking records.
+SYNC_SYSTEM_TYPE = "garnetFramework"
 
-# Load environment variables with error handling
+
+def _record_sync(object_type, action, success, database_id, asset_id=None,
+                 file_path=None, s3_version_id=None, entity_id=None):
+    """Best-effort outbound sync tracking record. Success means the entity was
+    queued onto the Garnet ingestion queue; broker delivery is asynchronous."""
+    write_outbound_sync_record(
+        object_type,
+        database_id,
+        SYNC_SYSTEM_TYPE,
+        garnet_ingestion_queue_url,
+        action,
+        SYNC_STATUS_SUCCESS if success else SYNC_STATUS_FAILED,
+        asset_id=asset_id,
+        file_path=file_path,
+        s3_version_id=s3_version_id,
+        error_message=None if success else "Failed to send entity to Garnet ingestion queue",
+        sync_system_entity_id=entity_id,
+    )
+
+
+# Excluded patterns or prefixes from file paths to exclude
+excluded_prefixes = RESERVED_S3_PREFIX_FOLDERS
+excluded_patterns = EXCLUDED_FILE_PATH_PATTERNS
+
 try:
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    asset_file_metadata_storage_table_name = os.environ["ASSET_FILE_METADATA_STORAGE_TABLE_NAME"]
-    file_attribute_storage_table_name = os.environ["FILE_ATTRIBUTE_STORAGE_TABLE_NAME"]
-    s3_asset_buckets_storage_table_name = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving asset storage table name")
+    asset_storage_table_name = None
+
+try:
+    asset_file_metadata_storage_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving asset file metadata table name")
+    asset_file_metadata_storage_table_name = None
+
+try:
+    file_attribute_storage_table_name = get_table_name(ResourceKeys.FILE_ATTRIBUTE_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving file attribute table name")
+    file_attribute_storage_table_name = None
+
+try:
+    s3_asset_buckets_storage_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+except Exception as e:
+    logger.exception("Failed resolving S3 asset buckets table name")
+    s3_asset_buckets_storage_table_name = None
+
+try:
     garnet_ingestion_queue_url = os.environ["GARNET_INGESTION_QUEUE_URL"]
     garnet_api_endpoint = os.environ["GARNET_API_ENDPOINT"]
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading Garnet environment variables")
     raise e
 
-# Initialize DynamoDB tables
-asset_storage_table = dynamodb.Table(asset_storage_table_name)
-asset_file_metadata_table = dynamodb.Table(asset_file_metadata_storage_table_name)
-file_attribute_table = dynamodb.Table(file_attribute_storage_table_name)
-s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_storage_table_name)
+asset_storage_table = dynamodb.Table(asset_storage_table_name) if asset_storage_table_name else None
+asset_file_metadata_table = dynamodb.Table(asset_file_metadata_storage_table_name) if asset_file_metadata_storage_table_name else None
+file_attribute_table = dynamodb.Table(file_attribute_storage_table_name) if file_attribute_storage_table_name else None
+s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_storage_table_name) if s3_asset_buckets_storage_table_name else None
 
 #######################
 # Utility Functions
@@ -91,12 +150,12 @@ def should_skip_file(s3_key: str) -> bool:
     if any(pattern in s3_key for pattern in excluded_patterns):
         return True
     
-    # Check if s3_key starts with any excluded prefixes
+    # Check if any path component is a reserved excluded folder.
     path_parts = s3_key.split('/')
     for part in path_parts:
-        if any(part.startswith(prefix) for prefix in excluded_prefixes):
+        if part in excluded_prefixes:
             return True
-    
+
     return False
 
 #######################
@@ -187,7 +246,7 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str) -> Tuple[
             metadata_value_type = item.get('metadataValueType', 'string')
             
             # Skip system metadata records
-            if metadata_key == 'REINDEX_METADATA_RECORD':
+            if is_excluded_metadata_record(metadata_key):
                 logger.debug(f"Skipping system metadata: {metadata_key}")
                 continue
             
@@ -237,9 +296,9 @@ def get_s3_file_info(bucket_name: str, s3_key: str) -> Tuple[Optional[Dict[str, 
             # Extract additional metadata from S3 object metadata
             s3_metadata = response.get('Metadata', {})
             for key, value in s3_metadata.items():
-                if not key.startswith('vams-') and key not in ['assetid', 'databaseid', 'uploadid']:
+                if not is_system_metadata_key(key):
                     file_info[f"s3_{key}"] = value
-                if key in ['vams-primarytype']:
+                if key in SEARCHABLE_VAMS_METADATA_KEYS:
                     file_info[f"s3_{key}"] = value
             
             return file_info, False  # Not archived
@@ -607,12 +666,15 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> bool:
             logger.info(f"Ignoring file with excluded pattern: {s3_key}")
             return True
         
+        # Excluded prefixes are reserved directory segment names, so match a whole path
+        # segment exactly - a base filename like "preview.jpg" must NOT be excluded, while
+        # a reserved folder like ".../preview/..." still is.
         path_parts = s3_key.split('/')
         for part in path_parts:
-            if any(part.startswith(prefix) for prefix in excluded_prefixes):
+            if part in excluded_prefixes:
                 logger.info(f"Ignoring excluded prefix file: {s3_key}")
                 return True
-        
+
         logger.info(f"Processing S3 event: {event_name} for {s3_key}")
         
         # Get S3 object metadata to extract asset/database IDs
@@ -620,9 +682,9 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> bool:
             s3_response = s3_client.head_object(Bucket=bucket_name, Key=s3_key)
             s3_metadata = s3_response.get('Metadata', {})
             
-            asset_id = s3_metadata.get('assetid')
-            database_id = s3_metadata.get('databaseid')
-            
+            asset_id = s3_metadata.get(ASSET_ID_METADATA_KEY)
+            database_id = s3_metadata.get(DATABASE_ID_METADATA_KEY)
+
             if not asset_id or not database_id:
                 logger.warning(f"Missing asset/database ID in S3 metadata for {s3_key}")
                 return True  # Skip, not an error
@@ -681,6 +743,10 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> bool:
             logger.info(f"Successfully sent file to Garnet from S3 event: {database_id}/{asset_id}{relative_path}")
         else:
             logger.error(f"Failed to send file to Garnet from S3 event: {database_id}/{asset_id}{relative_path}")
+        _record_sync(SYNC_OBJECT_TYPE_ASSET_FILE, SYNC_ACTION_MODIFY, success,
+                     database_id, asset_id=asset_id, file_path=relative_path,
+                     s3_version_id=(s3_file_info or {}).get("versionId"),
+                     entity_id=ngsi_ld_entity["id"])
         return success
         
     except Exception as e:
@@ -789,6 +855,10 @@ def handle_file_metadata_stream(event_record: Dict[str, Any]) -> bool:
             logger.info(f"Successfully sent file to Garnet after metadata change: {database_id}/{asset_id}{file_path}")
         else:
             logger.error(f"Failed to send file to Garnet after metadata change: {database_id}/{asset_id}{file_path}")
+        _record_sync(SYNC_OBJECT_TYPE_ASSET_FILE, SYNC_ACTION_MODIFY, success,
+                     database_id, asset_id=asset_id, file_path=file_path,
+                     s3_version_id=(s3_file_info or {}).get("versionId"),
+                     entity_id=ngsi_ld_entity["id"])
         return success
         
     except Exception as e:

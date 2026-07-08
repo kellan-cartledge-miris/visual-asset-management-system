@@ -9,6 +9,14 @@ import uuid
 from datetime import datetime, timedelta
 from boto3.dynamodb.conditions import Key
 from common.validators import validate
+from common.resourceNames import get_table_name, ResourceKeys
+from common.s3MetadataKeys import (
+    ASSET_ID_METADATA_KEY,
+    DATABASE_ID_METADATA_KEY,
+    UPLOAD_ID_METADATA_KEY,
+)
+from common.s3PathPatterns import ALLOWED_PREVIEW_FILE_EXTENSIONS
+from common.apiRoutes import API_UPLOAD_COMPLETE_EXTERNAL
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -16,28 +24,20 @@ from models.common import success, validation_error, authorization_error, intern
 from common.s3 import validateS3AssetExtensionsAndContentType
 from models.assetsV3 import AssetUploadTableModel
 
-asset_Database = None
-db_Database = None
-workflow_execution_database = None
-asset_upload_table_name = None
-s3_asset_buckets_table = None
 logger = safeLogger(service_name="ProcessWorkflowExecutionOutput")
 
 # Constants
 UPLOAD_EXPIRATION_DAYS = 1  # TTL for upload records for pipeline output
 
 try:
-    s3_asset_buckets_table = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
+    s3_asset_buckets_table = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
     metadata_service_function = os.environ['METADATA_SERVICE_LAMBDA_FUNCTION_NAME']
     file_upload_function = os.environ['FILE_UPLOAD_LAMBDA_FUNCTION_NAME']
-    asset_Database = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    asset_upload_table_name = os.environ["ASSET_UPLOAD_TABLE_NAME"]
-    db_Database = os.environ["DATABASE_STORAGE_TABLE_NAME"]
-    workflow_execution_database = os.environ["WORKFLOW_EXECUTION_STORAGE_TABLE_NAME"]
-
+    asset_Database = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    asset_upload_table_name = get_table_name(ResourceKeys.ASSET_UPLOADS_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
-    raise
+    logger.exception("Failed loading environment variables or resolving resource names")
+    raise e
 
 s3c = boto3.client('s3')
 dynamodb = boto3.resource('dynamodb')
@@ -168,7 +168,7 @@ def update_s3_object_metadata(key, asset_id, database_id, upload_id, bucket_name
         current_metadata = head_response.get('Metadata', {})
         
         # Merge existing metadata with new metadata
-        metadata = {**current_metadata, 'databaseid': database_id, 'assetid': asset_id, 'uploadid': upload_id}
+        metadata = {**current_metadata, DATABASE_ID_METADATA_KEY: database_id, ASSET_ID_METADATA_KEY: asset_id, UPLOAD_ID_METADATA_KEY: upload_id}
         
         # Use boto3 resource copy() which automatically handles multipart for large files
         s3_resource = boto3.resource('s3')
@@ -190,7 +190,7 @@ def update_s3_object_metadata(key, asset_id, database_id, upload_id, bucket_name
         logger.exception(f"Error updating S3 object metadata: {e}")
         return False
 
-def process_external_upload(upload_id, asset_id, database_id, upload_type, files, baseFileKeyPrefix, request_context):
+def process_external_upload(upload_id, asset_id, database_id, upload_type, files, baseFileKeyPrefix, request_context, workflow_id=None, execution_id=None, change_user_id=None):
     """Process an external upload using the fileIngestion Lambda"""
     try:
         # Prepare the request payload
@@ -203,26 +203,29 @@ def process_external_upload(upload_id, asset_id, database_id, upload_type, files
                     file_name = file_key[len(baseFileKeyPrefix):]
                 else:
                     file_name = file_key
-                
+
                 # Remove leading slash if present
                 if file_name.startswith('/'):
                     file_name = file_name[1:]
             else:
                 # For other upload types (like assetPreview), just use the filename
                 file_name = os.path.basename(file_key)
-            
+
             # Add to file list
             file_list.append({
                 "relativeKey": file_name,
                 "tempKey": file_key
             })
-        
+
         # Create the request body
         body = {
             "assetId": asset_id,
             "databaseId": database_id,
             "uploadType": upload_type,
-            "files": file_list
+            "files": file_list,
+            "workflowId": workflow_id,
+            "workflowExecutionId": execution_id,
+            "changeUserId": change_user_id
         }
         
         # Create the Lambda payload to simulate an API Gateway request
@@ -233,8 +236,12 @@ def process_external_upload(upload_id, asset_id, database_id, upload_type, files
             },
             "body": json.dumps(body),
         }
-        lambda_payload["requestContext"]["http"]["path"] = f"/uploads/{upload_id}/complete/external"
-        lambda_payload["requestContext"]["http"]["httpMethod"] = f"POST"
+        # Synthetic internal route -- must match API_UPLOAD_COMPLETE_EXTERNAL in
+        # common/apiRoutes.py, which the uploadFile dispatcher matches against.
+        lambda_payload["requestContext"]["http"]["path"] = API_UPLOAD_COMPLETE_EXTERNAL.path.replace(
+            "{uploadId}", upload_id
+        )
+        lambda_payload["requestContext"]["http"]["method"] = "POST"
         
         # Invoke the Lambda function
         response = _lambda_file_ingestion(lambda_payload)
@@ -550,7 +557,7 @@ def lambda_handler(event, context):
                         logger.error("Multiple files present in pipeline output preview folder. Limiting to top 1 for now.")
                     
                     # Filter for image files
-                    image_files = [f for f in files if f.endswith('.jpeg') or f.endswith('.jpg') or f.endswith('.png') or f.endswith('.gif') or f.endswith('.svg')]
+                    image_files = [f for f in files if f.endswith(ALLOWED_PREVIEW_FILE_EXTENSIONS)]
                     
                     if image_files:
                         # Only process the first image file
@@ -582,7 +589,10 @@ def lambda_handler(event, context):
                                 "assetPreview",
                                 [preview_file],
                                 previewPathKey,
-                                requestContext
+                                requestContext,
+                                workflow_id=event.get('workflowId'),
+                                execution_id=event.get('executionId'),
+                                change_user_id=event.get('executingUserName')
                             )
                             
                             if result:
@@ -640,7 +650,10 @@ def lambda_handler(event, context):
                                 "assetFile",
                                 files,
                                 filesPathKey,
-                                requestContext
+                                requestContext,
+                                workflow_id=event.get('workflowId'),
+                                execution_id=event.get('executionId'),
+                                change_user_id=event.get('executingUserName')
                             )
                             
                             if result:

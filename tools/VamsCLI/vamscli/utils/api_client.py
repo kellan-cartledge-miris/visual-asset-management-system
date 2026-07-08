@@ -2,16 +2,16 @@
 
 import json
 import requests
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 from urllib.parse import urljoin
 
 from ..constants import (
-    API_VERSION, DEFAULT_TIMEOUT, MAX_AUTH_RETRIES, MINIMUM_API_VERSION, 
+    API_VERSION, API_AMPLIFY_CONFIG, DEFAULT_TIMEOUT, MAX_AUTH_RETRIES, MINIMUM_API_VERSION,
     API_LOGIN_PROFILE, API_SECURE_CONFIG, API_ASSETS, API_DATABASE_ASSETS, API_DATABASE_ASSET,
     API_CREATE_FOLDER, API_LIST_FILES, API_FILE_INFO, API_MOVE_FILE, API_COPY_FILE,
     API_ARCHIVE_FILE, API_UNARCHIVE_FILE, API_DELETE_ASSET_PREVIEW, 
     API_DELETE_AUXILIARY_PREVIEW, API_DELETE_FILE, API_REVERT_FILE_VERSION, API_SET_PRIMARY_FILE,
-    API_ARCHIVE_ASSET, API_DELETE_ASSET, API_DOWNLOAD_ASSET, API_ASSET_EXPORT, API_DATABASE, API_DATABASE_BY_ID, API_BUCKETS,
+    API_ARCHIVE_ASSET, API_UNARCHIVE_ASSET, API_DELETE_ASSET, API_DOWNLOAD_ASSET, API_ASSET_EXPORT, API_GET_ASSET_HISTORY, API_DATABASE, API_DATABASE_BY_ID, API_BUCKETS,
     API_TAGS, API_TAG_DELETE, API_TAG_TYPES, API_TAG_TYPE_DELETE,
     API_CREATE_ASSET_VERSION, API_REVERT_ASSET_VERSION, API_GET_ASSET_VERSIONS, API_GET_ASSET_VERSION,
     API_ASSET_VERSION_BY_ID, API_ASSET_VERSION_ARCHIVE, API_ASSET_VERSION_UNARCHIVE,
@@ -29,7 +29,7 @@ from .exceptions import (
     APIUnavailableError, AssetNotFoundError, AssetAlreadyExistsError,
     DatabaseNotFoundError, DatabaseAlreadyExistsError, DatabaseDeletionError,
     BucketNotFoundError, InvalidDatabaseDataError, InvalidAssetDataError, FileUploadError,
-    AssetAlreadyArchivedError, AssetDeletionError, TagNotFoundError, TagAlreadyExistsError,
+    AssetAlreadyArchivedError, AssetNotArchivedError, AssetDeletionError, TagNotFoundError, TagAlreadyExistsError,
     TagTypeNotFoundError, TagTypeAlreadyExistsError, TagTypeInUseError, 
     InvalidTagDataError, InvalidTagTypeDataError, AssetVersionError, AssetVersionNotFoundError,
     AssetVersionOperationError, InvalidAssetVersionDataError, AssetVersionRevertError, AssetVersionArchiveError,
@@ -411,48 +411,46 @@ class APIClient:
             # Save new authentication profile
             self.profile_manager.save_auth_profile(auth_result)
             
-            # Try to call login profile API to validate and refresh user profile
+            # Try to call login profile API to validate and refresh user profile.
+            # A failure here is non-blocking: we still have valid tokens and must
+            # continue on to fetch feature switches below.
+            login_profile_error = None
             try:
                 login_profile_result = self.call_login_profile(saved_credentials['username'])
-                
-                # Try to fetch feature switches after successful re-authentication
-                try:
-                    secure_config_result = self.get_secure_config()
-                    self.profile_manager.save_feature_switches(secure_config_result)
-                    
-                    log_auth_diagnostic(
-                        auth_type="reauth_saved_creds",
-                        status="success",
-                        details={
-                            'user_id': saved_credentials['username'],
-                            'profile_name': self.profile_manager.profile_name,
-                            'secure_config': secure_config_result
-                        }
-                    )
-                except Exception as sc_error:
-                    # Feature switches fetch failure is non-blocking
-                    log_auth_diagnostic(
-                        auth_type="reauth_saved_creds",
-                        status="success_partial",
-                        details={
-                            'user_id': saved_credentials['username'],
-                            'profile_name': self.profile_manager.profile_name,
-                            'secure_config_error': str(sc_error)
-                        }
-                    )
-                    
             except Exception as lp_error:
-                # If login profile API fails, we still have valid tokens
+                login_profile_error = lp_error
+
+            # Try to fetch feature switches independently of the login-profile result
+            secure_config_error = None
+            try:
+                secure_config_result = self.get_secure_config()
+                self.profile_manager.save_feature_switches(secure_config_result)
+            except Exception as sc_error:
+                # Feature switches fetch failure is non-blocking
+                secure_config_error = sc_error
+
+            if login_profile_error is None and secure_config_error is None:
+                log_auth_diagnostic(
+                    auth_type="reauth_saved_creds",
+                    status="success",
+                    details={
+                        'user_id': saved_credentials['username'],
+                        'profile_name': self.profile_manager.profile_name,
+                        'secure_config': secure_config_result
+                    }
+                )
+            else:
                 log_auth_diagnostic(
                     auth_type="reauth_saved_creds",
                     status="success_partial",
                     details={
                         'user_id': saved_credentials['username'],
                         'profile_name': self.profile_manager.profile_name,
-                        'login_profile_error': str(lp_error)
+                        'login_profile_error': str(login_profile_error) if login_profile_error else None,
+                        'secure_config_error': str(secure_config_error) if secure_config_error else None
                     }
                 )
-            
+
             return True
             
         except Exception as e:
@@ -508,7 +506,7 @@ class APIClient:
     def get_amplify_config(self) -> Dict[str, Any]:
         """Get Amplify configuration from API."""
         try:
-            response = self.get('/api/amplify-config', include_auth=False)
+            response = self.get(API_AMPLIFY_CONFIG, include_auth=False)
             return response.json()
         except Exception as e:
             raise APIError(f"Failed to get Amplify configuration: {e}")
@@ -1213,11 +1211,13 @@ class APIClient:
         """
         try:
             endpoint = API_ARCHIVE_ASSET.format(databaseId=database_id, assetId=asset_id)
-            data = {}
+            # Always send a body — the archive endpoint requires a non-empty request
+            # body. confirmArchive signals intent; reason is optional.
+            data = {'confirmArchive': True}
             if reason:
                 data['reason'] = reason
-                
-            response = self.delete(endpoint, include_auth=True, json=data if data else None)
+
+            response = self.delete(endpoint, include_auth=True, json=data)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
@@ -1246,6 +1246,70 @@ class APIClient:
                 
         except Exception as e:
             raise APIError(f"Failed to archive asset: {e}")
+
+    def unarchive_asset(self, database_id: str, asset_id: str, reason: Optional[str] = None,
+                        unarchive_files: bool = False) -> Dict[str, Any]:
+        """
+        Unarchive an asset (restore from soft delete) using the
+        /database/{databaseId}/assets/{assetId}/unarchiveAsset PUT endpoint.
+
+        Restores the asset record to active state. Files remain archived unless
+        unarchive_files is True, which also restores the files archived by the
+        asset archive operation (files archived individually beforehand always
+        stay archived).
+
+        Args:
+            database_id: Database ID (with or without the #deleted suffix)
+            asset_id: Asset ID
+            reason: Optional reason for unarchiving the asset
+            unarchive_files: Also restore files archived by the asset archive
+
+        Returns:
+            API response data with operation result
+
+        Raises:
+            AssetNotFoundError: When asset is not found
+            AssetNotArchivedError: When the asset is not archived
+            DatabaseNotFoundError: When database doesn't exist
+            APIError: When API call fails
+        """
+        try:
+            endpoint = API_UNARCHIVE_ASSET.format(databaseId=database_id, assetId=asset_id)
+            data = {'confirmUnarchive': True}
+            if reason:
+                data['reason'] = reason
+            if unarchive_files:
+                data['unarchiveFiles'] = True
+
+            response = self.put(endpoint, data=data)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+
+                if 'not archived' in error_message.lower() or 'not in a valid archived state' in error_message.lower():
+                    raise AssetNotArchivedError(f"Asset is not archived: {error_message}")
+                else:
+                    raise InvalidAssetDataError(f"Invalid unarchive operation: {error_message}")
+
+            elif e.response.status_code == 404:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+
+                if 'database' in error_message.lower():
+                    raise DatabaseNotFoundError(f"Database '{database_id}' not found")
+                else:
+                    raise AssetNotFoundError(f"Asset '{asset_id}' not found in database '{database_id}'")
+
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Asset unarchive failed: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to unarchive asset: {e}")
 
     def delete_asset_permanent(self, database_id: str, asset_id: str, reason: Optional[str] = None, confirm: bool = False) -> Dict[str, Any]:
         """
@@ -1954,9 +2018,50 @@ class APIClient:
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
                 raise APIError(f"Failed to get asset versions: {e}")
-                
+
         except Exception as e:
             raise APIError(f"Failed to get asset versions: {e}")
+
+    def get_asset_history(self, database_id: str, asset_id: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Get lifecycle history records for an asset using the /database/{databaseId}/assets/{assetId}/assetHistory GET endpoint.
+
+        Args:
+            database_id: Database ID
+            asset_id: Asset ID
+            params: Optional pagination parameters (pageSize, startingToken)
+
+        Returns:
+            API response data with history records list
+
+        Raises:
+            AssetNotFoundError: When asset is not found
+            DatabaseNotFoundError: When database doesn't exist
+            APIError: When API call fails
+        """
+        try:
+            endpoint = API_GET_ASSET_HISTORY.format(databaseId=database_id, assetId=asset_id)
+            query_params = params or {}
+            response = self.get(endpoint, include_auth=True, params=query_params)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+
+                if 'database' in error_message.lower():
+                    raise DatabaseNotFoundError(f"Database '{database_id}' not found")
+                else:
+                    raise AssetNotFoundError(f"Asset '{asset_id}' not found in database '{database_id}'")
+
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to get asset history: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to get asset history: {e}")
 
     def get_asset_version(self, database_id: str, asset_id: str, asset_version_id: str) -> Dict[str, Any]:
         """
@@ -2303,7 +2408,7 @@ class APIClient:
             APIError: When API call fails
         """
         try:
-            endpoint = API_ASSET_LINKS_DELETE.format(relationId=asset_link_id)
+            endpoint = API_ASSET_LINKS_DELETE.format(assetLinkId=asset_link_id)
             response = self.delete(endpoint, include_auth=True)
             return response.json()
             
@@ -3164,6 +3269,67 @@ class APIClient:
                 
         except Exception as e:
             raise APIError(f"Failed to download asset file: {e}")
+
+    def download_asset_files_bulk(self, database_id: str, asset_id: str, file_keys: List[Any],
+                                  asset_version_id: Optional[str] = None,
+                                  asset_version_alias: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Generate presigned URLs for multiple asset files in one request using the
+        /database/{databaseId}/assets/{assetId}/download POST endpoint.
+
+        Args:
+            database_id: Database ID
+            asset_id: Asset ID
+            file_keys: File keys to generate URLs for (max MAX_DOWNLOAD_KEYS_PER_REQUEST).
+                Each entry is either a relative-path string (latest version) or a
+                {'key': str, 'versionId': str} dict to pin that file to a specific
+                S3 version. Per-file versionIds are mutually exclusive with
+                asset_version_id/asset_version_alias.
+            asset_version_id: Optional asset version ID to pin all files to
+            asset_version_alias: Optional asset version alias to pin all files to
+
+        Returns:
+            API response data with per-file entries under 'files'
+            ({key, downloadUrl, versionId, success, error}).
+
+        Raises:
+            AssetNotFoundError: When asset is not found
+            DatabaseNotFoundError: When database doesn't exist
+            APIError: When API call fails or asset not distributable
+        """
+        try:
+            endpoint = API_DOWNLOAD_ASSET.format(databaseId=database_id, assetId=asset_id)
+            data = {
+                "downloadType": "assetFile",
+                "keys": file_keys
+            }
+            if asset_version_id:
+                data["assetVersionId"] = asset_version_id
+            if asset_version_alias:
+                data["assetVersionIdAlias"] = asset_version_alias
+
+            response = self.post(endpoint, data=data, include_auth=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise APIError(f"Invalid download request: {error_message}")
+            elif e.response.status_code == 404:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                if 'database' in error_message.lower():
+                    raise DatabaseNotFoundError(f"Database '{database_id}' not found")
+                else:
+                    raise AssetNotFoundError(f"Asset '{asset_id}' not found in database '{database_id}'")
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Asset bulk download failed: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to generate bulk download URLs: {e}")
 
     def download_asset_preview(self, database_id: str, asset_id: str) -> Dict[str, Any]:
         """
@@ -4060,9 +4226,106 @@ class APIClient:
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
                 raise APIError(f"Failed to list constraints: {e}")
-                
+
         except Exception as e:
             raise APIError(f"Failed to list constraints: {e}")
+
+    def list_api_routes(self) -> Dict[str, Any]:
+        """
+        List all available VAMS API routes using the /auth/routes/api GET endpoint.
+
+        Returns:
+            API response data with the full API route list (routes: [{path, methods, category}])
+
+        Raises:
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_AUTH_ROUTES_API
+
+        try:
+            response = self.get(API_AUTH_ROUTES_API, include_auth=True)
+            result = response.json()
+
+            # Backend wraps response in "message" field for backward compatibility
+            if 'message' in result and isinstance(result['message'], dict):
+                return result['message']
+            return result
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to list API routes: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to list API routes: {e}")
+
+    def list_allowed_api_routes(self) -> Dict[str, Any]:
+        """
+        List the VAMS API routes and methods the current user is authorized to
+        call, using the /auth/routes/api/allowed GET endpoint.
+
+        Returns:
+            API response data with the allowed API routes (routes: [{path, methods, category}], userId)
+
+        Raises:
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_AUTH_ROUTES_API_ALLOWED
+
+        try:
+            response = self.get(API_AUTH_ROUTES_API_ALLOWED, include_auth=True)
+            result = response.json()
+
+            # Backend wraps response in "message" field for backward compatibility
+            if 'message' in result and isinstance(result['message'], dict):
+                return result['message']
+            return result
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to list allowed API routes: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to list allowed API routes: {e}")
+
+    def list_constraint_permission_objects(self) -> Dict[str, Any]:
+        """
+        List the constraint permission objects (object types with their valid
+        fields, operators, permissions, and permission types) using the
+        /auth/constraints/permissionObjects GET endpoint.
+
+        Returns:
+            API response data: {objectTypes: [{label, value, fields: [{label, value}]}],
+            operators: [{label, value}], permissions: [{label, value}], permissionTypes: [{label, value}]}
+
+        Raises:
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_AUTH_CONSTRAINT_PERMISSION_OBJECTS
+
+        try:
+            response = self.get(API_AUTH_CONSTRAINT_PERMISSION_OBJECTS, include_auth=True)
+            result = response.json()
+
+            # Backend wraps response in "message" field for backward compatibility
+            if 'message' in result and isinstance(result['message'], dict):
+                return result['message']
+            return result
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to list constraint permission objects: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to list constraint permission objects: {e}")
 
     def get_constraint(self, constraint_id: str) -> Dict[str, Any]:
         """
@@ -4611,3 +4874,162 @@ class APIClient:
 
         except Exception as e:
             raise APIError(f"Failed to delete API key: {e}")
+
+    def list_user_api_keys(self) -> Dict[str, Any]:
+        """
+        List the current user's own API keys using the /auth/user/api-keys GET endpoint.
+
+        Returns:
+            API response data with the user's API keys list
+
+        Raises:
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_AUTH_USER_API_KEYS
+
+        try:
+            response = self.get(API_AUTH_USER_API_KEYS, include_auth=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Failed to list user API keys: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to list user API keys: {e}")
+
+    def create_user_api_key(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a self-service API key for the current user using the
+        /auth/user/api-keys POST endpoint. The key is always tied to the
+        authenticated user and requires an expiration date no more than 365
+        days from creation.
+
+        Args:
+            data: API key creation data:
+                - apiKeyName: Name for the key (required)
+                - description: Description (required)
+                - expiresAt: Expiration date in ISO 8601 format (required, max 365 days out)
+
+        Returns:
+            API response data including the generated API key (shown only once)
+
+        Raises:
+            ApiKeyCreationError: When API key creation fails
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_AUTH_USER_API_KEYS
+        from .exceptions import ApiKeyCreationError
+
+        try:
+            response = self.post(API_AUTH_USER_API_KEYS, data=data, include_auth=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise ApiKeyCreationError(f"API key creation failed: {error_message}")
+
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"API key creation failed: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to create user API key: {e}")
+
+    def update_user_api_key(self, api_key_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update one of the current user's own API keys using the
+        /auth/user/api-keys/{apiKeyId} PUT endpoint. The expiration cannot be
+        cleared and cannot exceed 365 days from the key's original creation.
+
+        Args:
+            api_key_id: ID of the API key to update (must be owned by the current user)
+            data: Update data:
+                - description: Optional new description
+                - expiresAt: Optional new expiration date (within the 365-day window)
+                - isActive: Optional 'true'/'false'
+
+        Returns:
+            API response data with updated API key details
+
+        Raises:
+            ApiKeyNotFoundError: When the API key is not found or not owned by the user
+            ApiKeyUpdateError: When API key update fails
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_AUTH_USER_API_KEY
+        from .exceptions import ApiKeyNotFoundError, ApiKeyUpdateError
+
+        endpoint = API_AUTH_USER_API_KEY.format(apiKeyId=api_key_id)
+
+        try:
+            response = self.put(endpoint, data=data, include_auth=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise ApiKeyNotFoundError(f"API key '{api_key_id}' not found")
+
+            elif e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise ApiKeyUpdateError(f"API key update failed: {error_message}")
+
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"API key update failed: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to update user API key: {e}")
+
+    def delete_user_api_key(self, api_key_id: str) -> Dict[str, Any]:
+        """
+        Delete one of the current user's own API keys using the
+        /auth/user/api-keys/{apiKeyId} DELETE endpoint.
+
+        Args:
+            api_key_id: ID of the API key to delete (must be owned by the current user)
+
+        Returns:
+            API response data with deletion result
+
+        Raises:
+            ApiKeyNotFoundError: When the API key is not found or not owned by the user
+            ApiKeyDeletionError: When API key deletion fails
+            AuthenticationError: When authentication fails
+            APIError: When API call fails
+        """
+        from ..constants import API_AUTH_USER_API_KEY
+        from .exceptions import ApiKeyNotFoundError, ApiKeyDeletionError
+
+        endpoint = API_AUTH_USER_API_KEY.format(apiKeyId=api_key_id)
+
+        try:
+            response = self.delete(endpoint, include_auth=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                raise ApiKeyNotFoundError(f"API key '{api_key_id}' not found")
+
+            elif e.response.status_code == 400:
+                error_data = e.response.json() if e.response.content else {}
+                error_message = error_data.get('message', str(e))
+                raise ApiKeyDeletionError(f"API key deletion failed: {error_message}")
+
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"API key deletion failed: {e}")
+
+        except Exception as e:
+            raise APIError(f"Failed to delete user API key: {e}")

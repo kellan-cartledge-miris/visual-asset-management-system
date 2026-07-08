@@ -41,7 +41,8 @@ import {
 } from "@cloudscape-design/components";
 import { useNavigate } from "react-router";
 import DatabaseSelector from "../../components/selectors/DatabaseSelector";
-import { previewFileFormats } from "../../common/constants/fileFormats";
+import { previewFileFormats, PREVIEW_FILE_PATTERN } from "../../common/constants/fileFormats";
+import { MAX_PREVIEW_FILE_SIZE } from "../../constants/uploadLimits";
 import { Metadata } from "../../components/single/Metadata";
 import { OptionDefinition } from "@cloudscape-design/components/internal/components/option/interfaces";
 import { validateNonZeroLengthTextAsYouType, validateRequiredTagTypeSelected } from "./validations";
@@ -405,6 +406,7 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
         tags?: string;
     }>({});
     const [tagsValid, setTagsValid] = useState(true);
+    const [loadError, setLoadError] = useState<string | null>(null);
 
     useEffect(() => {
         if (!assetDetailState.tags) {
@@ -451,6 +453,17 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
         tagTypes = [];
 
         fetchtagTypes().then((res) => {
+            // The service returns an array on success, or an error message string / false
+            // on failure. Surface failures instead of silently leaving the form blank.
+            if (!Array.isArray(res)) {
+                tagTypes = [];
+                setLoadError(
+                    typeof res === "string" && res.trim() !== ""
+                        ? res
+                        : "Failed to load tag types. Please try refreshing the page."
+                );
+                return;
+            }
             tagTypes = res;
 
             if (tagTypes.length) {
@@ -477,6 +490,16 @@ const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps) => {
     return (
         <Container header={<Header variant="h2">{Synonyms.Asset} Details</Header>}>
             <SpaceBetween direction="vertical" size="l">
+                {loadError && (
+                    <Alert
+                        type="error"
+                        dismissible
+                        onDismiss={() => setLoadError(null)}
+                        header="Error loading form data"
+                    >
+                        {loadError}
+                    </Alert>
+                )}
                 <FormField
                     label={`${Synonyms.Asset} Name`}
                     errorText={showErrors && validationText.assetId}
@@ -870,9 +893,6 @@ const getFilesFromFileHandles = async (fileHandles: any[]) => {
     return fileUploadTableItems;
 };
 
-// Maximum preview file size (5MB)
-const MAX_PREVIEW_FILE_SIZE = 5 * 1024 * 1024;
-
 const AssetFileInfo = ({
     setFileUploadTableItems,
     setValid,
@@ -893,7 +913,7 @@ const AssetFileInfo = ({
     // Check for preview files in the selected files
     const hasPreviewFiles = useMemo(() => {
         if (!assetDetailState.Asset) return false;
-        return assetDetailState.Asset.some((item) => item.name.includes(".previewFile."));
+        return assetDetailState.Asset.some((item) => item.name.includes(PREVIEW_FILE_PATTERN));
     }, [assetDetailState.Asset]);
 
     // Validate files whenever Asset files or restrictions change
@@ -980,8 +1000,8 @@ const AssetFileInfo = ({
                                 </div>
                                 <div style={{ fontSize: "0.9em", marginTop: "8px" }}>
                                     <em>
-                                        Note: Preview files (containing .previewFile. in the
-                                        filename) are exempt from these restrictions.
+                                        Note: Preview files (containing {PREVIEW_FILE_PATTERN} in
+                                        the filename) are exempt from these restrictions.
                                     </em>
                                 </div>
                             </SpaceBetween>
@@ -1014,10 +1034,10 @@ const AssetFileInfo = ({
 
                 <Alert header="Preview File Information" type="info">
                     <p>
-                        Files with <strong>.previewFile.</strong> in the filename will be ingested
-                        as preview files for their associated files. For example,{" "}
-                        <code>model.gltf.previewFile.png</code> will be used as a preview for{" "}
-                        <code>model.gltf</code>.
+                        Files with <strong>{PREVIEW_FILE_PATTERN}</strong> in the filename will be
+                        ingested as preview files for their associated files. For example,{" "}
+                        <code>model.gltf{PREVIEW_FILE_PATTERN}png</code> will be used as a preview
+                        for <code>model.gltf</code>.
                     </p>
                     <p>
                         <strong>Important notes:</strong>
@@ -1310,14 +1330,15 @@ const AssetUploadReview = ({
                             header: "Type",
                             cell: (item: FileUploadTableItem) => {
                                 if (item.index === 99999) return "Preview File";
-                                if (item.name.includes(".previewFile.")) return "Preview File";
+                                if (item.name.includes(PREVIEW_FILE_PATTERN)) return "Preview File";
                                 return `${Synonyms.Asset} File`;
                             },
                             sortingField: "type",
                             sortingComparator: (a: FileUploadTableItem, b: FileUploadTableItem) => {
                                 const getType = (item: FileUploadTableItem) => {
                                     if (item.index === 99999) return "Preview File";
-                                    if (item.name.includes(".previewFile.")) return "Preview File";
+                                    if (item.name.includes(PREVIEW_FILE_PATTERN))
+                                        return "Preview File";
                                     return `${Synonyms.Asset} File`;
                                 };
                                 return getType(a).localeCompare(getType(b));
@@ -1366,12 +1387,21 @@ const UploadForm = () => {
     const [isCancelVisible, setCancelVisible] = useState(false);
     const [showErrorsForPage, setShowErrorsForPage] = useState(-1);
     const [validSteps, setValidSteps] = useState([false, false, false]);
+    const [tagsLoadError, setTagsLoadError] = useState<string | null>(null);
 
     useEffect(() => {
         tags = [];
 
         fetchTags().then((res) => {
             tags.length = 0; // Clear existing array without losing reference
+            if (!Array.isArray(res)) {
+                // Surface load failures (e.g. a 403) instead of leaving the tag list blank.
+                setTagsLoadError(
+                    typeof res === "string" && res.trim() !== ""
+                        ? res
+                        : "Failed to load tags. Please try refreshing the page."
+                );
+            }
             if (res && Array.isArray(res)) {
                 // Group tags by tag type, sorted alphabetically
                 const grouped: Record<
@@ -1495,6 +1525,16 @@ const UploadForm = () => {
 
     return (
         <Box padding={{ left: "l", right: "l" }}>
+            {tagsLoadError && (
+                <Alert
+                    type="error"
+                    dismissible
+                    onDismiss={() => setTagsLoadError(null)}
+                    header="Error loading form data"
+                >
+                    {tagsLoadError}
+                </Alert>
+            )}
             {isCancelVisible && (
                 <CancelButtonModal onDismiss={setCancelVisible} visible={isCancelVisible} />
             )}

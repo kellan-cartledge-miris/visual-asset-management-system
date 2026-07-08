@@ -2,6 +2,8 @@
 
 This document provides comprehensive guidelines for developing and extending VAMS backend APIs and CDK infrastructure. Follow these rules to ensure consistency, quality, and maintainability across all backend and infrastructure implementations.
 
+> **Steering Document Sync (bidirectional):** This document mirrors the Claude Code steering in `backend/CLAUDE.md` and `infra/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Whenever you change a rule, pattern, or convention here, make the equivalent change in the matching `CLAUDE.md` file(s) in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
+
 ## 🏗️ **Architecture Overview**
 
 ### **File Structure Standards**
@@ -46,6 +48,31 @@ infra/
 └── config/                   # Configuration files
 ```
 
+### **Handler Domains (`backend/backend/handlers/`)**
+
+One folder per domain. The current domains:
+
+-   `assets/` — Asset handlers (`assetService.py` is the GOLD STANDARD; `assetVersions.py` covers version CRUD + archive/unarchive + update; `assetHistory.py` serves the paged asset lifecycle history lookup)
+-   `auth/` — Auth handlers (authorizer, constraints, cognito, preTokenGen, apiKeyService)
+-   `authz/` — Casbin ABAC/RBAC enforcer (`CasbinEnforcer` proxy)
+-   `assetLinks/` — Asset relationship management
+-   `comments/` — Comment CRUD
+-   `config/` — System configuration
+-   `databases/` — Database CRUD
+-   `indexing/` — OpenSearch indexing (DynamoDB/S3 streams)
+-   `metadata/` — Metadata CRUD
+-   `metadataschema/` — Metadata schema management
+-   `pipelines/` — Pipeline management (Pydantic models; Lambda/SQS/EventBridge execution types)
+-   `roles/` — Role CRUD
+-   `search/` — OpenSearch search handlers
+-   `sendEmail/` — Email notification Lambda
+-   `subscription/` — Asset subscription management
+-   `tags/` — Tag CRUD
+-   `tagTypes/` — Tag type management
+-   `userRoles/` — User-role assignment
+-   `workflows/` — Step Functions workflow management (Pydantic models, builder pattern for ASL generation)
+-   `addon/` — Add-on integrations (`garnetFramework/` Garnet NGSI-LD indexer Lambdas; `physna/` Physna Sync Lambdas: physnaFileSync, physnaAssetSync, physnaViewer; physnaCommon.py holds shared client/auth helpers)
+
 ## 📋 **Development Workflow Checklist**
 
 ### **Phase 1: Pre-Implementation**
@@ -73,10 +100,11 @@ infra/
 
 -   [ ] **Create Handler File**: Add handler in `handlers/[domain]/[handler].py`
 -   [ ] **Follow Gold Standard**: Use `assetService.py` patterns for structure
+-   [ ] **Normalize the REST event**: Call `request_to_claims(event)` as the first event access (it normalizes internally). Only if the handler reads `requestContext['http']` _before_ claims, `import normalize_event` from `common.auth.apiEvent` and call it as the first statement of `lambda_handler` (see Rule 1)
 -   [ ] **Implement Error Handling**: Use comprehensive try/catch with proper exceptions
 -   [ ] **Add Authorization**: Include Casbin enforcement with object-type checking
 -   [ ] **Add Logging**: Use `safeLogger` for structured logging
--   [ ] **Add Environment Variables**: Load required environment variables with error handling
+-   [ ] **Resolve Resource Names**: Use `get_table_name(ResourceKeys.*)`, `get_bucket_name(ResourceKeys.*)` from `common.resourceNames` at module level in try/except
 -   [ ] **Add AWS Clients**: Configure AWS clients with retry configuration
 -   [ ] **Implement Business Logic**: Separate business logic from request handling
 -   [ ] **Add Response Enhancement**: Include version info and bucket details where applicable
@@ -84,8 +112,9 @@ infra/
 #### **Step 3: CDK Infrastructure**
 
 -   [ ] **Update Storage Resources**: Add new DynamoDB tables/S3 buckets in `storageBuilder-nestedStack.ts`
+-   [ ] **Register Resource Names**: Add constants to `infra/common/resourceParamKeys.ts`, `backend/backend/common/resourceNames.py`, AND `infra/deploymentDataMigration/tools/ssm_resource_lookup.py` (data-migration scripts resolve table/log-group names from these SSM parameters); register descriptor in `resourceNameRegistry`
 -   [ ] **Create Lambda Builder**: Add lambda function builder in `lambdaBuilder/[domain]Functions.ts`
--   [ ] **Configure Environment Variables**: Pass storage resources to lambda environment
+-   [ ] **Configure Environment Variables**: Add handler-specific env vars only (resource names resolved from SSM via `globalLambdaEnvironmentsAndPermissions`)
 -   [ ] **Configure Permissions**: Grant appropriate DynamoDB/S3/SNS permissions
 -   [ ] **Configure VPC**: Add VPC/subnet configuration based on config flags
 -   [ ] **Add KMS Permissions**: Include KMS key permissions for encryption
@@ -129,7 +158,7 @@ infra/
 
 #### **Step 8: Documentation Updates**
 
--   [ ] **Update VAMS_API.yaml**: Add new endpoints, schemas, and responses
+-   [ ] **Update API docs in BOTH places**: API documentation lives in two independent sources that must be kept in sync — (1) the OpenAPI spec `documentation/VAMS_API.yaml` (paths + component schemas), and (2) the Docusaurus reference page `documentation/docusaurus-site/docs/api/{domain}.md` (e.g. `api/auth.md` for `/auth/*`). Add/rename/change the endpoint in **both**; updating only one leaves the docs inconsistent.
 -   [ ] **Update Docusaurus developer docs (`documentation/docusaurus-site/docs/developer/`)**: Add architecture and usage information
 -   [ ] **Update Docusaurus permissions docs (`documentation/docusaurus-site/docs/concepts/permissions-model.md`)**: Add authorization mappings for new endpoints
 -   [ ] **Update README**: Update overview if major features added
@@ -147,6 +176,37 @@ infra/
 ## 🚨 **Mandatory Rules**
 
 ### **Rule 1: Follow Gold Standard Implementation (assetService.py)**
+
+### **Rule 2: Page S3 and DynamoDB listings to exhaustion when the full set is needed**
+
+S3 `list_object_versions` / `list_objects_v2` and DynamoDB queries cap a single
+call (`MaxKeys`, `Limit`, one page). When the result must be complete, page to
+exhaustion — a bare `list_object_versions(..., MaxKeys=N)` silently drops versions
+beyond `N`, producing wrong archive status and truncated history. For S3
+versions/objects use the shared helpers `common.s3.list_all_object_versions()` /
+`list_all_objects()` (page-size constants `S3_VERSIONS_PAGE_SIZE` /
+`S3_OBJECTS_PAGE_SIZE`; both accept an optional `max_keys` / `max_objects` cap for
+best-effort sampling). Existence-only checks (`MaxKeys=1`) are the allowed
+exception.
+
+To check whether a single key or a specific `versionId` is archived, do **not**
+list versions — use `common.s3.is_object_version_archived()`, which issues one
+`HeadObject` (405 MethodNotAllowed = delete marker, 200 = live, 404 = missing) and
+is O(1) regardless of version count. Handler-local `is_file_archived` helpers must
+delegate to it.
+
+### **Rule 3: Paginate large GET responses; never return an unbounded in-memory set**
+
+A response that can exceed the AWS Lambda synchronous response limit (6 MB) must
+page externally: accept `maxItems`/`pageSize`/`startingToken` and return
+`NextToken`, defaulting the sizes to named constants (mirror the asset-listing and
+metadata-listing handlers). Do not use DynamoDB `paginator.build_full_result()` to
+accumulate every record for a user-facing GET. When ordering or enrichment requires
+the full set first (e.g. metadata schema injection/ordering), enrich the full set,
+then offset-slice to the page. Limits that bound response size or protect Lambda
+runtime (e.g. `MAX_TOTAL_PARTS_PER_UPLOAD_REQUEST`, worker-pool caps) stay as named
+constants with a rationale comment — keep them. CLI and web clients that consume a
+paginated GET must follow `NextToken` to retrieve the complete set.
 
 ## 🔐 **Security Guidelines for Exception Handling**
 
@@ -327,6 +387,7 @@ from botocore.exceptions import ClientError
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from backend.common.resourceNames import get_table_name, get_bucket_name, ResourceKeys
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
@@ -350,12 +411,13 @@ logger = safeLogger(service_name="[ServiceName]")
 # Global variables for claims and roles
 claims_and_roles = {}
 
-# Load environment variables with error handling
+# Load resource names and environment variables
 try:
-    required_table = os.environ["REQUIRED_TABLE_NAME"]
-    required_bucket = os.environ["REQUIRED_BUCKET_NAME"]
+    # Resolve DynamoDB table names from SSM Parameter Store
+    required_table_name = get_table_name(ResourceKeys.REQUIRED_STORAGE_TABLE)
+    required_bucket = get_bucket_name(ResourceKeys.REQUIRED_BUCKET)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables and resource names")
     raise e
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
@@ -395,6 +457,35 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         logger.exception(f"Internal error: {e}")
         return internal_error(event=event)
 ```
+
+**Event normalization (`normalize_event`):** The REST API (v1) proxy event differs from the
+HTTP API v2 layout handlers are written against in **two** ways that `normalize_event(event)`
+(from `common.auth.apiEvent`) reconciles. It mutates in place, is idempotent, and no-ops on
+`lambdaCrossCall` events.
+
+1.  **`requestContext.http` block.** Handlers read
+    `event['requestContext']['http']['path']` / `['method']` / `['sourceIp']`; the REST event
+    exposes these as top-level `path` / `httpMethod` and `requestContext.identity.sourceIp`.
+    `normalize_event` injects the v2-style `requestContext.http` block.
+2.  **Null `pathParameters` / `queryStringParameters`.** The REST event sends these as an
+    explicit JSON `null` when empty (HTTP API v2 omitted them), so `event.get('pathParameters', {})`
+    / `event.get('queryStringParameters', {})` returns `None` — the default applies only when
+    the **key is absent**, not present-but-`null`. A handler that then does `params['id']`,
+    `'id' in params`, or `int(params['maxItems'])` crashes with `TypeError: 'NoneType' object
+is not subscriptable/iterable` → **500**. `normalize_event` coerces a present-but-`null`
+    value of either key to `{}`.
+
+-   **`request_to_claims(event)` calls `normalize_event(event)` internally** (first line),
+    so the Gold Standard order above — `request_to_claims(event)` as the handler's first
+    event access, _then_ read `path`/`method`/params — is already covered for both
+    normalizations and needs **no** import or explicit call.
+-   **Only when a handler must read `requestContext['http']`, `pathParameters`, or
+    `queryStringParameters` _before_ `request_to_claims`** does it
+    `from common.auth.apiEvent import normalize_event` and call `normalize_event(event)` as the
+    first statement of `lambda_handler`. Reading those before normalization raises
+    `KeyError`/`TypeError` → 500 on a real REST request — a failure invisible to CDK synth and
+    to unit tests that hand-build a v2-shaped event, so cover the REST-shaped event (including
+    `null` params) in tests.
 
 ### **Rule 2: Pydantic Models MUST Follow assetsV3.py Patterns**
 
@@ -456,12 +547,8 @@ export function build[Domain]Service(
         vpc: config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas ? vpc : undefined,
         vpcSubnets: config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas ? { subnets: subnets } : undefined,
         environment: {
-            REQUIRED_TABLE_NAME: storageResources.dynamo.requiredTable.tableName,
-            REQUIRED_BUCKET_NAME: storageResources.s3.requiredBucket.bucketName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
+            // Handler-specific env vars only (resource names resolved from SSM)
+            REQUIRED_SETTING: config.app.requiredSetting,
         },
     });
 
@@ -475,7 +562,7 @@ export function build[Domain]Service(
 
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
-    globalLambdaEnvironmentsAndPermissions(fun, config);
+    globalLambdaEnvironmentsAndPermissions(fun, config);  // Injects VAMS_RESOURCE_PARAM_PREFIX + SSM grant
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
@@ -512,10 +599,14 @@ def handle_get_request(event):
         # Check authorization
         if resource:
             resource.update({"object__type": "[objectType]"})
-            if len(claims_and_roles["tokens"]) > 0:
-                casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                if not casbin_enforcer.enforce(resource, "GET"):
-                    return authorization_error()
+            # Fail closed: an empty token list means no authenticated identity, so deny
+            # rather than fall through to returning the resource. Never gate the enforce
+            # inside `if len(tokens) > 0` without an else that denies.
+            if len(claims_and_roles["tokens"]) == 0:
+                return authorization_error()
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if not casbin_enforcer.enforce(resource, "GET"):
+                return authorization_error()
 
             # Convert to response model
             try:
@@ -533,6 +624,17 @@ def handle_get_request(event):
         logger.exception(f"Error handling GET request: {e}")
         return internal_error(event=event)
 ```
+
+#### **System User (`SYSTEM_USER`)**
+
+`SYSTEM_USER` is the **only** valid user ID for system-process actions — never use `SYSTEM`, `system`, or any other variant. It is seeded into the user and user-roles tables during CDK deployment and assigned to the `admin` role, so actions attributed to it pass Casbin authorization. Use it consistently for:
+
+-   **Lambda cross-calls**: `{'lambdaCrossCall': {'userName': 'SYSTEM_USER'}}` — and it is the default in `request_to_claims()` when a cross-call omits `userName`
+-   **Username fallbacks**: `claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]` when no user context exists
+-   **Provenance / audit values**: `createdBy`, `modifiedBy`, `changeUserId` fallbacks (`user_id or "SYSTEM_USER"`)
+-   **Identity comparisons**: e.g. `skip_schema_validation = (username == "SYSTEM_USER")` in `metadataService.py`, and the pipeline-execution bypass in `processWorkflowExecutionOutput.py`
+
+Because handlers compare against this exact string, a mismatched variant silently fails the comparison (or attributes records to a user ID that has no admin role). IAM permissions on direct Lambda invocation are the security boundary for who can inject a `lambdaCrossCall` event.
 
 ### **Rule 5: Storage Resources MUST Be Added to storageBuilder-nestedStack.ts**
 
@@ -733,6 +835,13 @@ When making API changes, update the appropriate documentation files:
 -   **Architecture changes** → Update Docusaurus developer docs with component information
 -   **Major features** → Update main `README.md`
 
+#### **Comment & Documentation Style (Match Surrounding Code):**
+
+Comments and documentation must be commensurate with the surrounding material — match the level of detail, density, and tone of the file you are editing.
+
+-   **Code comments**: Match the comment density and style already present in the file (the CDK stacks use brief single-line `//` notes and short `/** ... */` section headers). Describe **what** a piece of code is, not the history of why it was added.
+-   **No changelog/process narration in code**: Never write comments that reference "upgrades", "new in vX", "added for", migrations, or the change request that prompted the edit. Changelog narration belongs in `CHANGELOG.md` and the docs revision history, not in source comments.
+
 #### **VAMS_API.yaml Update Pattern:**
 
 ```yaml
@@ -829,8 +938,9 @@ components:
 
 When making backend or CDK changes, update the corresponding Docusaurus documentation pages at `documentation/docusaurus-site/docs/`:
 
--   **New API endpoint** → Update `api/` relevant page, `VAMS_API.yaml`, CLI command reference if applicable
+-   **New or changed API endpoint (incl. path renames)** → Update **both** the OpenAPI spec `VAMS_API.yaml` **and** the matching Docusaurus reference page under `api/` (e.g. `api/auth.md`) — two separate sources of truth that must stay in sync — plus the CLI command reference if applicable
 -   **New config option** → Update `deployment/configuration-reference.md`
+-   **New config option** → Also mirror it into the interactive **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/`) so the config generator stays in sync — see the component `README.md` for which files to touch (`schema.ts`, `defaults.ts`, `validation.ts`), then confirm the `infra/test/configBuilderSync.test.ts` drift check passes
 -   **New pipeline** → Create page in `pipelines/`, update `pipelines/overview.md`, update `overview/features.md`, update `sidebars.ts`
 -   **New DynamoDB table** → Update `architecture/aws-resources.md`, `architecture/data-model.md`
 -   **Permission changes** → Update `concepts/permissions-model.md`, `user-guide/permissions.md`
@@ -840,9 +950,10 @@ When making backend or CDK changes, update the corresponding Docusaurus document
 When making changes that affect development standards, architecture patterns, or quality requirements:
 
 1. Update **all** affected CLAUDE.md files (root, web/, backend/, infra/, tools/VamsCLI/, documentation/)
-2. Update **both** `.kiro/steering/` and `.clinerules/workflows/` versions of this file (they must stay in sync)
-3. If the change affects frontend patterns, also update WEB_DEVELOPMENT_WORKFLOW.md in both locations
-4. If the change affects documentation standards, also update DOCUMENTATION_WORKFLOW.md in both locations
+2. Update the `.kiro/steering/` version of this file
+3. If the change affects frontend patterns, also update `WEB_DEVELOPMENT_WORKFLOW.md` and `WEB_FRONTEND.md`
+4. If the change affects documentation standards, also update `DOCUMENTATION_WORKFLOW.md`
+5. Update any Claude Code skills in `.claude/commands/` that scaffold or reference the changed rule, pattern, checklist, or file path (see root `CLAUDE.md` Rule 12 for the skill-to-steering mapping) — a stale skill actively scaffolds outdated code
 
 ### **Rule 10: Tests MUST Follow Comprehensive Patterns**
 
@@ -859,12 +970,9 @@ from models.[domain] import [RequestModel], [ResponseModel]
 def mock_environment():
     """Mock environment variables"""
     with patch.dict('os.environ', {
-        'REQUIRED_TABLE_NAME': 'test-table',
+        'VAMS_RESOURCE_PARAM_PREFIX': '/test/resourceNames',
+        'REQUIRED_STORAGE_TABLE_NAME': 'test-table',  # Env var override for testing
         'REQUIRED_BUCKET_NAME': 'test-bucket',
-        'AUTH_TABLE_NAME': 'test-auth-table',
-        'CONSTRAINTS_TABLE_NAME': 'test-constraint-table',
-        'USER_ROLES_TABLE_NAME': 'test-user-roles-table',
-        'ROLES_TABLE_NAME': 'test-roles-table',
     }):
         yield
 
@@ -966,6 +1074,29 @@ class Test[Domain]Handler:
                 assert response['statusCode'] == 403
 ```
 
+### **Rule 11: Poetry-Managed Requirements Files Are Generated — Never Edit Directly**
+
+Wherever a `pyproject.toml` sits next to a `requirements*.txt`, the requirements file is a **generated artifact** exported from `poetry.lock` — never edit it by hand. Poetry-managed projects: `backend/`, `backend/lambdaLayers/base/`, `backend/lambdaLayers/authorizer/`, and `backendPipelines/multi/rapidPipelineEKS/lambdaLayer/`.
+
+To change a dependency version:
+
+1. Edit the constraint in `pyproject.toml` only if the current constraint excludes the target version (exact pins like `urllib3 = "2.6.3"` must be edited; ranges like `^2.12.1` that already admit the target need no edit).
+2. Re-resolve the lock without installing: `poetry update --lock <package> [<package>...]`
+3. Re-export the requirements file(s):
+
+    ```bash
+    # Lambda layers and pipeline layers (single requirements.txt):
+    poetry export --without-hashes -f requirements.txt -o requirements.txt
+
+    # backend/ (split main vs dev):
+    poetry export --only main --without-hashes -f requirements.txt -o requirements.txt
+    poetry export --with dev --without-hashes -f requirements.txt -o requirements-dev.txt
+    ```
+
+4. Commit `pyproject.toml`, `poetry.lock`, and the exported requirements file(s) together — a requirements file that drifts from its lock will be silently overwritten by the next export, and the layer bundling build installs from the exported file.
+
+Requirements files with **no** side-by-side `pyproject.toml` (e.g. `backendPipelines/multi/rapidPipelineEKS/lambda/requirements.txt`, `infra/lib/nestedStacks/pipelines/multi/rapidPipelineEKS/constructs/requirements.txt`) are hand-maintained pip files and are edited directly.
+
 ## 📝 **Development Templates**
 
 ### **New Backend Handler Template**
@@ -1008,12 +1139,13 @@ logger = safeLogger(service_name="[ServiceName]")
 # Global variables for claims and roles
 claims_and_roles = {}
 
-# Load environment variables with error handling
+# Load resource names and environment variables
 try:
-    required_table_name = os.environ["REQUIRED_TABLE_NAME"]
-    required_bucket_name = os.environ["REQUIRED_BUCKET_NAME"]
+    # Resolve DynamoDB table names from SSM Parameter Store
+    required_table_name = get_table_name(ResourceKeys.REQUIRED_STORAGE_TABLE)
+    required_bucket_name = get_bucket_name(ResourceKeys.REQUIRED_BUCKET)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables and resource names")
     raise e
 
 # Initialize resources
@@ -1052,17 +1184,21 @@ def create_[domain]([domain]_data, claims_and_roles):
     try:
         # Check authorization
         [domain]_data.update({"object__type": "[domain]"})
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforce([domain]_data, "POST"):
-                return authorization_error()
+        # Fail closed: an empty token list means no authenticated identity, so deny
+        # rather than fall through to the mutation. Never gate the enforce inside
+        # `if len(tokens) > 0` without an else that denies.
+        if len(claims_and_roles["tokens"]) == 0:
+            return authorization_error()
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce([domain]_data, "POST"):
+            return authorization_error()
 
         # Create the [domain]
         logger.info(f"Creating [domain] {[domain]_data['[domain]Id']}")
 
         # Add metadata
         now = datetime.utcnow().isoformat()
-        username = claims_and_roles.get("username", "system")
+        username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
         [domain]_data['dateCreated'] = now
         [domain]_data['createdBy'] = username
 
@@ -1144,10 +1280,14 @@ def handle_get_request(event):
             # Check if [domain] exists and user has permission
             if [domain]:
                 [domain].update({"object__type": "[domain]"})
-                if len(claims_and_roles["tokens"]) > 0:
-                    casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                    if not casbin_enforcer.enforce([domain], "GET"):
-                        return authorization_error()
+                # Fail closed: an empty token list means no authenticated identity, so
+                # deny rather than fall through to returning the resource. Never gate the
+                # enforce inside `if len(tokens) > 0` without an else that denies.
+                if len(claims_and_roles["tokens"]) == 0:
+                    return authorization_error()
+                casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                if not casbin_enforcer.enforce([domain], "GET"):
+                    return authorization_error()
 
                 # Convert to response model
                 try:
@@ -1452,24 +1592,18 @@ export function build[Domain]Service(
                 : undefined,
 
         environment: {
-            [DOMAIN]_STORAGE_TABLE_NAME: storageResources.dynamo.[domain]StorageTable.tableName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
+            // Handler-specific env vars only (resource names resolved from SSM)
+            PRESIGNED_URL_TIMEOUT_SECONDS: config.app.presignedUrlTimeoutSeconds.toString(),
         },
     });
 
     // Grant permissions
     storageResources.dynamo.[domain]StorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+    // SSM resource name parameters grant via globalLambdaEnvironmentsAndPermissions
 
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
-    globalLambdaEnvironmentsAndPermissions(fun, config);
+    globalLambdaEnvironmentsAndPermissions(fun, config);  // Injects VAMS_RESOURCE_PARAM_PREFIX + SSM grant
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
@@ -1501,24 +1635,18 @@ export function buildCreate[Domain]Function(
                 : undefined,
 
         environment: {
-            [DOMAIN]_STORAGE_TABLE_NAME: storageResources.dynamo.[domain]StorageTable.tableName,
-            AUTH_TABLE_NAME: storageResources.dynamo.authEntitiesStorageTable.tableName,
-            CONSTRAINTS_TABLE_NAME: storageResources.dynamo.constraintsStorageTable.tableName,
-            USER_ROLES_TABLE_NAME: storageResources.dynamo.userRolesStorageTable.tableName,
-            ROLES_TABLE_NAME: storageResources.dynamo.rolesStorageTable.tableName,
+            // Handler-specific env vars only (resource names resolved from SSM)
+            PRESIGNED_URL_TIMEOUT_SECONDS: config.app.presignedUrlTimeoutSeconds.toString(),
         },
     });
 
     // Grant permissions
     storageResources.dynamo.[domain]StorageTable.grantReadWriteData(fun);
-    storageResources.dynamo.authEntitiesStorageTable.grantReadData(fun);
-    storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
-    storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
-    storageResources.dynamo.rolesStorageTable.grantReadData(fun);
+    // SSM resource name parameters grant via globalLambdaEnvironmentsAndPermissions
 
     // Apply security helpers
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
-    globalLambdaEnvironmentsAndPermissions(fun, config);
+    globalLambdaEnvironmentsAndPermissions(fun, config);  // Injects VAMS_RESOURCE_PARAM_PREFIX + SSM grant
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
@@ -1543,11 +1671,8 @@ from models.[domain] import [RequestModel], [ResponseModel]
 def mock_environment():
     """Mock environment variables"""
     with patch.dict('os.environ', {
-        '[DOMAIN]_STORAGE_TABLE_NAME': 'test-[domain]-table',
-        'AUTH_TABLE_NAME': 'test-auth-table',
-        'CONSTRAINTS_TABLE_NAME': 'test-constraint-table',
-        'USER_ROLES_TABLE_NAME': 'test-user-roles-table',
-        'ROLES_TABLE_NAME': 'test-roles-table',
+        'VAMS_RESOURCE_PARAM_PREFIX': '/test/resourceNames',
+        '[DOMAIN]_STORAGE_TABLE_NAME': 'test-[domain]-table',  # Env var override for testing
     }):
         yield
 
@@ -1901,17 +2026,37 @@ def handle_get_request(event):
 "Missing required field: {field_name}"
 ```
 
-### **Environment Variable Loading Pattern**
+### **Resource Name and Environment Variable Loading Pattern**
 
 ```python
-# Standard environment variable loading with error handling
+# Standard resource name resolution with environment variable loading
+from backend.common.resourceNames import get_table_name, get_bucket_name, ResourceKeys
+
 try:
-    required_table_name = os.environ["REQUIRED_TABLE_NAME"]
+    # Resolve DynamoDB table names from SSM Parameter Store (with env var overrides)
+    required_table_name = get_table_name(ResourceKeys.REQUIRED_STORAGE_TABLE)
+    auxiliary_bucket = get_bucket_name(ResourceKeys.ASSET_AUXILIARY_BUCKET)
+
+    # Optional resource names -- catch KeyError if not registered
+    try:
+        optional_table_name = get_table_name(ResourceKeys.OPTIONAL_TABLE)
+    except KeyError:
+        optional_table_name = None
+
+    # Handler-specific env vars (direct from os.environ)
     optional_setting = os.environ.get("OPTIONAL_SETTING", "default_value")
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables and resource names")
     raise e
+
+# Initialize resources using resolved names
+required_table = dynamodb.Table(required_table_name)
+optional_table = dynamodb.Table(optional_table_name) if optional_table_name else None
 ```
+
+**Resolution order:** `get_table_name(ResourceKeys.*)` first checks for legacy environment variable overrides (e.g., `REQUIRED_STORAGE_TABLE_NAME`), then consults a 60-minute in-module cache, then fetches all resource name parameters from SSM via one paginated GetParametersByPath call. This allows pytest tests and local utilities to inject names directly as environment variables while deployed handlers use SSM.
+
+**Pipeline handlers** in `backendPipelines/` continue to use legacy environment variables and do not call `get_table_name()`.
 
 ### **AWS Client Configuration Pattern**
 
@@ -1932,13 +2077,19 @@ sns = boto3.client('sns', config=retry_config)
 ### **Authorization Check Pattern**
 
 ```python
-# Standard authorization check pattern
+# Standard authorization check pattern (single resource)
 if resource:
     resource.update({"object__type": "[objectType]"})
-    if len(claims_and_roles["tokens"]) > 0:
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not casbin_enforcer.enforce(resource, "[ACTION]"):
-            return authorization_error()
+    # Fail closed: an empty token list means no authenticated identity, so deny rather
+    # than fall through. Never gate the enforce inside `if len(tokens) > 0` without an
+    # else that denies — that silently skips authorization when tokens are empty.
+    # (List-filtering handlers are the exception: they append only when enforce passes,
+    # so an empty token list yields an empty result set, which is already fail-closed.)
+    if len(claims_and_roles["tokens"]) == 0:
+        return authorization_error()
+    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+    if not casbin_enforcer.enforce(resource, "[ACTION]"):
+        return authorization_error()
 ```
 
 ### **Response Model Conversion Pattern**
@@ -2130,7 +2281,7 @@ for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
 -   [ ] Implements Casbin authorization enforcement
 -   [ ] Uses Pydantic models for request/response validation
 -   [ ] Configures AWS clients with retry configuration
--   [ ] Loads environment variables with error handling
+-   [ ] Resolves resource names via `get_table_name(ResourceKeys.*)` in module-level `try/except`
 -   [ ] Separates business logic from request handling
 -   [ ] Includes proper logging with structured messages
 
@@ -2252,7 +2403,54 @@ logger = safeLogger(service_name="[Domain]Models")
 # handlers/[domain]/[handler].py
 """[Domain] service handler for VAMS API."""
 
-# Follow complete assetService.py template above
+import os
+import boto3
+import json
+from datetime import datetime
+from boto3.dynamodb.conditions import Key
+from botocore.exceptions import ClientError
+from botocore.config import Config
+from aws_lambda_powertools.utilities.typing import LambdaContext
+from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from backend.common.resourceNames import get_table_name, get_bucket_name, ResourceKeys
+from common.constants import STANDARD_JSON_RESPONSE
+from common.validators import validate
+from handlers.authz import CasbinEnforcer
+from handlers.auth import request_to_claims
+from customLogging.logger import safeLogger
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+from models.[domain] import [RequestModel], [ResponseModel]
+
+# Configure AWS clients with retry configuration
+retry_config = Config(
+    retries={
+        'max_attempts': 5,
+        'mode': 'adaptive'
+    }
+)
+
+dynamodb = boto3.resource('dynamodb', config=retry_config)
+s3 = boto3.client('s3', config=retry_config)
+logger = safeLogger(service_name="[ServiceName]")
+
+# Global variables for claims and roles
+claims_and_roles = {}
+
+# Load resource names and environment variables
+try:
+    # Resolve DynamoDB table names from SSM Parameter Store
+    required_table_name = get_table_name(ResourceKeys.REQUIRED_STORAGE_TABLE)
+    required_bucket = get_bucket_name(ResourceKeys.REQUIRED_BUCKET)
+    # Handler-specific env vars (direct from os.environ)
+    presigned_url_timeout = os.environ.get("PRESIGNED_URL_TIMEOUT_SECONDS", "3600")
+except Exception as e:
+    logger.exception("Failed loading environment variables and resource names")
+    raise e
+
+# Initialize resources
+required_table = dynamodb.Table(required_table_name)
+
+# Follow complete assetService.py patterns
 ```
 
 #### **Step 3: Add Storage Resources**

@@ -15,6 +15,12 @@ from botocore.exceptions import ClientError
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from customLogging.logger import safeLogger
+from common.resourceNames import get_table_name, ResourceKeys
+from common.s3MetadataKeys import (
+    ASSET_ID_METADATA_KEY,
+    DATABASE_ID_METADATA_KEY,
+)
+from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS
 from models.common import APIGatewayProxyResponseV2, internal_error, success
 
 # Configure AWS clients with retry configuration
@@ -30,24 +36,22 @@ lambda_client = boto3.client('lambda', config=retry_config)
 logger = safeLogger(service_name="SqsAutoExecuteWorkflow")
 
 # Excluded patterns or prefixes from file paths to exclude
-excluded_prefixes = ['pipeline', 'pipelines', 'preview', 'previews', 'temp-upload', 'temp-uploads', 'workspace', 'workspaces']
-excluded_patterns = ['.previewFile.']
+excluded_prefixes = RESERVED_S3_PREFIX_FOLDERS
+excluded_patterns = EXCLUDED_FILE_PATH_PATTERNS
 
 # Load environment variables with error handling
 try:
-    workflow_storage_table_name = os.environ["WORKFLOW_STORAGE_TABLE_NAME"]
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    database_storage_table_name = os.environ["DATABASE_STORAGE_TABLE_NAME"]
-    s3_asset_buckets_table_name = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
+    workflow_storage_table_name = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE)
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    s3_asset_buckets_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
     execute_workflow_lambda_name = os.environ["EXECUTE_WORKFLOW_LAMBDA_FUNCTION_NAME"]
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
 # Initialize DynamoDB tables
 workflow_storage_table = dynamodb.Table(workflow_storage_table_name)
 asset_storage_table = dynamodb.Table(asset_storage_table_name)
-database_storage_table = dynamodb.Table(database_storage_table_name)
 s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_table_name)
 
 
@@ -74,10 +78,10 @@ def should_skip_file(s3_key: str, file_path: str) -> bool:
         logger.info(f"Skipping file with excluded pattern: {s3_key}")
         return True
     
-    # Check if s3_key starts with any excluded prefixes
+    # Check if any path component is a reserved excluded folder.
     path_parts = s3_key.split('/')
     for part in path_parts:
-        if any(part.startswith(prefix) for prefix in excluded_prefixes):
+        if part in excluded_prefixes:
             logger.info(f"Skipping file with excluded prefix: {s3_key}")
             return True
     
@@ -379,9 +383,9 @@ def handle_s3_notification(event_record: Dict[str, Any], asset_bucket_name: Opti
             s3_response = s3_client.head_object(Bucket=bucket_name, Key=s3_key)
             s3_metadata = s3_response.get('Metadata', {})
             
-            asset_id = s3_metadata.get('assetid')
-            database_id = s3_metadata.get('databaseid')
-            
+            asset_id = s3_metadata.get(ASSET_ID_METADATA_KEY)
+            database_id = s3_metadata.get(DATABASE_ID_METADATA_KEY)
+
             if not asset_id or not database_id:
                 logger.warning(f"Missing asset/database ID in S3 metadata for {s3_key}")
                 return {'skipped': 'missing metadata'}

@@ -35,6 +35,7 @@ import * as Config from "../../../../../../../config/config";
 import {
     generateUniqueNameHash,
     kmsKeyPolicyStatementGenerator,
+    grantExternalAssetBucketKmsKeys,
 } from "../../../../../../helper/security";
 import * as cr from "aws-cdk-lib/custom-resources";
 import { DockerImageAsset, Platform } from "aws-cdk-lib/aws-ecr-assets";
@@ -103,16 +104,16 @@ export class CosmosPredictConstruct extends Construct {
         const cosmosEfs = props.efsFileSystem;
         const nfsSecurityGroup = props.efsSecurityGroup;
 
-        /**
-         * Docker Container Image from ECR (v1)
-         */
-        const containerImage = new DockerImageAsset(this, "CosmosContainerImage", {
-            directory: path.join(
-                __dirname,
-                "../../../../../../../../backendPipelines/genAi/nvidia/cosmos/predict/containerv1"
-            ),
-            platform: Platform.LINUX_AMD64,
-        });
+        // /**
+        //  * Docker Container Image from ECR (v1)
+        //  */
+        // const containerImage = new DockerImageAsset(this, "CosmosContainerImage", {
+        //     directory: path.join(
+        //         __dirname,
+        //         "../../../../../../../../backendPipelines/genAi/nvidia/cosmos/predict/containerv1"
+        //     ),
+        //     platform: Platform.LINUX_AMD64,
+        // });
 
         /**
          * Docker Container Image from ECR (v2.5)
@@ -144,7 +145,11 @@ export class CosmosPredictConstruct extends Construct {
             statements: [
                 ...s3AssetBuckets.getS3AssetBucketRecords().map((record) => {
                     const prefix = record.prefix || "/";
+                    // Build the object-level resource as {bucketArn}/{prefix}*. Strip any
+                    // leading slash from the prefix so the '/' separator after the bucket
+                    // ARN is always present (root prefix yields {bucketArn}/*).
                     const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
+                    const objectPrefix = normalizedPrefix.replace(/^\/+/, "");
                     return new iam.PolicyStatement({
                         effect: iam.Effect.ALLOW,
                         actions: [
@@ -156,7 +161,7 @@ export class CosmosPredictConstruct extends Construct {
                         ],
                         resources: [
                             record.bucket.bucketArn,
-                            `${record.bucket.bucketArn}${normalizedPrefix}*`,
+                            `${record.bucket.bucketArn}/${objectPrefix}*`,
                         ],
                     });
                 }),
@@ -239,6 +244,11 @@ export class CosmosPredictConstruct extends Construct {
                 iam.ManagedPolicy.fromAwsManagedPolicyName("AWSXrayWriteOnlyAccess"),
             ],
         });
+
+        // Grant access to any external asset bucket customer managed KMS keys so the
+        // container can read/write objects in cross-account encrypted buckets
+        // (no-op when no external keys are configured)
+        grantExternalAssetBucketKmsKeys(containerJobRole);
 
         /**
          * Batch Compute Environment
@@ -510,19 +520,22 @@ echo "${cosmosEfs.fileSystemId}:/ /mnt/efs/cosmos-models efs _netdev,tls 0 0" >>
             });
         }
 
-        /**
-         * Container image reference for job definitions (v1)
-         */
-        const tempTaskDef = new ecs.TaskDefinition(this, "TempTaskDef", {
-            compatibility: ecs.Compatibility.EC2,
-        });
-        const container = tempTaskDef.addContainer("Container", {
-            image: ecs.ContainerImage.fromDockerImageAsset(containerImage),
-            memoryLimitMiB: 1024,
-            logging: ecs.LogDrivers.awsLogs({
-                streamPrefix: "batch-temp",
-            }),
-        });
+        // v1 TempTaskDef / Container removed — v1 is disabled, and the ref
+        // to `containerImage` here was the last thing forcing CDK to build
+        // the v1 DockerImageAsset locally.
+        // /**
+        //  * Container image reference for job definitions (v1)
+        //  */
+        // const tempTaskDef = new ecs.TaskDefinition(this, "TempTaskDef", {
+        //     compatibility: ecs.Compatibility.EC2,
+        // });
+        // const container = tempTaskDef.addContainer("Container", {
+        //     image: ecs.ContainerImage.fromDockerImageAsset(containerImage),
+        //     memoryLimitMiB: 1024,
+        //     logging: ecs.LogDrivers.awsLogs({
+        //         streamPrefix: "batch-temp",
+        //     }),
+        // });
 
         /**
          * Container image reference for job definitions (v2.5)

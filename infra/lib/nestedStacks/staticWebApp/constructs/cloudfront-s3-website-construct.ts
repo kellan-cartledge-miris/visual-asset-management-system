@@ -99,8 +99,13 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
                         protection: true,
                         modeBlock: true,
                     },
+                    // SAMEORIGIN (not DENY) so VAMS can frame its own same-origin
+                    // pages, which iframe-embedded viewers require (e.g. the SuperSplat
+                    // editor served under /viewers/supersplat/). External sites still
+                    // cannot frame VAMS. Keep in sync with the CSP "frame-ancestors 'self'"
+                    // directive generated in security.ts.
                     frameOptions: {
-                        frameOption: cloudfront.HeadersFrameOption.DENY,
+                        frameOption: cloudfront.HeadersFrameOption.SAMEORIGIN,
                         override: true,
                     },
                     contentTypeOptions: {
@@ -286,7 +291,8 @@ export class CloudFrontS3WebSiteConstruct extends Construct {
 export function addBehaviorToCloudFrontDistribution(
     scope: Construct,
     cloudFrontDistribution: cloudfront.Distribution,
-    apiUrl: string
+    apiUrl: string,
+    apiStageName: string
 ) {
     // Add general behavior for all other /api/* routes (excluding /api/amplify-config)
     cloudFrontDistribution.addBehavior(
@@ -294,6 +300,7 @@ export function addBehaviorToCloudFrontDistribution(
         new cloudfrontOrigins.HttpOrigin(apiUrl, {
             originSslProtocols: [cloudfront.OriginSslPolicy.TLS_V1_2],
             protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
+            originPath: `/${apiStageName}`,
         }),
         {
             cachePolicy: new cloudfront.CachePolicy(scope, "ApiCachePolicy", {

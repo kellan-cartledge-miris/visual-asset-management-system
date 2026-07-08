@@ -21,6 +21,8 @@ import * as Config from "../../../../config/config";
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
+    suppressCdkNagLambda,
+    setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../../../helper/security";
 
 export interface SamlSettings {
@@ -63,21 +65,16 @@ export class CognitoWebNativeConstructStack extends Construct {
             layers: [props.lambdaCommonBaseLayer],
             timeout: Duration.minutes(2),
             memorySize: Config.LAMBDA_MEMORY_SIZE,
-            environment: {
-                AUTH_TABLE_NAME: props.storageResources.dynamo.authEntitiesStorageTable.tableName,
-                CONSTRAINTS_TABLE_NAME:
-                    props.storageResources.dynamo.constraintsStorageTable.tableName,
-                USER_ROLES_TABLE_NAME:
-                    props.storageResources.dynamo.userRolesStorageTable.tableName,
-                ROLES_TABLE_NAME: props.storageResources.dynamo.rolesStorageTable.tableName,
-            },
+            environment: {},
         });
         props.storageResources.dynamo.authEntitiesStorageTable.grantReadWriteData(fun);
         props.storageResources.dynamo.constraintsStorageTable.grantReadData(fun);
         props.storageResources.dynamo.userRolesStorageTable.grantReadData(fun);
         props.storageResources.dynamo.rolesStorageTable.grantReadData(fun);
         kmsKeyLambdaPermissionAddToResourcePolicy(fun, props.storageResources.encryption.kmsKey);
+        setupSecurityAndLoggingEnvironmentAndPermissions(fun, props.storageResources);
         globalLambdaEnvironmentsAndPermissions(fun, props.config);
+        suppressCdkNagLambda(fun);
 
         const messageVerification =
             "Hello, Thank you for registering with your instance of Visual Asset Management System! Your verification code is: {####}";
@@ -121,7 +118,7 @@ export class CognitoWebNativeConstructStack extends Construct {
         const cfnUserPool = userPool.node.defaultChild as cognito.CfnUserPool;
 
         //(Non-GovCloud) Add pretokengen lambda trigger (V2) - this will generate claims for both Access and ID token claims
-        //(GovCloud) Add pretokengen lambda trigger (V1) - this will generate claims for only Access token claims (ID token will not have claims and can't be used)
+        //(GovCloud) Add pretokengen lambda trigger (V1) - this will generate claims for only ID token claims (access token will not have claims and can't be used)
         cfnUserPool.lambdaConfig = {
             preTokenGenerationConfig: {
                 lambdaArn: fun.functionArn,
@@ -191,7 +188,7 @@ export class CognitoWebNativeConstructStack extends Construct {
             cognitoIdentityProviders: [
                 {
                     clientId: userPoolWebClient.userPoolClientId,
-                    providerName: userPool.userPoolProviderName,
+                    providerName: `${Service("COGNITO_IDP").Endpoint}/${userPool.userPoolId}`,
                 },
             ],
             allowClassicFlow: true,
@@ -262,9 +259,9 @@ export class CognitoWebNativeConstructStack extends Construct {
 
         if (props.config.app.authProvider.useCognito.useSaml && props.samlSettings) {
             const samlIdpResponseUrl = new cdk.CfnOutput(this, "AuthCognito_SAML_IdpResponseUrl", {
-                value: `https://${props.samlSettings!.cognitoDomainPrefix}.auth.${
-                    props.config.env.region
-                }.amazoncognito.com/saml2/idpresponse`,
+                value: `https://${props.samlSettings!.cognitoDomainPrefix}.${
+                    Service("COGNITO_HOSTED_UI").Endpoint
+                }/saml2/idpresponse`,
                 description: "SAML IdP Response URL",
             });
         }
