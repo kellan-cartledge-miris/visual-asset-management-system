@@ -29,7 +29,6 @@ import BellIcon from "../../resources/img/bellIcon.svg";
 import { useStatusMessage } from "../common/StatusMessage";
 import ErrorBoundary from "../common/ErrorBoundary";
 import Synonyms from "../../synonyms";
-import StreamWithMirisButton from "./StreamWithMirisButton";
 
 interface AssetDetailsPaneProps {
     asset: any;
@@ -226,21 +225,6 @@ export const AssetDetailsPane: React.FC<AssetDetailsPaneProps> = ({
                                     >
                                         {subscribed ? "Subscribed" : "Subscribe"}
                                     </Button>
-                                )}
-                                {asset && (
-                                    <StreamWithMirisButton
-                                        databaseId={databaseId}
-                                        assetId={asset.assetId}
-                                        files={[
-                                            {
-                                                name:
-                                                    asset.assetLocation?.Key ||
-                                                    asset.key ||
-                                                    asset.assetType ||
-                                                    "",
-                                            },
-                                        ]}
-                                    />
                                 )}
                             </SpaceBetween>
                         }

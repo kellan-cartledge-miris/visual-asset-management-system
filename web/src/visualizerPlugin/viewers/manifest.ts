@@ -32,6 +32,8 @@ export const VIEWER_COMPONENTS = {
         "VeerumViewerPlugin/VeerumViewerComponent",
     "./viewers/MirisStreamViewerPlugin/MirisStreamViewerComponent":
         "MirisStreamViewerPlugin/MirisStreamViewerComponent",
+    "./viewers/MirisUploadViewerPlugin/MirisUploadViewerComponent":
+        "MirisUploadViewerPlugin/MirisUploadViewerComponent",
     "./viewers/NeedleUSDViewerPlugin/NeedleUSDViewerComponent":
         "NeedleUSDViewerPlugin/NeedleUSDViewerComponent",
     "./viewers/ThreeJSViewerPlugin/ThreeJSViewerComponent":

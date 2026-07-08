@@ -343,6 +343,21 @@
             "enabled": true
         },
         {
+            "id": "miris-upload-viewer",
+            "name": "Stream with Miris",
+            "description": "Upload this USD asset to Miris Spatial Streaming. Shown for USD source files when the Miris upload pipeline is enabled and the asset has not yet been uploaded.",
+            "componentPath": "./viewers/MirisUploadViewerPlugin/MirisUploadViewerComponent",
+            "supportedExtensions": [".usd", ".usda", ".usdc", ".usdz"],
+            "supportsMultiFile": false,
+            "canFullscreen": false,
+            "priority": 0,
+            "dependencies": [],
+            "loadStrategy": "lazy",
+            "category": "3d",
+            "featuresEnabledRestriction": ["MIRIS_UPLOAD"],
+            "enabled": true
+        },
+        {
             "id": "preview-viewer",
             "name": "Preview Viewer",
             "description": "View generated preview images",

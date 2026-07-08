@@ -128,6 +128,21 @@ def main():
             sys.exit(4)
         root_rel = trigger_key.split(f"{asset_id}/", 1)[1]
         root_local = os.path.join(asset_dir, root_rel)
+        # Guard: the root USD must actually be on disk after the folder download.
+        # UsdUtils.ComputeAllDependencies returns empty (no error) for a missing
+        # path, which would otherwise be misread as "no external dependencies" and
+        # crash later on getsize(). A missing root here means the trigger key didn't
+        # match any downloaded S3 object (e.g. a key-encoding mismatch) or the asset
+        # has no files — fail clearly and actionably instead.
+        if not os.path.isfile(root_local):
+            _log(
+                "root_usd_not_found",
+                expected_local=root_local,
+                root_rel=root_rel,
+                trigger_key=trigger_key,
+                downloaded_bytes=total,
+            )
+            sys.exit(6)
         layers, assets, unresolved = compute_dependencies(root_local)
         if unresolved:
             _log("unresolved_references", count=len(unresolved), paths=unresolved[:20])

@@ -12,8 +12,8 @@ The VAMS web interface is a React 17 application built with Vite and the AWS Clo
 
 VAMS includes 17 built-in viewer plugins across five categories (3D, Media, Document, Data, and Preview). The plugin-based architecture supports lazy loading, per-plugin dependency management, automatic viewer selection based on file extension, and fullscreen mode. Two additional licensed viewers (VNTANA and VEERUM) provide commercial-grade rendering for GLB models and point clouds.
 
--   **Miris Spatial Streaming** — Stream 3D assets at progressive levels of detail via the Miris platform (`.mrx` manifest files trigger the viewer).
--   **Miris Auto-Upload Pipeline** — Auto-uploads supported source assets to the Miris Spatial Streaming platform and emits a `.mrx` manifest, so the assets become streamable in the VAMS viewer without manual steps.
+-   **Miris Spatial Streaming** — Stream 3D assets at progressive levels of detail via the Miris platform. Stream by selecting either a `.mrx` manifest or, with the upload viewer enabled, the original USD source file.
+-   **Miris Auto-Upload Pipeline** — Uploads supported USD source assets to the Miris Spatial Streaming platform and emits a `.mrx` manifest, so assets become streamable in the VAMS viewer. Runs automatically on upload for enabled databases, or on demand via the **Stream with Miris** action in the viewer.
 
 For the complete list of supported file viewers and extensions, see [File Viewers](../concepts/viewers.md).
 

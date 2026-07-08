@@ -184,6 +184,7 @@ const sidebars: SidebarsConfig = {
                         "developer/external-integrations/overview",
                         "developer/external-integrations/isaacsim-connector",
                         "developer/external-integrations/arcgispro-connector",
+                        "developer/external-integrations/miris-spatial-streaming",
                     ],
                 },
                 {

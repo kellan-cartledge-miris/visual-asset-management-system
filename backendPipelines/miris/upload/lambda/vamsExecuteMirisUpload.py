@@ -69,6 +69,14 @@ def lambda_handler(event, context):
             }
         data = json.loads(body) if isinstance(body, str) else body
 
+        # Prefer per-execution parameters supplied at runtime (e.g. the manual-trigger
+        # flag from the "Stream with Miris" button) over the static per-pipeline value.
+        # The workflow ASL passes the runtime value as `executionInputParameters`; the
+        # static pipeline-level value arrives as `inputParameters`.
+        effective_input_parameters = (
+            data.get("executionInputParameters") or data.get("inputParameters", "")
+        )
+
         if "TaskToken" not in data:
             raise Exception(
                 "VAMS Workflow TaskToken not found in pipeline input. "
@@ -85,7 +93,7 @@ def lambda_handler(event, context):
                         "assetId": data.get("assetId", ""),
                         "inputS3AssetFilePath": data["inputS3AssetFilePath"],
                         "sfnExternalTaskToken": data["TaskToken"],
-                        "inputParameters": data.get("inputParameters", ""),
+                        "inputParameters": effective_input_parameters,
                     }
                 )
             }
@@ -106,7 +114,7 @@ def lambda_handler(event, context):
             data["outputS3AssetMetadataPath"],
             data["inputOutputS3AssetAuxiliaryFilesPath"],
             data.get("inputMetadata", ""),
-            data.get("inputParameters", ""),
+            effective_input_parameters,
             data["TaskToken"],
             data.get("executingUserName", ""),
             data.get("executingRequestContext", ""),

@@ -352,3 +352,5 @@ Combined.pem
 #Claude
 .claude/settings.local.*
 docs/superpowers/*
+# Miris REST API scratch dumps (local only, never commit)
+miris_assets_*.json
