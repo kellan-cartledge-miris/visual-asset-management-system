@@ -228,4 +228,35 @@ describe("MirisStreamViewerComponent", () => {
         );
         expect(mockSceneCtor).not.toHaveBeenCalled();
     });
+
+    it("attempts the stream when the status check is indeterminate", async () => {
+        // The status probe is advisory. When the backend cannot establish state it
+        // reports `indeterminate` and we must still attempt to stream rather than
+        // blocking or showing an overlay we cannot substantiate.
+        mockGetMirisAssetStatus.mockResolvedValue([
+            true,
+            { state: "unknown", isStreamable: false, indeterminate: true },
+        ]);
+        render(<MirisStreamViewerComponent {...baseProps} />);
+        await waitFor(() => expect(mockSceneCtor).toHaveBeenCalledTimes(1));
+        expect(mockStreamCtor).toHaveBeenCalledWith({ uuid: VALID_UUID });
+        expect(screen.queryByText(/preparing this asset/i)).not.toBeInTheDocument();
+    });
+
+    it("does not block streaming even if indeterminate arrives with an errorMessage", async () => {
+        // Defensive: `indeterminate` must win over `errorMessage` so a status-check
+        // problem can never take down streaming.
+        mockGetMirisAssetStatus.mockResolvedValue([
+            true,
+            {
+                state: "unknown",
+                isStreamable: false,
+                indeterminate: true,
+                errorMessage: "should not block",
+            },
+        ]);
+        render(<MirisStreamViewerComponent {...baseProps} />);
+        await waitFor(() => expect(mockSceneCtor).toHaveBeenCalledTimes(1));
+        expect(screen.queryByText(/should not block/i)).not.toBeInTheDocument();
+    });
 });

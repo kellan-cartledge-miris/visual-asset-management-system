@@ -158,9 +158,12 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                 if (cancelled) return;
                 setManifest(parsed.manifest);
 
-                // 2b. Ask the backend whether the Miris asset is streamable yet. The
-                // endpoint is only deployed when the upload pipeline is enabled; if
-                // the call fails we proceed optimistically (matches Phase 1 behavior).
+                // 2b. Ask the backend whether the Miris asset is streamable yet. This
+                // is ADVISORY ONLY — it drives the "preparing" overlay and must never
+                // prevent a stream attempt. The endpoint is only deployed when the
+                // upload pipeline is enabled, and it reports `indeterminate` whenever
+                // it cannot establish state; in both cases, and on any transport
+                // failure, we proceed optimistically and let the Miris SDK decide.
                 let isStreamable = true;
                 try {
                     const statusResult = await getMirisAssetStatus({
@@ -173,8 +176,12 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                             state: string;
                             isStreamable: boolean;
                             errorMessage?: string;
+                            indeterminate?: boolean;
                         };
-                        if (status.errorMessage) {
+                        // Only a definitive Miris processing failure blocks rendering.
+                        // `indeterminate` is never accompanied by errorMessage, but the
+                        // guard keeps this fail-open even if that ever changes.
+                        if (status.errorMessage && !status.indeterminate) {
                             if (!cancelled) {
                                 setError({
                                     kind: "MIRIS_PROCESSING_ERROR",
@@ -183,7 +190,11 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                             }
                             return;
                         }
-                        isStreamable = status.isStreamable === true;
+                        // Indeterminate => attempt the stream rather than showing an
+                        // overlay we cannot substantiate.
+                        isStreamable = status.indeterminate
+                            ? true
+                            : status.isStreamable === true;
                         if (!isStreamable) {
                             if (cancelled) return;
                             setProcessingState({ state: status.state });
@@ -206,8 +217,9 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                                             state: string;
                                             isStreamable: boolean;
                                             errorMessage?: string;
+                                            indeterminate?: boolean;
                                         };
-                                        if (s.errorMessage) {
+                                        if (s.errorMessage && !s.indeterminate) {
                                             if (pollIntervalRef.current) {
                                                 clearInterval(pollIntervalRef.current);
                                                 pollIntervalRef.current = null;
@@ -216,7 +228,10 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                                                 kind: "MIRIS_PROCESSING_ERROR",
                                                 message: s.errorMessage,
                                             });
-                                        } else if (s.isStreamable) {
+                                        } else if (s.isStreamable || s.indeterminate) {
+                                            // Streamable, or state can no longer be
+                                            // established — stop polling and attempt
+                                            // the stream instead of overlaying forever.
                                             if (pollIntervalRef.current) {
                                                 clearInterval(pollIntervalRef.current);
                                                 pollIntervalRef.current = null;

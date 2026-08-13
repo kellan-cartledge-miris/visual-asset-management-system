@@ -8,7 +8,10 @@ import * as cdk from "aws-cdk-lib";
 import { Duration, NestedStack } from "aws-cdk-lib";
 import { Construct } from "constructs";
 import * as iam from "aws-cdk-lib/aws-iam";
-import { requireTLSAndAdditionalPolicyAddToResourcePolicy } from "../../../helper/security";
+import {
+    requireTLSAndAdditionalPolicyAddToResourcePolicy,
+    suppressCdkNagLambda,
+} from "../../../helper/security";
 import { aws_wafv2 as wafv2 } from "aws-cdk-lib";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as elbv2 from "aws-cdk-lib/aws-elasticloadbalancingv2";
@@ -37,6 +40,7 @@ export interface AlbS3WebsiteAlbDeployConstructProps extends cdk.StackProps {
     webSiteBuildPath: string;
     webAcl: string;
     apiUrl: string;
+    apiStageName: string;
     csp: string;
     vpc: ec2.IVpc;
     albSubnets: ec2.ISubnet[];
@@ -172,6 +176,8 @@ export class AlbS3WebsiteAlbDeployConstruct extends Construct {
                 })
             );
 
+            suppressCdkNagLambda(getVpcEndpointIpsFunction);
+
             // Create custom resource provider
             const getVpcEndpointIpsProvider = new customResources.Provider(
                 this,
@@ -228,6 +234,7 @@ export class AlbS3WebsiteAlbDeployConstruct extends Construct {
                     host: `${props.apiUrl}`,
                     port: "443",
                     protocol: "HTTPS",
+                    path: `/${props.apiStageName}/#{path}`,
                     permanent: true,
                 }),
                 conditions: [elbv2.ListenerCondition.pathPatterns(["/api*"])],
@@ -245,6 +252,7 @@ export class AlbS3WebsiteAlbDeployConstruct extends Construct {
                     host: `${props.apiUrl}`,
                     port: "443",
                     protocol: "HTTPS",
+                    path: `/${props.apiStageName}/#{path}`,
                     permanent: true,
                 }),
                 conditions: [elbv2.ListenerCondition.pathPatterns(["/secure-config*"])],

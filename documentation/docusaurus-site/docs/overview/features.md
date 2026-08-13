@@ -10,7 +10,7 @@ The VAMS web interface is a React 17 application built with Vite and the AWS Clo
 
 ### Viewer Plugins
 
-VAMS includes 17 built-in viewer plugins across five categories (3D, Media, Document, Data, and Preview). The plugin-based architecture supports lazy loading, per-plugin dependency management, automatic viewer selection based on file extension, and fullscreen mode. Two additional licensed viewers (VNTANA and VEERUM) provide commercial-grade rendering for GLB models and point clouds.
+VAMS includes built-in viewer plugins across five categories (3D, Media, Document, Data, and Preview), covering 3D meshes, CAD, point clouds, Gaussian splats, USD, and IFC/BIM models. The plugin-based architecture supports lazy loading, per-plugin dependency management, automatic viewer selection based on file extension, and fullscreen mode. Two additional licensed viewers (VNTANA and VEERUM) provide commercial-grade rendering for GLB models and point clouds.
 
 -   **Miris Spatial Streaming** — Stream 3D assets at progressive levels of detail via the Miris platform. Stream by selecting either a `.mrx` manifest or, with the upload viewer enabled, the original USD source file.
 -   **Miris Auto-Upload Pipeline** — Uploads supported USD source assets to the Miris Spatial Streaming platform and emits a `.mrx` manifest, so assets become streamable in the VAMS viewer. Runs automatically on upload for enabled databases, or on demand via the **Stream with Miris** action in the viewer.
@@ -61,7 +61,7 @@ For the complete list of supported file viewers and extensions, see [File Viewer
 
 ## API Features
 
-VAMS exposes a REST API through Amazon API Gateway V2 HttpApi, secured by a custom Lambda authorizer.
+VAMS exposes a REST API through Amazon API Gateway, secured by a custom Lambda authorizer.
 
 ### Core API Capabilities
 
@@ -188,12 +188,13 @@ Pipelines support three execution types for integration with different processin
 
 ### Built-In Pipelines
 
-VAMS includes twelve built-in processing pipelines, each deployable through configuration flags:
+VAMS includes thirteen built-in processing pipelines, each deployable through configuration flags:
 
 | Pipeline                     | Config Flag                              | Description                                                                                                                                                                                   | Default  |
 | ---------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
 | 3D Conversion Basic          | `useConversion3dBasic`                   | Format conversion using Trimesh and Blender                                                                                                                                                   | Enabled  |
 | CAD/Mesh Metadata Extraction | `useConversionCadMeshMetadataExtraction` | Geometric metadata extraction using CADQuery                                                                                                                                                  | Disabled |
+| Coordinate Transform         | `useConversionCoordinateTransform`       | Point cloud coordinate reference system reprojection using PDAL and pyproj                                                                                                                    | Disabled |
 | Point Cloud Potree Viewer    | `usePreviewPcPotreeViewer`               | Potree octree generation for browser streaming                                                                                                                                                | Disabled |
 | Gaussian Splat Toolbox       | `useSplatToolbox`                        | 3D Gaussian splat generation from media files                                                                                                                                                 | Disabled |
 | GenAI Metadata 3D Labeling   | `useGenAiMetadata3dLabeling`             | AI-powered metadata labeling via Amazon Bedrock                                                                                                                                               | Disabled |
@@ -223,14 +224,14 @@ Pipelines that use AWS Batch Fargate containers require `useGlobalVpc.enabled` t
 
 ### Deployment Options
 
-| Feature                       | Configuration                        | Description                                                                 |
-| ----------------------------- | ------------------------------------ | --------------------------------------------------------------------------- |
-| **Amazon CloudFront**         | `useCloudFront.enabled`              | Default web distribution with AWS-managed TLS certificate                   |
-| **CloudFront Custom Domain**  | `useCloudFront.customDomain`         | Custom domain with ACM certificate and optional Amazon Route 53 hosted zone |
-| **Application Load Balancer** | `useAlb.enabled`                     | Alternative web distribution for GovCloud and VPC-isolated deployments      |
-| **VPC**                       | `useGlobalVpc.enabled`               | Shared VPC with configurable CIDR range or external VPC import              |
-| **VPC Endpoints**             | `useGlobalVpc.addVpcEndpoints`       | Automatic VPC endpoint creation for all required AWS services               |
-| **External VPC Import**       | `useGlobalVpc.optionalExternalVpcId` | Import existing VPC with isolated, private, and public subnets              |
+| Feature                       | Configuration                        | Description                                                                                 |
+| ----------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------- |
+| **Amazon CloudFront**         | `useCloudFront.enabled`              | Default web distribution with AWS-managed TLS certificate                                   |
+| **CloudFront Custom Domain**  | `useCloudFront.customDomain`         | Custom domain with ACM certificate and optional Amazon Route 53 hosted zone                 |
+| **Application Load Balancer** | `useAlb.enabled`                     | Alternative web distribution for GovCloud, EU Sovereign Cloud, and VPC-isolated deployments |
+| **VPC**                       | `useGlobalVpc.enabled`               | Shared VPC with configurable CIDR range or external VPC import                              |
+| **VPC Endpoints**             | `useGlobalVpc.addVpcEndpoints`       | Automatic VPC endpoint creation for all required AWS services                               |
+| **External VPC Import**       | `useGlobalVpc.optionalExternalVpcId` | Import existing VPC with isolated, private, and public subnets                              |
 
 ### Security
 
@@ -258,18 +259,20 @@ Pipelines that use AWS Batch Fargate containers require `useGlobalVpc.enabled` t
 
 VAMS uses a feature flag system to conditionally enable capabilities at deployment time. Feature flags are persisted to Amazon DynamoDB and read by the web interface at runtime.
 
-| Feature Flag                    | Description                                                        |
-| ------------------------------- | ------------------------------------------------------------------ |
-| `GOVCLOUD`                      | Indicates AWS GovCloud deployment mode                             |
-| `ALLOWUNSAFEEVAL`               | Enables viewers requiring `unsafe-eval` CSP (CesiumJS, Needle USD) |
-| `LOCATIONSERVICES`              | Enables Amazon Location Service integration for map views          |
-| `MIRIS_STREAMING`               | Enables the Miris Spatial Streaming viewer for `.mrx` manifest files |
-| `ALBDEPLOY`                     | Indicates Application Load Balancer web distribution               |
-| `CLOUDFRONTDEPLOY`              | Indicates Amazon CloudFront web distribution                       |
-| `NOOPENSEARCH`                  | Indicates Amazon OpenSearch is disabled                            |
-| `AUTHPROVIDER_COGNITO`          | Indicates Amazon Cognito authentication                            |
-| `AUTHPROVIDER_COGNITO_SAML`     | Indicates Amazon Cognito with SAML federation                      |
-| `AUTHPROVIDER_EXTERNALOAUTHIDP` | Indicates external OAuth2 authentication                           |
+| Feature Flag                    | Description                                                                                                                                                          |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GOVCLOUD`                      | Indicates AWS GovCloud deployment mode (also set for AWS European Sovereign Cloud deployments)                                                                       |
+| `ALLOWUNSAFEEVAL`               | Enables viewers requiring `unsafe-eval` CSP (Needle USD, SuperSplat Editor, Miris Spatial Streaming)                                                                 |
+| `LOCATIONSERVICES`              | Enables Amazon Location Service integration for map views                                                                                                            |
+| `MIRIS_STREAMING`               | Enables the Miris Spatial Streaming viewer for `.mrx` manifest files                                                                                                 |
+| `MIRIS_UPLOAD`                  | Enables the Miris auto-upload pipeline and its one-click "Stream with Miris" USD viewer                                                                              |
+| `ALBDEPLOY`                     | Indicates Application Load Balancer web distribution                                                                                                                 |
+| `CLOUDFRONTDEPLOY`              | Indicates Amazon CloudFront web distribution                                                                                                                         |
+| `NOOPENSEARCH`                  | Indicates Amazon OpenSearch is disabled                                                                                                                              |
+| `AUTHPROVIDER_COGNITO`          | Indicates Amazon Cognito authentication                                                                                                                              |
+| `AUTHPROVIDER_COGNITO_SAML`     | Indicates Amazon Cognito with SAML federation                                                                                                                        |
+| `AUTHPROVIDER_EXTERNALOAUTHIDP` | Indicates external OAuth2 authentication                                                                                                                             |
+| `PHYSNA_ADDON`                  | Enables Physna add-on frontend features (viewer plugin, future Physna-powered UI surfaces). Emitted automatically when `app.addons.usePhysnaSync.enabled` is `true`. |
 
 ### Additional Configuration
 
@@ -279,4 +282,4 @@ VAMS uses a feature flag system to conditionally enable capabilities at deployme
 -   **Metadata schema auto-loading** -- Control which default metadata schemas are loaded on deployment
 -   **External asset buckets** -- Register existing Amazon S3 buckets with VAMS for asset management
 -   **Custom Amazon S3 bucket policies** -- Additional bucket policy statements via `s3AdditionalBucketPolicyConfig.json`
--   **Addon framework** -- Garnet Framework integration for NGSI-LD digital twin data synchronization
+-   **Addon framework** -- Garnet Framework integration for NGSI-LD digital twin data synchronization; Physna Sync add-on for one-way synchronization of supported 3D/CAD files and metadata to a Physna for geometric and semantic 3D search

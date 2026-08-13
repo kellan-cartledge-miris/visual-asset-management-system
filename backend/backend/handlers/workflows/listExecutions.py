@@ -2,12 +2,13 @@
 #  SPDX-License-Identifier: Apache-2.0
 
 import json
-import os
 import boto3
 import botocore
 from boto3.dynamodb.conditions import Key
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from common.validators import validate
+from common.resourceNames import get_table_name, ResourceKeys
+from common.auth.apiEvent import normalize_event
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
@@ -28,13 +29,10 @@ sfn = boto3.client('stepfunctions')
 dynamodb = boto3.resource('dynamodb')
 
 try:
-    workflow_execution_database = os.environ["WORKFLOW_EXECUTION_STORAGE_TABLE_NAME"]
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    if not all([workflow_execution_database, asset_storage_table_name]):
-        logger.exception("Failed loading environment variables")
-        raise Exception("Failed Loading Environment Variables")
+    workflow_execution_database = get_table_name(ResourceKeys.WORKFLOW_EXECUTIONS_STORAGE_TABLE)
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed resolving resource names")
     raise e
 
 asset_table = dynamodb.Table(asset_storage_table_name)
@@ -187,6 +185,11 @@ def get_executions(database_id, asset_id, workflow_database_id, workflow_id, que
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     logger.info(event)
+
+    # This handler reads pathParameters/queryStringParameters before request_to_claims,
+    # so normalize the REST event first (coerces null params to {} for the in-place
+    # pagination validation below).
+    normalize_event(event)
 
     try:
         # Parse request body if present

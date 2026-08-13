@@ -20,7 +20,7 @@ _VAMS is categorized as an AWS Spatial Data Plane solution._
 
 Organizations working with 3D data face a common set of challenges: spatial assets are large and diverse in format, siloed across local systems and specialized tools, difficult to version or track lineage, and inaccessible to non-engineering teams that need them. VAMS solves the challenge of **spatial data sovereignty and access democratization** by providing a single pane of glass for an organization's spatial data source of truth.
 
-Through a web interface, command-line tool, and REST API, VAMS enables any authorized user — not just engineers — to store, search, visualize, transform, and distribute visual assets without requiring specialized desktop software, restrictive licenses, or direct access to storage systems. The solution deploys entirely within your AWS account as a serverless CDK stack, ensuring full data sovereignty while supporting both commercial AWS and AWS GovCloud regions.
+Through a web interface, command-line tool, and REST API, VAMS enables any authorized user — not just engineers — to store, search, visualize, transform, and distribute visual assets without requiring specialized desktop software, restrictive licenses, or direct access to storage systems. The solution deploys entirely within your AWS account as a serverless CDK stack, ensuring full data sovereignty while supporting commercial AWS, AWS GovCloud (US), and AWS European Sovereign Cloud regions.
 
 VAMS can store, manage, and version **any file type**. Out of the box, it includes built-in viewer and pipeline support for 3D meshes (glTF, OBJ, STL, FBX), CAD models (STEP, BREP), point clouds (E57, LAS, LAZ), USD scenes, gaussian splats, documents, images, video, and audio. Because the platform is extensible through custom viewer plugins and processing pipelines, this represents the current set of native integrations — not a limitation. Associated data such as textures, bills of materials, quality analysis data, and temporal (4D) change tracking can be managed as files or captured through the metadata system.
 
@@ -47,7 +47,7 @@ _Use cases include:_
 -   **Automated processing** — Transform assets using configurable pipelines backed by AWS Lambda, Amazon SQS, or Amazon EventBridge
 -   **Intelligent search** — Full-text and metadata search powered by Amazon OpenSearch with map-based geographic views
 -   **Fine-grained permissions** — Attribute-based and role-based access control (ABAC/RBAC) at both API and data entity levels
--   **Multi-region deployment** — Deploy to AWS commercial regions or AWS GovCloud (US)
+-   **Multi-region deployment** — Deploy to AWS commercial regions, AWS GovCloud (US), or the AWS European Sovereign Cloud
 
 ## Screenshots
 
@@ -69,7 +69,7 @@ VAMS deploys as a serverless architecture using AWS CDK with 10+ nested CloudFor
 
 ### Prerequisites
 
--   Python 3.12+, Docker (or a Docker-compatible CLI such as [Finch](https://aws.github.io/finch/) or [Podman](https://podman.io/)), Node.js 20+, npm, AWS CLI, AWS CDK CLI
+-   Python 3.12+, Docker (or a Docker-compatible CLI such as [Finch](https://aws.github.io/finch/) or [Podman](https://podman.io/)), Node.js 22+, npm, AWS CLI, AWS CDK CLI
 
 ### Deploy
 
@@ -81,9 +81,11 @@ cd web && nvm use && npm install && npm run build
 cd ../infra && npm install
 
 # 3. Bootstrap CDK (first time only)
+#    If importing an existing VPC, add: --context loadContextIgnoreVPCStacks=true
+#    See documentation/docs/deployment/deploy-the-solution.md (Bootstrap step)
 cdk bootstrap aws://ACCOUNT_ID/REGION
 
-# 4. Configure deployment (edit config.json)
+# 4. Configure deployment (edit config.json and viewerConfig.json)
 #    See documentation/docs/deployment/configuration-reference.md
 
 # 5. Deploy
@@ -92,7 +94,7 @@ cdk deploy --all --require-approval never
 
 After deployment, find your URL in the CDK output and check your email for temporary credentials.
 
-> For detailed instructions, see the [Deployment Guide](./documentation/docusaurus-site/docs/deployment/deploy-the-solution.md).
+> For detailed instructions, see the [Deployment Guide](https://awslabs.github.io/visual-asset-management-system/deployment/deploy-the-solution).
 
 ## Documentation
 
@@ -110,18 +112,18 @@ Then open `http://localhost:3000/visual-asset-management-system/` in your browse
 
 ### Documentation sections
 
-| Section                                                                                  | Description                                                |
-| ---------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| [Solution Overview](./documentation/docusaurus-site/docs/overview/solution-overview.md)  | What VAMS is and its capabilities                          |
-| [Core Concepts](./documentation/docusaurus-site/docs/concepts/overview.md)               | Databases, Assets, Files, Pipelines, Metadata, Permissions |
-| [Architecture](./documentation/docusaurus-site/docs/architecture/overview.md)            | Architecture diagrams, AWS resources, security, networking |
-| [Deployment Guide](./documentation/docusaurus-site/docs/deployment/prerequisites.md)     | Prerequisites, configuration, deploy, update, uninstall    |
-| [User Guide](./documentation/docusaurus-site/docs/user-guide/getting-started.md)         | Web interface, asset management, search, metadata          |
-| [CLI Reference](./documentation/docusaurus-site/docs/cli/getting-started.md)             | Installation, command reference, automation                |
-| [Pipelines](./documentation/docusaurus-site/docs/pipelines/overview.md)                  | Built-in pipelines and custom pipeline development         |
-| [Developer Guide](./documentation/docusaurus-site/docs/developer/setup.md)               | Backend, frontend, CDK, and viewer plugin development      |
-| [API Reference](./documentation/docusaurus-site/docs/api/overview.md)                    | Complete REST API documentation                            |
-| [Troubleshooting](./documentation/docusaurus-site/docs/troubleshooting/common-issues.md) | Common issues, known limitations, FAQ                      |
+| Section                                                                                                   | Description                                                |
+| --------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| [Solution Overview](https://awslabs.github.io/visual-asset-management-system/overview/solution-overview)  | What VAMS is and its capabilities                          |
+| [Core Concepts](https://awslabs.github.io/visual-asset-management-system/concepts/overview)               | Databases, Assets, Files, Pipelines, Metadata, Permissions |
+| [Architecture](https://awslabs.github.io/visual-asset-management-system/architecture/overview)            | Architecture diagrams, AWS resources, security, networking |
+| [Deployment Guide](https://awslabs.github.io/visual-asset-management-system/deployment/prerequisites)     | Prerequisites, configuration, deploy, update, uninstall    |
+| [User Guide](https://awslabs.github.io/visual-asset-management-system/user-guide/getting-started)         | Web interface, asset management, search, metadata          |
+| [CLI Reference](https://awslabs.github.io/visual-asset-management-system/cli/getting-started)             | Installation, command reference, automation                |
+| [Pipelines](https://awslabs.github.io/visual-asset-management-system/pipelines/overview)                  | Built-in pipelines and custom pipeline development         |
+| [Developer Guide](https://awslabs.github.io/visual-asset-management-system/developer/setup)               | Backend, frontend, CDK, and viewer plugin development      |
+| [API Reference](https://awslabs.github.io/visual-asset-management-system/api/overview)                    | Complete REST API documentation                            |
+| [Troubleshooting](https://awslabs.github.io/visual-asset-management-system/troubleshooting/common-issues) | Common issues, known limitations, FAQ                      |
 
 ## Access methods
 
@@ -137,14 +139,15 @@ Then open `http://localhost:3000/visual-asset-management-system/` in your browse
 
 **Open source:** Online 3D Viewer, CesiumJS, Potree, BabylonJS, PlayCanvas, Needle Engine, Three.js, Trimesh, CadQuery, Blender, 3D Reconstruction Toolkit, Garnet Framework, NVIDIA Isaac Lab / Cosmos / Gr00t
 
-**Licensed:** [RapidPipeline](https://rapidpipeline.com/), [VNTANA](https://www.vntana.com/), [Veerum](https://veerum.com/)
+**Licensed:** [RapidPipeline](https://rapidpipeline.com/), [VNTANA](https://www.vntana.com/), [Veerum](https://veerum.com/), [Physna](https://physna.com/)
 
 ## Configuration
 
-See the [Configuration Reference](./documentation/docusaurus-site/docs/deployment/configuration-reference.md) for all deployment options, or start with one of the provided templates:
+See the [Configuration Reference](https://awslabs.github.io/visual-asset-management-system/deployment/configuration-reference) for all deployment options, or start with one of the provided templates:
 
 -   `infra/config/config.template.commercial.json` — AWS commercial regions
 -   `infra/config/config.template.govcloud.json` — AWS GovCloud (US)
+-   `infra/config/config.template.eusovereign.json` — AWS European Sovereign Cloud
 
 ## Uninstall
 
@@ -153,15 +156,15 @@ cd infra
 cdk destroy --all
 ```
 
-Some resources (S3 buckets, DynamoDB tables) are retained by default. See the [Uninstall Guide](./documentation/docusaurus-site/docs/deployment/uninstall.md) for complete cleanup instructions.
+Some resources (S3 buckets, DynamoDB tables) are retained by default. See the [Uninstall Guide](https://awslabs.github.io/visual-asset-management-system/deployment/uninstall) for complete cleanup instructions.
 
 ## Security
 
-VAMS follows the [AWS Shared Responsibility Model](https://aws.amazon.com/compliance/shared-responsibility-model/). See the [Security documentation](./documentation/docusaurus-site/docs/architecture/security.md) for details on authentication, authorization, encryption, and compliance.
+VAMS follows the [AWS Shared Responsibility Model](https://aws.amazon.com/compliance/shared-responsibility-model/). See the [Security documentation](https://awslabs.github.io/visual-asset-management-system/architecture/security) for details on authentication, authorization, encryption, and compliance.
 
 ## Costs
 
-Costs depend on deployment configuration, data volume, and usage patterns. A minimal deployment starts at approximately $10-15/month. See the [Cost Estimation guide](./documentation/docusaurus-site/docs/overview/costs.md) for detailed breakdowns.
+Costs depend on deployment configuration, data volume, and usage patterns. A minimal deployment starts at approximately $10-15/month. See the [Cost Estimation guide](https://awslabs.github.io/visual-asset-management-system/overview/costs) for detailed breakdowns.
 
 ## Contributing
 

@@ -34,6 +34,7 @@ import { Service } from "../../../../../helper/service-helper";
 import * as Config from "../../../../../../config/config";
 import { generateUniqueNameHash } from "../../../../../helper/security";
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
+import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
 import * as cr from "aws-cdk-lib/custom-resources";
 import { execSync } from "child_process";
 import * as fs from "fs";
@@ -83,8 +84,11 @@ export class SplatToolboxConstruct extends Construct {
                 // Add permissions for all asset buckets from the global array
                 ...s3AssetBuckets.getS3AssetBucketRecords().map((record) => {
                     const prefix = record.prefix || "/";
-                    // Ensure the prefix ends with a slash for proper path construction
+                    // Build the object-level resource as {bucketArn}/{prefix}*. Strip any
+                    // leading slash from the prefix so the '/' separator after the bucket
+                    // ARN is always present (root prefix yields {bucketArn}/*).
                     const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
+                    const objectPrefix = normalizedPrefix.replace(/^\/+/, "");
 
                     return new iam.PolicyStatement({
                         effect: iam.Effect.ALLOW,
@@ -97,7 +101,7 @@ export class SplatToolboxConstruct extends Construct {
                         ],
                         resources: [
                             record.bucket.bucketArn,
-                            `${record.bucket.bucketArn}${normalizedPrefix}*`,
+                            `${record.bucket.bucketArn}/${objectPrefix}*`,
                         ],
                     });
                 }),
@@ -173,6 +177,11 @@ export class SplatToolboxConstruct extends Construct {
                 iam.ManagedPolicy.fromAwsManagedPolicyName("AmazonSageMakerFullAccess"),
             ],
         });
+
+        // Grant access to any external asset bucket customer managed KMS keys so the
+        // container can read/write objects in cross-account encrypted buckets
+        // (no-op when no external keys are configured)
+        grantExternalAssetBucketKmsKeys(containerJobRole);
 
         /**
          * AWS Batch Job Definition & Compute Env for Splat Toolbox Container
@@ -383,7 +392,9 @@ export class SplatToolboxConstruct extends Construct {
             const importFunction = lambda.Function.fromFunctionArn(
                 this,
                 "ImportFunction",
-                `arn:aws:lambda:${region}:${account}:function:${props.importGlobalPipelineWorkflowFunctionName}`
+                `arn:${ServiceHelper.Partition()}:lambda:${region}:${account}:function:${
+                    props.importGlobalPipelineWorkflowFunctionName
+                }`
             );
 
             const importProvider = new cr.Provider(this, "ImportProvider", {
@@ -398,7 +409,7 @@ export class SplatToolboxConstruct extends Construct {
                         id: "AwsSolutions-IAM5",
                         reason: "Custom resource provider requires wildcard permissions to invoke the import function with version qualifiers",
                         appliesTo: [
-                            `Resource::arn:aws:lambda:${region}:${account}:function:<importGlobalPipelineWorkflow15C3C6ED>:*`,
+                            `Resource::arn:${ServiceHelper.Partition()}:lambda:${region}:${account}:function:<importGlobalPipelineWorkflow15C3C6ED>:*`,
                         ],
                     },
                 ],

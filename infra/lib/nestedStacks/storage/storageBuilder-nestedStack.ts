@@ -11,12 +11,15 @@ import * as kms from "aws-cdk-lib/aws-kms";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as s3not from "aws-cdk-lib/aws-s3-notifications";
 import * as logs from "aws-cdk-lib/aws-logs";
+import * as events from "aws-cdk-lib/aws-events";
+import * as targets from "aws-cdk-lib/aws-events-targets";
 import * as cdk from "aws-cdk-lib";
 import { Duration, RemovalPolicy, NestedStack } from "aws-cdk-lib";
 import { BlockPublicAccess } from "aws-cdk-lib/aws-s3";
 import { Construct } from "constructs";
 import {
     requireTLSAndAdditionalPolicyAddToResourcePolicy,
+    addPresignedUrlNetworkRestrictionsToBucketPolicy,
     generateUniqueNameHash,
 } from "../../helper/security";
 import { NagSuppressions } from "cdk-nag";
@@ -29,13 +32,15 @@ import * as sqs from "aws-cdk-lib/aws-sqs";
 import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
-import { Service } from "../../helper/service-helper";
+import { Service, Partition } from "../../helper/service-helper";
 import {
     buildSqsBucketSyncFunction,
     buildFileIndexerSnsQueuingFunction,
     buildAssetIndexerSnsQueuingFunction,
     buildDatabaseIndexerSnsQueuingFunction,
 } from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
+import { RESOURCE_PARAM_KEYS } from "../../../common/resourceParamKeys";
+import { ResourceNameRegistry } from "../resourceNames/resourceNameRegistry";
 
 export interface storageResources {
     encryption: {
@@ -68,6 +73,11 @@ export interface storageResources {
         actions: logs.LogGroup;
         errors: logs.LogGroup;
     };
+    eventBridge: {
+        orchestrationBus: events.EventBus;
+        orchestrationBusAuditLogGroup: logs.LogGroup;
+        eventSourcePrefix: string;
+    };
     dynamo: {
         appFeatureEnabledStorageTable: dynamodb.Table;
         assetLinksStorageTableV2: dynamodb.Table;
@@ -84,6 +94,9 @@ export interface storageResources {
         metadataSchemaStorageTableV2: dynamodb.Table;
         databaseMetadataStorageTable: dynamodb.Table;
         assetFileMetadataStorageTable: dynamodb.Table;
+        assetFileVersionHistoryStorageTable: dynamodb.Table;
+        assetHistoryStorageTable: dynamodb.Table;
+        syncTrackingOutboundStorageTable: dynamodb.Table;
         fileAttributeStorageTable: dynamodb.Table;
         pipelineStorageTable: dynamodb.Table;
         rolesStorageTable: dynamodb.Table;
@@ -108,7 +121,8 @@ export class StorageResourcesBuilderNestedStack extends NestedStack {
         config: Config.Config,
         lambdaCommonBaseLayer: LayerVersion,
         vpc: ec2.IVpc,
-        subnets: ec2.ISubnet[]
+        subnets: ec2.ISubnet[],
+        resourceNameRegistry: ResourceNameRegistry
     ) {
         super(parent, name);
 
@@ -117,7 +131,8 @@ export class StorageResourcesBuilderNestedStack extends NestedStack {
             config,
             lambdaCommonBaseLayer,
             vpc,
-            subnets
+            subnets,
+            resourceNameRegistry
         );
 
         //Nag supressions
@@ -199,10 +214,14 @@ export function storageResourcesBuilder(
     config: Config.Config,
     lambdaCommonBaseLayer: LayerVersion,
     vpc: ec2.IVpc,
-    subnets: ec2.ISubnet[]
+    subnets: ec2.ISubnet[],
+    resourceNameRegistry: ResourceNameRegistry
 ): storageResources {
     //Import or generate new encryption keys
     let kmsEncryptionKey: kms.IKey | undefined = undefined;
+    // Tracks whether VAMS created the key (resource policy is mutable) versus
+    // imported it by ARN (resource policy changes are a no-op).
+    let vamsGeneratedKmsKey = false;
     if (config.app.useKmsCmkEncryption.enabled) {
         if (
             config.app.useKmsCmkEncryption.optionalExternalCmkArn &&
@@ -215,6 +234,7 @@ export function storageResourcesBuilder(
                 config.app.useKmsCmkEncryption.optionalExternalCmkArn
             );
         } else {
+            vamsGeneratedKmsKey = true;
             kmsEncryptionKey = new kms.Key(scope, "VAMSEncryptionKMSKey", {
                 description: "VAMS Generated KMS Encryption key",
                 enableKeyRotation: true,
@@ -300,7 +320,14 @@ export function storageResourcesBuilder(
                         s3.HttpMethods.POST,
                         s3.HttpMethods.HEAD,
                     ],
-                    exposedHeaders: ["ETag"],
+                    // Expose range/streaming headers for file streaming
+                    exposedHeaders: [
+                        "ETag",
+                        "Accept-Ranges",
+                        "Content-Range",
+                        "Content-Length",
+                        "Content-Encoding",
+                    ],
                 },
             ],
             lifecycleRules: [
@@ -313,6 +340,10 @@ export function storageResourcesBuilder(
             serverAccessLogsPrefix: "asset-bucket-logs/",
         });
         requireTLSAndAdditionalPolicyAddToResourcePolicy(assetBucket, config);
+        addPresignedUrlNetworkRestrictionsToBucketPolicy(
+            assetBucket,
+            config.app.assetBuckets.presignedUrlNetworkRestrictions
+        );
 
         // Add to global array with default prefix '/'
         s3AssetBuckets.addS3AssetBucket(
@@ -327,6 +358,14 @@ export function storageResourcesBuilder(
         config.app.assetBuckets.externalAssetBuckets &&
         config.app.assetBuckets.externalAssetBuckets.length > 0
     ) {
+        // A single bucket ARN may be registered under multiple (non-overlapping)
+        // prefixes. Each unique ARN must be imported exactly once: a single IBucket
+        // instance accumulates all of its addEventNotification calls into one S3
+        // notification configuration with multiple prefix-filtered topic entries.
+        // Importing the same ARN twice would create duplicate construct IDs and
+        // racing notification custom resources that overwrite each other.
+        const importedBucketsByArn = new Map<string, s3.IBucket>();
+
         // Look up each bucket and add to global array
         for (const bucketConfig of config.app.assetBuckets.externalAssetBuckets) {
             if (
@@ -351,18 +390,91 @@ export function storageResourcesBuilder(
                 );
             }
 
-            const bucket = s3.Bucket.fromBucketArn(
-                scope,
-                `ImportedAssetBucket-${bucketConfig.bucketArn}`,
-                bucketConfig.bucketArn
-            );
+            // Normalize optional cross-account / encryption fields
+            const bucketAccountId =
+                bucketConfig.bucketAccountId &&
+                bucketConfig.bucketAccountId != "" &&
+                bucketConfig.bucketAccountId != "UNDEFINED"
+                    ? bucketConfig.bucketAccountId
+                    : undefined;
+            const bucketRegion =
+                bucketConfig.bucketRegion &&
+                bucketConfig.bucketRegion != "" &&
+                bucketConfig.bucketRegion != "UNDEFINED"
+                    ? bucketConfig.bucketRegion
+                    : undefined;
+            const bucketKmsKeyArn =
+                bucketConfig.bucketKmsKeyArn &&
+                bucketConfig.bucketKmsKeyArn != "" &&
+                bucketConfig.bucketKmsKeyArn != "UNDEFINED"
+                    ? bucketConfig.bucketKmsKeyArn
+                    : undefined;
 
-            requireTLSAndAdditionalPolicyAddToResourcePolicy(bucket, config);
+            // Import each unique bucket ARN only once and reuse the instance for
+            // every prefix registered against it.
+            let bucket = importedBucketsByArn.get(bucketConfig.bucketArn);
+            if (!bucket) {
+                // Import the bucket account-aware so CDK treats it as cross-account when
+                // an owning account is provided (drives correct event-notification source
+                // handling and region resolution). Falls back to same-account behavior
+                // when no account is given.
+                bucket = s3.Bucket.fromBucketAttributes(
+                    scope,
+                    `ImportedAssetBucket-${bucketConfig.bucketArn}`,
+                    {
+                        bucketArn: bucketConfig.bucketArn,
+                        account: bucketAccountId,
+                        region: bucketRegion,
+                    }
+                );
+
+                // VAMS only applies bucket-level resource policies to buckets it owns.
+                // For imported (potentially cross-account) buckets this is a no-op; the
+                // bucket owner applies TLS/additional policies (see external-s3 docs).
+                // Apply once per unique bucket.
+                requireTLSAndAdditionalPolicyAddToResourcePolicy(bucket, config);
+
+                importedBucketsByArn.set(bucketConfig.bucketArn, bucket);
+            }
 
             s3AssetBuckets.addS3AssetBucket(
                 bucket,
                 bucketConfig.baseAssetsPrefix,
-                bucketConfig.defaultSyncDatabaseId
+                bucketConfig.defaultSyncDatabaseId,
+                bucketAccountId,
+                bucketKmsKeyArn
+            );
+        }
+    }
+
+    // When VAMS generated its own CMK and there are cross-account external buckets,
+    // the S3 service in the bucket's account must be able to generate data keys with
+    // the VAMS key to encrypt notifications published to the VAMS-owned SNS topics.
+    // Add an additive statement scoped to those external accounts. (No-op when the
+    // key was imported by ARN or when there are no cross-account buckets, so existing
+    // deployments without externals see no key-policy change.)
+    if (vamsGeneratedKmsKey && kmsEncryptionKey) {
+        const externalBucketAccountIds = Array.from(
+            new Set(
+                s3AssetBuckets
+                    .getS3AssetBucketRecords()
+                    .map((record) => record.accountId)
+                    .filter((accountId): accountId is string => !!accountId)
+            )
+        );
+
+        if (externalBucketAccountIds.length > 0) {
+            kmsEncryptionKey.addToResourcePolicy(
+                new iam.PolicyStatement({
+                    sid: "AllowExternalBucketS3Notifications",
+                    effect: iam.Effect.ALLOW,
+                    principals: [Service("S3").Principal],
+                    actions: ["kms:GenerateDataKey*", "kms:Decrypt"],
+                    resources: ["*"],
+                    conditions: {
+                        StringEquals: { "aws:SourceAccount": externalBucketAccountIds },
+                    },
+                })
             );
         }
     }
@@ -438,6 +550,28 @@ export function storageResourcesBuilder(
                 new s3not.SnsDestination(removedTopic),
                 { prefix: prefix }
             );
+        }
+
+        // For cross-account buckets, explicitly allow the S3 service to publish to
+        // the topics on behalf of the external bucket. CDK derives the SourceAccount
+        // from the importing stack account, which is the VAMS account and would not
+        // match an external bucket's account, so the auto-added condition can drop
+        // notifications silently. Scope the grant to the external bucket ARN/account.
+        if (record.accountId) {
+            for (const topic of [createdTopic, removedTopic]) {
+                topic.addToResourcePolicy(
+                    new iam.PolicyStatement({
+                        effect: iam.Effect.ALLOW,
+                        principals: [Service("S3").Principal],
+                        actions: ["SNS:Publish"],
+                        resources: [topic.topicArn],
+                        conditions: {
+                            ArnLike: { "aws:SourceArn": record.bucket.bucketArn },
+                            StringEquals: { "aws:SourceAccount": record.accountId },
+                        },
+                    })
+                );
+            }
         }
 
         console.log(
@@ -606,6 +740,58 @@ export function storageResourcesBuilder(
         }),
     };
 
+    /**
+     * Create EventBridge Orchestration Bus
+     */
+
+    // Deployment-unique bus name and event source prefix so multiple deployments can coexist in a region
+    const orchestrationBusName = `${config.name}-${config.app.baseStackName}-orchestration`;
+    const eventSourcePrefix = `${config.name}.${config.app.baseStackName}`;
+
+    const orchestrationBus = new events.EventBus(scope, "OrchestrationBus", {
+        eventBusName: orchestrationBusName,
+    });
+
+    // KMS encryption is only settable on the underlying CfnEventBus. Event bus CMK encryption
+    // is only supported in the commercial partition; elsewhere (GovCloud, EU Sovereign Cloud)
+    // the KmsKeyIdentifier property is rejected by CloudFormation and the bus falls back to
+    // EventBridge's default AWS-owned-key encryption at rest.
+    if (config.app.useKmsCmkEncryption.enabled && kmsEncryptionKey && Partition() === "aws") {
+        const cfnBus = orchestrationBus.node.defaultChild as events.CfnEventBus;
+        cfnBus.kmsKeyIdentifier = kmsEncryptionKey.keyArn;
+    }
+
+    // Audit log group for the orchestration bus
+    const orchestrationBusAuditLogGroup = new logs.LogGroup(
+        scope,
+        "OrchestrationBusAuditLogGroup",
+        {
+            logGroupName:
+                "/aws/vendedlogs/VAMSOrchestrationBusAudit-" +
+                generateUniqueNameHash(
+                    config.env.coreStackName,
+                    config.env.account,
+                    "VAMSOrchestrationBusAudit",
+                    10
+                ),
+            retention: logs.RetentionDays.TEN_YEARS,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+            encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
+        }
+    );
+
+    // Audit rule: route all events from this deployment's sources to the audit log group
+    const orchestrationBusAuditRule = new events.Rule(scope, "OrchestrationBusAuditRule", {
+        eventBus: orchestrationBus,
+        eventPattern: {
+            source: events.Match.prefix(eventSourcePrefix),
+        },
+    });
+
+    orchestrationBusAuditRule.addTarget(
+        new targets.CloudWatchLogGroup(orchestrationBusAuditLogGroup)
+    );
+
     const assetAuxiliaryBucket = new s3.Bucket(scope, "AssetAuxiliaryBucket", {
         ...s3DefaultProps,
         cors: [
@@ -631,6 +817,10 @@ export function storageResourcesBuilder(
         serverAccessLogsPrefix: "assetAuxiliary-bucket-logs/",
     });
     requireTLSAndAdditionalPolicyAddToResourcePolicy(assetAuxiliaryBucket, config);
+    addPresignedUrlNetworkRestrictionsToBucketPolicy(
+        assetAuxiliaryBucket,
+        config.app.assetBuckets.presignedUrlNetworkRestrictions
+    );
 
     const artefactsBucket = new s3.Bucket(scope, "ArtefactsBucket", {
         ...s3DefaultProps,
@@ -827,7 +1017,7 @@ export function storageResourcesBuilder(
     });
 
     //old
-    new dynamodb.Table(scope, "MetadataStorageTable", {
+    const metadataStorageTableLegacy = new dynamodb.Table(scope, "MetadataStorageTable", {
         ...dynamodbDefaultProps,
         partitionKey: {
             name: "databaseId",
@@ -916,6 +1106,120 @@ export function storageResourcesBuilder(
         projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // Asset File Version History — one record per (file, S3 version) change event.
+    // Captures change provenance (who/what/how) stamped as vams-change* S3
+    // metadata and ingested by sqsBucketSync. PK is the composite
+    // databaseId:assetId:filePath (matching the AssetFileMetadata convention);
+    // SK is the S3 VersionId ("null" for non-versioned buckets). The
+    // DatabaseIdAssetIdIndex GSI supports "all history for an asset" lookups.
+    const assetFileVersionHistoryStorageTable = new dynamodb.Table(
+        scope,
+        "AssetFileVersionHistoryStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "databaseId:assetId:filePath",
+                type: dynamodb.AttributeType.STRING,
+            },
+            sortKey: {
+                name: "versionId",
+                type: dynamodb.AttributeType.STRING,
+            },
+        }
+    );
+
+    // GSI for querying all version-history records across an asset.
+    assetFileVersionHistoryStorageTable.addGlobalSecondaryIndex({
+        indexName: "DatabaseIdAssetIdIndex",
+        partitionKey: {
+            name: "databaseId:assetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "versionId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // Asset History — one record per asset lifecycle operation (create, edit,
+    // archive, unarchive, permanent delete). PK is the composite
+    // databaseId:assetId; SK is the timestamp-prefixed historyRecordId, queried
+    // with ScanIndexForward=false for newest-first. Records are permanent and
+    // survive asset permanent deletes.
+    const assetHistoryStorageTable = new dynamodb.Table(scope, "AssetHistoryStorageTable", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "databaseId:assetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "historyRecordId",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
+    // Sync Tracking Outbound — one record per outbound synchronization of a
+    // VAMS object (database, asset, assetFile) to an external system (e.g.
+    // Physna, Garnet Framework). PK is the hierarchical object identifier
+    // (databaseId | databaseId:assetId | databaseId:assetId:/filePath); SK is
+    // the timestamp-prefixed syncRecordId, queried with ScanIndexForward=false
+    // for newest-first. Append-only; no stream (the Garnet indexers route
+    // stream events by table-name substring and must never see this table).
+    const syncTrackingOutboundStorageTable = new dynamodb.Table(
+        scope,
+        "SyncTrackingOutboundStorageTable",
+        {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "objectId",
+                type: dynamodb.AttributeType.STRING,
+            },
+            sortKey: {
+                name: "syncRecordId",
+                type: dynamodb.AttributeType.STRING,
+            },
+        }
+    );
+
+    // GSIs for narrowing sync records by database, database+system, and system.
+    syncTrackingOutboundStorageTable.addGlobalSecondaryIndex({
+        indexName: "DatabaseIdIndex",
+        partitionKey: {
+            name: "databaseId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "syncRecordId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+    syncTrackingOutboundStorageTable.addGlobalSecondaryIndex({
+        indexName: "DatabaseSystemIndex",
+        partitionKey: {
+            name: "databaseId:systemType:systemUniqueId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "syncRecordId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+    syncTrackingOutboundStorageTable.addGlobalSecondaryIndex({
+        indexName: "SystemIndex",
+        partitionKey: {
+            name: "systemType:systemUniqueId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "syncRecordId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     const fileAttributeStorageTable = new dynamodb.Table(scope, "FileAttributeStorageTableV2", {
         ...dynamodbDefaultProps,
         partitionKey: {
@@ -958,18 +1262,22 @@ export function storageResourcesBuilder(
     });
 
     //Old
-    new dynamodb.Table(scope, "MetadataSchemaStorageTable", {
-        ...dynamodbDefaultProps,
+    const metadataSchemaStorageTableLegacy = new dynamodb.Table(
+        scope,
+        "MetadataSchemaStorageTable",
+        {
+            ...dynamodbDefaultProps,
 
-        partitionKey: {
-            name: "databaseId",
-            type: dynamodb.AttributeType.STRING,
-        },
-        sortKey: {
-            name: "field",
-            type: dynamodb.AttributeType.STRING,
-        },
-    });
+            partitionKey: {
+                name: "databaseId",
+                type: dynamodb.AttributeType.STRING,
+            },
+            sortKey: {
+                name: "field",
+                type: dynamodb.AttributeType.STRING,
+            },
+        }
+    );
 
     const metadataSchemaStorageTableV2 = new dynamodb.Table(scope, "MetadataSchemaStorageTableV2", {
         ...dynamodbDefaultProps,
@@ -1420,6 +1728,11 @@ export function storageResourcesBuilder(
             databaseIndexerSnsTopic: DatabaseIndexerSnsTopic,
         },
         cloudWatchAuditLogGroups: auditLogGroups,
+        eventBridge: {
+            orchestrationBus: orchestrationBus,
+            orchestrationBusAuditLogGroup: orchestrationBusAuditLogGroup,
+            eventSourcePrefix: eventSourcePrefix,
+        },
         dynamo: {
             appFeatureEnabledStorageTable: appFeatureEnabledStorageTable,
             assetLinksStorageTableV2: assetLinksStorageTableV2,
@@ -1438,6 +1751,9 @@ export function storageResourcesBuilder(
             metadataSchemaStorageTableV2: metadataSchemaStorageTableV2,
             databaseMetadataStorageTable: databaseMetadataStorageTable,
             assetFileMetadataStorageTable: assetFileMetadataStorageTable,
+            assetFileVersionHistoryStorageTable: assetFileVersionHistoryStorageTable,
+            assetHistoryStorageTable: assetHistoryStorageTable,
+            syncTrackingOutboundStorageTable: syncTrackingOutboundStorageTable,
             fileAttributeStorageTable: fileAttributeStorageTable,
             authEntitiesStorageTable: authEntitiesTable,
             tagStorageTable: tagStorageTable,
@@ -1715,17 +2031,32 @@ export function storageResourcesBuilder(
     // Loop through each asset bucket and setup S3 event notifications sync
     let bucketSyncIndex = 0;
     const bucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
+    // A bucket instance can appear in multiple records (same bucket, different
+    // prefixes). The sync-queue construct IDs are derived from the bucket instance,
+    // so they would collide across those records. Keep the original construct ID for
+    // the first registration of each bucket (preserves existing logical IDs / no diff
+    // for single-registration deployments) and add a per-occurrence suffix for any
+    // additional prefix registrations of the same bucket.
+    const bucketSyncOccurrence = new Map<s3.IBucket, number>();
     for (const record of bucketRecords) {
+        const bucketOccurrence = bucketSyncOccurrence.get(record.bucket) ?? 0;
+        bucketSyncOccurrence.set(record.bucket, bucketOccurrence + 1);
+        const bucketSyncIdSuffix = bucketOccurrence === 0 ? "" : `-${bucketOccurrence}`;
+
         // Create SQS queue for S3 object created events
-        const onS3ObjectCreatedQueue = new sqs.Queue(scope, "bucketSyncCreated--" + record.bucket, {
-            queueName: `${config.name}-${config.app.baseStackName}-bucketSyncCreated--${bucketSyncIndex}`,
-            visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's is 900
-            encryption: kmsEncryptionKey
-                ? sqs.QueueEncryption.KMS
-                : sqs.QueueEncryption.SQS_MANAGED,
-            encryptionMasterKey: kmsEncryptionKey,
-            enforceSSL: true,
-        });
+        const onS3ObjectCreatedQueue = new sqs.Queue(
+            scope,
+            "bucketSyncCreated--" + record.bucket + bucketSyncIdSuffix,
+            {
+                queueName: `${config.name}-${config.app.baseStackName}-bucketSyncCreated--${bucketSyncIndex}`,
+                visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's is 900
+                encryption: kmsEncryptionKey
+                    ? sqs.QueueEncryption.KMS
+                    : sqs.QueueEncryption.SQS_MANAGED,
+                encryptionMasterKey: kmsEncryptionKey,
+                enforceSSL: true,
+            }
+        );
         onS3ObjectCreatedQueue.grantSendMessages(Service("SNS").Principal);
 
         // Create Lambda for bucket sync (created events)
@@ -1783,15 +2114,19 @@ export function storageResourcesBuilder(
         bucketSyncIndex = bucketSyncIndex + 1;
 
         // Create SQS queue for S3 object deleted events
-        const onS3ObjectDeletedQueue = new sqs.Queue(scope, "bucketSyncDeleted--" + record.bucket, {
-            queueName: `${config.name}-${config.app.baseStackName}-bucketSyncDeleted--${bucketSyncIndex}`,
-            visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's is 900
-            encryption: kmsEncryptionKey
-                ? sqs.QueueEncryption.KMS
-                : sqs.QueueEncryption.SQS_MANAGED,
-            encryptionMasterKey: kmsEncryptionKey,
-            enforceSSL: true,
-        });
+        const onS3ObjectDeletedQueue = new sqs.Queue(
+            scope,
+            "bucketSyncDeleted--" + record.bucket + bucketSyncIdSuffix,
+            {
+                queueName: `${config.name}-${config.app.baseStackName}-bucketSyncDeleted--${bucketSyncIndex}`,
+                visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's is 900
+                encryption: kmsEncryptionKey
+                    ? sqs.QueueEncryption.KMS
+                    : sqs.QueueEncryption.SQS_MANAGED,
+                encryptionMasterKey: kmsEncryptionKey,
+                enforceSSL: true,
+            }
+        );
         onS3ObjectDeletedQueue.grantSendMessages(Service("SNS").Principal);
 
         // Create Lambda for bucket sync (deleted events)
@@ -1848,6 +2183,106 @@ export function storageResourcesBuilder(
 
         bucketSyncIndex = bucketSyncIndex + 1;
     }
+
+    /// Register fixed resource names for SSM publication by the ResourceNames builder stack
+
+    const resourceNameParamValues: { [paramKey: string]: string } = {
+        [RESOURCE_PARAM_KEYS.dynamoTables.appFeatureEnabledStorage]:
+            storageResources.dynamo.appFeatureEnabledStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.assetLinksStorageV2]:
+            storageResources.dynamo.assetLinksStorageTableV2.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.assetLinksMetadataStorage]:
+            storageResources.dynamo.assetLinksMetadataStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.assetStorage]:
+            storageResources.dynamo.assetStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.assetUploadsStorage]:
+            storageResources.dynamo.assetUploadsStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.assetVersionsStorage]:
+            storageResources.dynamo.assetVersionsStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.assetFileVersionsStorage]:
+            storageResources.dynamo.assetFileVersionsStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.assetFileVersionHistoryStorage]:
+            storageResources.dynamo.assetFileVersionHistoryStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.assetHistoryStorage]:
+            storageResources.dynamo.assetHistoryStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.syncTrackingOutboundStorage]:
+            storageResources.dynamo.syncTrackingOutboundStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.assetFileMetadataVersionsStorage]:
+            storageResources.dynamo.assetFileMetadataVersionsStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.assetFileMetadataStorage]:
+            storageResources.dynamo.assetFileMetadataStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.authEntitiesStorage]:
+            storageResources.dynamo.authEntitiesStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.commentStorage]:
+            storageResources.dynamo.commentStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.constraintsStorage]:
+            storageResources.dynamo.constraintsStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.databaseStorage]:
+            storageResources.dynamo.databaseStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.metadataSchemaStorageV2]:
+            storageResources.dynamo.metadataSchemaStorageTableV2.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.databaseMetadataStorage]:
+            storageResources.dynamo.databaseMetadataStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.fileAttributeStorage]:
+            storageResources.dynamo.fileAttributeStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.pipelineStorage]:
+            storageResources.dynamo.pipelineStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.rolesStorage]:
+            storageResources.dynamo.rolesStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.s3AssetBucketsStorage]:
+            storageResources.dynamo.s3AssetBucketsStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.subscriptionsStorage]:
+            storageResources.dynamo.subscriptionsStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.tagStorage]:
+            storageResources.dynamo.tagStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.tagTypeStorage]:
+            storageResources.dynamo.tagTypeStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.userRolesStorage]:
+            storageResources.dynamo.userRolesStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.userStorage]:
+            storageResources.dynamo.userStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.workflowExecutionsStorage]:
+            storageResources.dynamo.workflowExecutionsStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.apiKeyStorage]:
+            storageResources.dynamo.apiKeyStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTables.workflowStorage]:
+            storageResources.dynamo.workflowStorageTable.tableName,
+        [RESOURCE_PARAM_KEYS.s3Buckets.assetAuxiliary]:
+            storageResources.s3.assetAuxiliaryBucket.bucketName,
+        [RESOURCE_PARAM_KEYS.s3Buckets.artefacts]: storageResources.s3.artefactsBucket.bucketName,
+        [RESOURCE_PARAM_KEYS.cloudwatchLogGroups.auditAuthentication]:
+            storageResources.cloudWatchAuditLogGroups.authentication.logGroupName,
+        [RESOURCE_PARAM_KEYS.cloudwatchLogGroups.auditAuthorization]:
+            storageResources.cloudWatchAuditLogGroups.authorization.logGroupName,
+        [RESOURCE_PARAM_KEYS.cloudwatchLogGroups.auditFileUpload]:
+            storageResources.cloudWatchAuditLogGroups.fileUpload.logGroupName,
+        [RESOURCE_PARAM_KEYS.cloudwatchLogGroups.auditFileDownload]:
+            storageResources.cloudWatchAuditLogGroups.fileDownload.logGroupName,
+        [RESOURCE_PARAM_KEYS.cloudwatchLogGroups.auditFileDownloadStreamed]:
+            storageResources.cloudWatchAuditLogGroups.fileDownloadStreamed.logGroupName,
+        [RESOURCE_PARAM_KEYS.cloudwatchLogGroups.auditAuthOther]:
+            storageResources.cloudWatchAuditLogGroups.authOther.logGroupName,
+        [RESOURCE_PARAM_KEYS.cloudwatchLogGroups.auditAuthChanges]:
+            storageResources.cloudWatchAuditLogGroups.authChanges.logGroupName,
+        [RESOURCE_PARAM_KEYS.cloudwatchLogGroups.auditActions]:
+            storageResources.cloudWatchAuditLogGroups.actions.logGroupName,
+        [RESOURCE_PARAM_KEYS.cloudwatchLogGroups.auditErrors]:
+            storageResources.cloudWatchAuditLogGroups.errors.logGroupName,
+        // Deprecated tables — published for data-migration tooling only
+        [RESOURCE_PARAM_KEYS.dynamoTablesLegacy.assetVersionsStorageV1]:
+            assetVersionsStorageTableV1.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTablesLegacy.assetFileVersionsStorageV1]:
+            assetFileVersionsStorageTableV1.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTablesLegacy.assetLinksStorage]:
+            assetLinksStorageTableDeprecated.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTablesLegacy.metadataStorage]:
+            metadataStorageTableLegacy.tableName,
+        [RESOURCE_PARAM_KEYS.dynamoTablesLegacy.metadataSchemaStorage]:
+            metadataSchemaStorageTableLegacy.tableName,
+    };
+    Object.entries(resourceNameParamValues).forEach(([paramKey, value]) => {
+        resourceNameRegistry.register({ paramKey, value });
+    });
 
     // Add Nag suppressions for SQS queues
     NagSuppressions.addResourceSuppressions(

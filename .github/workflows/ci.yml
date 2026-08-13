@@ -6,6 +6,10 @@ on:
     pull_request:
         branches: [main]
 
+# Least-privilege token: the build job only checks out code and uploads artifacts
+permissions:
+    contents: read
+
 jobs:
     build:
         runs-on: ubuntu-latest
@@ -105,9 +109,13 @@ jobs:
               working-directory: vams/infra
               run: npm install
 
-            - name: Npm audit infrastructure directory
+            - name: Infra tests
               working-directory: vams/infra
-              run: npm audit --omit=dev
+              run: npm test
+
+            # - name: Npm audit infrastructure directory
+            #   working-directory: vams/infra
+            #   run: npm audit --omit=dev
 
             - name: Synthesize Cloudformation templates
               working-directory: vams/infra

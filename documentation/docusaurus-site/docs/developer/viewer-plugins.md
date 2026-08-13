@@ -1,6 +1,6 @@
 # Viewer Plugin Development
 
-This guide covers the VAMS Visualizer Plugin System, a modular architecture for file viewers that supports 17 viewer plugins for 3D models, point clouds, media, documents, and data formats.
+This guide covers the VAMS Visualizer Plugin System, a modular architecture for file viewers that supports viewer plugins for 3D models, point clouds, media, documents, and data formats.
 
 ## Architecture Overview
 
@@ -37,7 +37,7 @@ graph TD
 
 ## Current Viewers
 
-VAMS ships with 17 viewer plugins across five categories: 3D, Media, Document, Data, and Preview.
+VAMS ships with viewer plugins across five categories: 3D, Media, Document, Data, and Preview.
 
 For the complete list of all viewers, supported extensions, priority resolution, and extension-to-viewer mapping, see [File Viewers](../concepts/viewers.md).
 
@@ -300,17 +300,14 @@ Viewer plugins can be restricted based on deployment feature flags using the `fe
 
 During plugin registration, the PluginRegistry checks each plugin's `featuresEnabledRestriction` against the application's enabled features (loaded from `/api/secure-config`). Plugins with unmet feature requirements are silently excluded.
 
-### Example: CesiumJS Viewer
+### Example: Needle USD Viewer
 
-The CesiumJS viewer requires the `ALLOWUNSAFEEVAL` feature flag because CesiumJS uses dynamic code execution for WebGL shader compilation:
+The Needle USD viewer requires the `ALLOWUNSAFEEVAL` feature flag because its WASM loader uses dynamic code execution:
 
 ```json
 {
-    "id": "cesium-viewer",
-    "featuresEnabledRestriction": ["ALLOWUNSAFEEVAL"],
-    "customParameters": {
-        "cesiumIonToken": ""
-    }
+    "id": "needletools-usd-viewer",
+    "featuresEnabledRestriction": ["ALLOWUNSAFEEVAL"]
 }
 ```
 
@@ -318,11 +315,11 @@ To enable this viewer, set `app.webUi.allowUnsafeEvalFeatures` to `true` in the 
 
 ### Available Feature Flags
 
-| Flag               | Effect on Viewers                                                             |
-| ------------------ | ----------------------------------------------------------------------------- |
-| `ALLOWUNSAFEEVAL`  | Enables CesiumJS and Needle USD viewers (require `unsafe-eval` CSP directive) |
-| `LOCATIONSERVICES` | Can be used to gate geospatial viewers                                        |
-| `MIRIS_STREAMING`  | Enables the Miris stream viewer (`miris-stream-viewer`) for `.mrx` manifest files |
+| Flag               | Effect on Viewers                                                                      |
+| ------------------ | -------------------------------------------------------------------------------------- |
+| `ALLOWUNSAFEEVAL`  | Enables Needle USD and SuperSplat Editor viewers (require `unsafe-eval` CSP directive) |
+| `LOCATIONSERVICES` | Can be used to gate geospatial viewers                                                 |
+| `MIRIS_STREAMING`  | Enables the Miris stream viewer (`miris-stream-viewer`) for `.mrx` manifest files      |
 | `MIRIS_UPLOAD`     | Enables the Miris upload/USD viewer (`miris-upload-viewer`) for USD files — streams via an existing `.mrx` or offers a one-click upload |
 
 ### Multiple Requirements

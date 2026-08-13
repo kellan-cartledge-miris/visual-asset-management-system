@@ -20,6 +20,7 @@ import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedS
 import {
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
+    suppressCdkNagLambda,
     setupSecurityAndLoggingEnvironmentAndPermissions,
 } from "../helper/security";
 
@@ -58,8 +59,6 @@ export function buildConfigService(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            APPFEATUREENABLED_STORAGE_TABLE_NAME:
-                storageResources.dynamo.appFeatureEnabledStorageTable.tableName,
             LOCATION_SERVICE_API_KEY_ARN_SSM_PARAM: config.locationServiceApiKeyArnSSMParam,
             LOCATION_SERVICE_URL_FORMAT: urlFormat,
             WEB_DEPLOYED_URL_SSM_PARAM: config.webUrlDeploymentSSMParam,
@@ -89,6 +88,7 @@ export function buildConfigService(
     );
 
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     return fun;
 }

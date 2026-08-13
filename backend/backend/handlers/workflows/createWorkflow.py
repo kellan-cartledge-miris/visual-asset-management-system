@@ -6,6 +6,7 @@ import boto3
 import botocore
 from botocore.exceptions import ClientError
 from botocore.config import Config
+from boto3.dynamodb.conditions import Attr
 import json
 import datetime
 import uuid
@@ -13,6 +14,7 @@ import random
 import string
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from common.resourceNames import get_table_name, ResourceKeys
 from common.stepfunctions_builder import (
     create_lambda_task_state,
     create_fail_state,
@@ -22,6 +24,14 @@ from common.stepfunctions_builder import (
     create_state_machine,
     update_state_machine,
     get_task_builder
+)
+from common.s3PathPatterns import (
+    PIPELINES_PREFIX,
+    AUXILIARY_PREVIEW_PREFIX,
+    PIPELINE_OUTPUT_PREFIX,
+    PIPELINE_OUTPUT_FILES_PREFIX,
+    PIPELINE_OUTPUT_PREVIEWS_PREFIX,
+    PIPELINE_OUTPUT_METADATA_PREFIX,
 )
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
@@ -55,14 +65,18 @@ sf_client = boto3.client('stepfunctions', config=retry_config)
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 
 try:
-    workflow_Database = os.environ["WORKFLOW_STORAGE_TABLE_NAME"]
+    workflow_Database = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE)
     stack_name = os.environ["VAMS_STACK_NAME"]
     process_workflow_output_function = os.environ['PROCESS_WORKFLOW_OUTPUT_LAMBDA_FUNCTION_NAME']
     region = os.environ['AWS_REGION']
     role = os.environ['LAMBDA_ROLE_ARN']
     logGroupArn = os.environ['LOG_GROUP_ARN']
+    # Deployment AWS partition for the Step Functions service-integration ARNs embedded in the
+    # generated ASL (arn:{partition}:states:::...). Defaults to "aws" (commercial); GovCloud/
+    # China/ISO inject the matching partition so the ASL is valid there.
+    aws_partition = os.environ.get('AWS_PARTITION', 'aws') or 'aws'
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
 
@@ -101,6 +115,50 @@ def get_existing_workflow(database_id, workflow_id):
     except Exception as e:
         logger.exception(f"Error checking existing workflow for {workflow_id}: {e}")
         raise VAMSGeneralErrorResponse("Error checking workflow existence")
+
+
+def find_conflicting_database(database_id, workflow_id):
+    """Find an active workflow with the same workflowId owned by a different database.
+
+    Workflow IDs must be unique across all databases (including GLOBAL) because
+    downstream records reference a workflow only by its workflowId, without the
+    owning databaseId. Soft-deleted records (databaseId ending in '#deleted') and
+    the record being created/updated (same databaseId) are not treated as conflicts.
+
+    Args:
+        database_id: The databaseId of the incoming request.
+        workflow_id: The workflowId being created or updated.
+
+    Returns:
+        The conflicting databaseId string, or None if the workflowId is available.
+
+    Raises:
+        VAMSGeneralErrorResponse: On database errors.
+    """
+    try:
+        table = dynamodb.Table(workflow_Database)
+        scan_kwargs = {'FilterExpression': Attr('workflowId').eq(workflow_id)}
+        while True:
+            response = table.scan(**scan_kwargs)
+            for item in response.get('Items', []):
+                existing_database_id = item.get('databaseId', '')
+                # Ignore soft-deleted records - their IDs are considered free
+                if '#deleted' in existing_database_id:
+                    continue
+                # The record being created/updated is not a conflict with itself
+                if existing_database_id == database_id:
+                    continue
+                return existing_database_id
+            if 'LastEvaluatedKey' not in response:
+                break
+            scan_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+        return None
+    except ClientError as e:
+        logger.exception(f"Error checking workflowId uniqueness for {workflow_id}: {e}")
+        raise VAMSGeneralErrorResponse("Error checking workflow uniqueness")
+    except Exception as e:
+        logger.exception(f"Error checking workflowId uniqueness for {workflow_id}: {e}")
+        raise VAMSGeneralErrorResponse("Error checking workflow uniqueness")
 
 
 def verify_state_machine_exists(workflow_arn):
@@ -161,17 +219,19 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
     first_pipeline_name = pipelines[0]['name']
     first_job_name = job_names[0]
 
-    global_output_s3_asset_files_uri = f"States.Format('s3://{{}}/pipelines/{first_pipeline_name}/{first_job_name}/output/{{}}/files/', $.bucketAsset, $$.Execution.Name)"
-    global_output_s3_asset_preview_uri = f"States.Format('s3://{{}}/pipelines/{first_pipeline_name}/{first_job_name}/output/{{}}/previews/', $.bucketAsset, $$.Execution.Name)"
-    global_output_s3_asset_metadata_uri = f"States.Format('s3://{{}}/pipelines/{first_pipeline_name}/{first_job_name}/output/{{}}/metadata/', $.bucketAsset, $$.Execution.Name)"
+    global_output_s3_asset_files_uri = f"States.Format('s3://{{}}/{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_FILES_PREFIX}', $.bucketAsset, $$.Execution.Name)"
+    global_output_s3_asset_preview_uri = f"States.Format('s3://{{}}/{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_PREVIEWS_PREFIX}', $.bucketAsset, $$.Execution.Name)"
+    global_output_s3_asset_metadata_uri = f"States.Format('s3://{{}}/{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_METADATA_PREFIX}', $.bucketAsset, $$.Execution.Name)"
 
     # Build list of pipeline states
     states = []
 
     for i, pipeline in enumerate(pipelines):
-        assetAuxiliaryAssetSubFolderName = "pipelines"
+        # Auxiliary-bucket subfolder: previewFile pipelines write to the singular
+        # 'preview/' subfolder; standard pipelines write to 'pipelines/'.
+        assetAuxiliaryAssetSubFolderName = PIPELINES_PREFIX.rstrip('/')
         if pipeline.get('pipelineType', 'standardFile') == 'previewFile':
-            assetAuxiliaryAssetSubFolderName = "preview"
+            assetAuxiliaryAssetSubFolderName = AUXILIARY_PREVIEW_PREFIX.rstrip('/')
 
         inputOutput_s3_assetAuxiliary_files_uri = f"States.Format('s3://{{}}/{{}}/{assetAuxiliaryAssetSubFolderName}/{pipeline['name']}/', $.bucketAssetAuxiliary, $.inputAssetFileKey)"
 
@@ -195,8 +255,8 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
             "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_uri,
         }
 
-        # Get the appropriate builder
-        builder = get_task_builder(exec_type)
+        # Get the appropriate builder (partition-aware service-integration ARNs)
+        builder = get_task_builder(exec_type, partition=aws_partition)
 
         # Build payload using the builder (shared payload construction)
         payload = builder.build_payload(pipeline, path_context)
@@ -237,9 +297,9 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
             "workflowDatabaseId.$": "$.workflowDatabaseId",
             "workflowId.$": "$.workflowId",
             "assetLocationKey.$": "$.inputAssetLocationKey",
-            "filesPathKey.$": f"States.Format('pipelines/{first_pipeline_name}/{first_job_name}/output/{{}}/files/', $$.Execution.Name)",
-            "metadataPathKey.$": f"States.Format('pipelines/{first_pipeline_name}/{first_job_name}/output/{{}}/metadata/', $$.Execution.Name)",
-            "previewPathKey.$": f"States.Format('pipelines/{first_pipeline_name}/{first_job_name}/output/{{}}/previews/', $$.Execution.Name)",
+            "filesPathKey.$": f"States.Format('{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_FILES_PREFIX}', $$.Execution.Name)",
+            "metadataPathKey.$": f"States.Format('{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_METADATA_PREFIX}', $$.Execution.Name)",
+            "previewPathKey.$": f"States.Format('{PIPELINES_PREFIX}{first_pipeline_name}/{first_job_name}{PIPELINE_OUTPUT_PREFIX}{{}}{PIPELINE_OUTPUT_PREVIEWS_PREFIX}', $$.Execution.Name)",
             "description": f'Output from {last_job_name}',
             "executionId.$": "$$.Execution.Name",
             "pipeline": last_pipeline['name'],
@@ -267,7 +327,8 @@ def generate_workflow_asl(pipelines, databaseId, workflowId):
         payload=process_output_payload,
         result_path=f"$.{process_output_state_id}.output",
         retry_config=po_retry_config,
-        catch_config=po_catch_config
+        catch_config=po_catch_config,
+        partition=aws_partition
     )
 
     # Add the single process_output state to the states list
@@ -435,7 +496,7 @@ def create_workflow(payload, claims_and_roles):
         dtNow = datetime.datetime.utcnow().strftime('%B %d %Y - %H:%M:%S')
 
         # Get username from claims_and_roles tokens array
-        username = claims_and_roles["tokens"][0] if len(claims_and_roles.get("tokens", [])) > 0 else "system"
+        username = claims_and_roles["tokens"][0] if len(claims_and_roles.get("tokens", [])) > 0 else "SYSTEM_USER"
 
         Item = {
             'databaseId': database_id,
@@ -460,7 +521,23 @@ def create_workflow(payload, claims_and_roles):
         else:
             Item['dateCreated'] = json.dumps(dtNow)
 
-        table.put_item(Item=Item)
+        # On create, guard against a concurrent create of the same (databaseId, workflowId)
+        # racing between the uniqueness check and this write. This closes the same-key
+        # clobber window; cross-database workflowId uniqueness (a non-key attribute) is
+        # still enforced by find_conflicting_database above.
+        if is_update:
+            table.put_item(Item=Item)
+        else:
+            try:
+                table.put_item(
+                    Item=Item,
+                    ConditionExpression='attribute_not_exists(databaseId) AND attribute_not_exists(workflowId)'
+                )
+            except ClientError as e:
+                if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+                    logger.warning(f"Concurrent create detected for workflowId {workflow_id} in database {database_id}")
+                    raise VAMSGeneralErrorResponse("Workflow ID is already in use. Choose a different ID.")
+                raise
 
         action = "updated" if is_update else "created"
         logger.info(f"Workflow {action} by {username}: {workflow_id}")
@@ -568,6 +645,20 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
         if not workflow_allowed:
             return authorization_error()
+
+        # Enforce cross-database uniqueness of the workflowId
+        conflicting_database_id = find_conflicting_database(body['databaseId'], body['workflowId'])
+        if conflicting_database_id:
+            logger.info(
+                f"workflowId '{body['workflowId']}' already in use by database '{conflicting_database_id}'"
+            )
+            return validation_error(
+                body={
+                    'message': "Workflow ID is already in use by another database. Workflow IDs must be "
+                               "unique across all databases (including GLOBAL). Choose a different ID."
+                },
+                event=event
+            )
 
         result = create_workflow(body, claims_and_roles)
         return success(body=json.loads(result))

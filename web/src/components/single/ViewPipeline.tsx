@@ -3,7 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import Alert from "@cloudscape-design/components/alert";
 import BreadcrumbGroup from "@cloudscape-design/components/breadcrumb-group";
+import Button from "@cloudscape-design/components/button";
 import Grid from "@cloudscape-design/components/grid";
 import Input from "@cloudscape-design/components/input";
 import SpaceBetween from "@cloudscape-design/components/space-between";
@@ -25,14 +27,18 @@ export default function ViewPipeline() {
     const [outputType, setOutputType] = useState("");
     const [pipelineType, setPipelineType] = useState("standardFile");
     const [pipelineExecutionType, setPipelineExecutionType] = useState("Lambda");
-    const [resourceDisplay, setResourceDisplay] = useState(null);
+    const [resourceDisplay, setResourceDisplay] = useState<any>(null);
+    const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
         const getData = async () => {
-            const items = await fetchAllPipelines();
+            setError(null);
+            const items: any = await fetchAllPipelines();
             if (items !== false && Array.isArray(items)) {
                 setReload(false);
-                const currentItem = items.find(({ pipelineId }) => pipelineId === pipelineName);
+                const currentItem: any = items.find(
+                    ({ pipelineId }: any) => pipelineId === pipelineName
+                );
                 setDatabaseId(currentItem?.databaseId);
                 setPipelineDescription(currentItem?.description);
                 setAssetType(currentItem?.assetType);
@@ -50,6 +56,14 @@ export default function ViewPipeline() {
                         setResourceDisplay(null);
                     }
                 }
+            } else {
+                setReload(false);
+                // The service layer returns the API error message string on failure.
+                setError(
+                    typeof items === "string" && items.trim() !== ""
+                        ? items
+                        : "Failed to load pipeline. Please try refreshing."
+                );
             }
         };
         if (reload) {
@@ -59,24 +73,34 @@ export default function ViewPipeline() {
 
     return (
         <>
-            <Grid padding={{ top: "s", horizontal: "l" }}>
+            <Grid {...({ padding: { top: "s", horizontal: "l" } } as any)}>
                 <SpaceBetween direction="vertical" size="xs">
                     <BreadcrumbGroup
                         items={[
                             { text: Synonyms.Databases, href: "#/databases/" },
                             { text: databaseId, href: "#/databases/" + databaseId },
                             { text: "Pipelines", href: "#/pipelines/" },
-                            { text: pipelineName, href: "#/pipelines/" + pipelineName },
+                            { text: pipelineName as string, href: "#/pipelines/" + pipelineName },
                         ]}
                         ariaLabel="Breadcrumbs"
                     />
                     <h1>{pipelineName}</h1>
+                    {error && (
+                        <Alert
+                            type="error"
+                            dismissible
+                            onDismiss={() => setError(null)}
+                            action={<Button onClick={() => setReload(true)}>Retry</Button>}
+                        >
+                            {error}
+                        </Alert>
+                    )}
                     <Grid gridDefinition={[{ colspan: 4 }, { colspan: 8 }]}>
                         <TextContent>Pipeline Name</TextContent>
                         <Input
                             placeholder="Pipeline Name"
                             name="pipelineId"
-                            value={pipelineName}
+                            value={pipelineName as string}
                             disabled
                         />
                         <TextContent>{Synonyms.Database} Name</TextContent>

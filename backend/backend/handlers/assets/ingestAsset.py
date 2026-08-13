@@ -34,13 +34,14 @@ logger = safeLogger(service_name="IngestAsset")
 
 # Load environment variables
 try:
-    db_table_name = os.environ["DATABASE_STORAGE_TABLE_NAME"]
-    asset_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
+    from common.resourceNames import ResourceKeys, get_table_name
+    db_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+    asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
     # Lambda functions for cross-calls
     create_asset_lambda = os.environ["CREATE_ASSET_LAMBDA_FUNCTION_NAME"]
     file_upload_lambda = os.environ["FILE_UPLOAD_LAMBDA_FUNCTION_NAME"]
 except Exception as e:
-    logger.exception(f"Failed loading environment variables: {e}")
+    logger.exception(f"Failed loading environment variables or resolving resource names: {e}")
     raise e
 
 #######################
@@ -320,12 +321,16 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         }
 
         event_auth = event['requestContext']['authorizer']
-        
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not (casbin_enforcer.enforce(asset, "PUT") and casbin_enforcer.enforceAPI(event)):
-                return authorization_error()
-        
+
+        # Fail closed: with no authenticated identity no authorization can be
+        # evaluated, so deny rather than fall through to the mutation.
+        if len(claims_and_roles["tokens"]) == 0:
+            return authorization_error()
+
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not (casbin_enforcer.enforce(asset, "PUT") and casbin_enforcer.enforceAPI(event)):
+            return authorization_error()
+
         # Process request based on stage
         if is_complete_stage:
             # Stage 2 - Complete upload

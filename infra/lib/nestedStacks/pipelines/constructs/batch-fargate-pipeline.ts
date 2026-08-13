@@ -6,6 +6,7 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as batch from "aws-cdk-lib/aws-batch";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as ecs from "aws-cdk-lib/aws-ecs";
+import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as cdk from "aws-cdk-lib";
 import * as Config from "../../../../config/config";
 import { Construct } from "constructs";
@@ -50,6 +51,12 @@ export interface BatchFargatePipelineConstructProps extends cdk.StackProps {
      * Graviton; must be paired with a Docker image built for LINUX_ARM64.
      */
     fargateCpuArchitecture?: ecs.CpuArchitecture;
+    /**
+     * Optional ECR repository to use instead of local Docker build.
+     * When provided, imageAssetPath is ignored and the image is
+     * pulled from this ECR repository (tagged "latest").
+     */
+    ecrRepository?: ecr.IRepository;
 }
 
 const defaultProps: Partial<BatchFargatePipelineConstructProps> = {
@@ -80,16 +87,16 @@ export class BatchFargatePipelineConstruct extends Construct {
             }
         );
 
-        // Docker container image. Default x86_64 keeps the toolchain identical to
-        // the historical shared-pipeline behavior; pipelines that want Graviton
-        // pass `dockerPlatform: LINUX_ARM64` (and the matching CPU architecture below).
-        const containerImage = ecs.AssetImage.fromAsset(
-            path.join(__dirname, props.imageAssetPath),
-            {
-                file: props.dockerfileName,
-                platform: props.dockerPlatform ?? cdk.aws_ecr_assets.Platform.LINUX_AMD64,
-            }
-        );
+        // Container image: use ECR repository if provided, otherwise build locally.
+        // For the local build, default x86_64 keeps the toolchain identical to the
+        // historical shared-pipeline behavior; pipelines that want Graviton pass
+        // `dockerPlatform: LINUX_ARM64` (and the matching CPU architecture below).
+        const containerImage = props.ecrRepository
+            ? ecs.ContainerImage.fromEcrRepository(props.ecrRepository, "latest")
+            : ecs.AssetImage.fromAsset(path.join(__dirname, props.imageAssetPath), {
+                  file: props.dockerfileName,
+                  platform: props.dockerPlatform ?? cdk.aws_ecr_assets.Platform.LINUX_AMD64,
+              });
 
         const batchJobName =
             props.batchJobDefinitionName +
@@ -108,8 +115,7 @@ export class BatchFargatePipelineConstruct extends Construct {
                 memory: cdk.Size.mebibytes(props.memoryMiB ?? 65536),
                 ephemeralStorageSize: cdk.Size.gibibytes(props.ephemeralStorageGiB ?? 60),
                 image: containerImage,
-                fargateCpuArchitecture:
-                    props.fargateCpuArchitecture ?? ecs.CpuArchitecture.X86_64,
+                fargateCpuArchitecture: props.fargateCpuArchitecture ?? ecs.CpuArchitecture.X86_64,
                 environment: {
                     AWS_REGION: region,
                     AWS_ACCOUNT: account,

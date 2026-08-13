@@ -7,8 +7,11 @@ import json
 import datetime
 import random
 import string
+from boto3.dynamodb.conditions import Attr
+from botocore.exceptions import ClientError
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from common.resourceNames import get_table_name, get_bucket_name, ResourceKeys
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
@@ -33,24 +36,25 @@ lambda_client = boto3.client('lambda')
 
 # Load environment variables
 try:
-    db_table_name = os.environ.get("DATABASE_STORAGE_TABLE_NAME")
-    pipeline_table_name = os.environ.get("PIPELINE_STORAGE_TABLE_NAME")
-    workflow_table_name = os.environ.get("WORKFLOW_STORAGE_TABLE_NAME")
-    enable_pipeline_function_name = os.environ.get("ENABLE_PIPELINE_FUNCTION_NAME")
-    enable_pipeline_function_arn = os.environ.get("ENABLE_PIPELINE_FUNCTION_ARN")
-    lambda_role_to_attach = os.environ.get("ROLE_TO_ATTACH_TO_LAMBDA_PIPELINE")
-    lambda_pipeline_sample_function_bucket = os.environ.get("LAMBDA_PIPELINE_SAMPLE_FUNCTION_BUCKET")
-    lambda_pipeline_sample_function_key = os.environ.get("LAMBDA_PIPELINE_SAMPLE_FUNCTION_KEY")
-    subnet_ids_string = os.environ.get("SUBNET_IDS", "")
-    security_group_ids_string = os.environ.get("SECURITYGROUP_IDS", "")
-    lambda_python_version = os.environ.get("LAMBDA_PYTHON_VERSION")
-
-    if not all([pipeline_table_name, db_table_name]):
-        logger.exception("Failed loading environment variables")
-        raise Exception("Failed Loading Environment Variables")
+    db_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)
+    pipeline_table_name = get_table_name(ResourceKeys.PIPELINE_STORAGE_TABLE)
+    workflow_table_name = get_table_name(ResourceKeys.WORKFLOW_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading required environment variables")
     raise e
+
+enable_pipeline_function_name = os.environ.get("ENABLE_PIPELINE_FUNCTION_NAME")
+enable_pipeline_function_arn = os.environ.get("ENABLE_PIPELINE_FUNCTION_ARN")
+lambda_role_to_attach = os.environ.get("ROLE_TO_ATTACH_TO_LAMBDA_PIPELINE")
+lambda_pipeline_sample_function_key = os.environ.get("LAMBDA_PIPELINE_SAMPLE_FUNCTION_KEY")
+subnet_ids_string = os.environ.get("SUBNET_IDS", "")
+security_group_ids_string = os.environ.get("SECURITYGROUP_IDS", "")
+lambda_python_version = os.environ.get("LAMBDA_PYTHON_VERSION")
+
+try:
+    lambda_pipeline_sample_function_bucket = get_bucket_name(ResourceKeys.ARTEFACTS_BUCKET)
+except:
+    lambda_pipeline_sample_function_bucket = None
 
 # Parse subnet and security group IDs
 subnet_ids = subnet_ids_string.split(',') if subnet_ids_string else []
@@ -78,6 +82,40 @@ def validate_database_exists(database_id):
         db_response = db_table.get_item(Key={'databaseId': database_id})
         if 'Item' not in db_response:
             raise ValueError("Database provided does not exist")
+
+
+def find_conflicting_database(table, pipeline_id, requesting_database_id):
+    """Find an active pipeline with the same pipelineId owned by a different database.
+
+    Pipeline IDs must be unique across all databases (including GLOBAL) because
+    downstream records reference a pipeline only by its pipelineId, without the
+    owning databaseId. Soft-deleted records (databaseId ending in '#deleted') and
+    the record being created/updated (same databaseId) are not treated as conflicts.
+
+    Args:
+        table: The pipeline DynamoDB table resource.
+        pipeline_id: The pipelineId being created or updated.
+        requesting_database_id: The databaseId of the incoming request.
+
+    Returns:
+        The conflicting databaseId string, or None if the pipelineId is available.
+    """
+    scan_kwargs = {'FilterExpression': Attr('pipelineId').eq(pipeline_id)}
+    while True:
+        response = table.scan(**scan_kwargs)
+        for item in response.get('Items', []):
+            existing_database_id = item.get('databaseId', '')
+            # Ignore soft-deleted records - their IDs are considered free
+            if '#deleted' in existing_database_id:
+                continue
+            # The record being created/updated is not a conflict with itself
+            if existing_database_id == requesting_database_id:
+                continue
+            return existing_database_id
+        if 'LastEvaluatedKey' not in response:
+            break
+        scan_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+    return None
 
 
 def create_lambda_pipeline(lambda_name):
@@ -206,8 +244,29 @@ def upload_pipeline(request_model, claims_and_roles, event):
     except ValueError as e:
         return validation_error(body={'message': str(e)}, event=event)
 
-    # Prevent changing pipelineExecutionType on existing pipelines
+    # Enforce cross-database uniqueness of the pipelineId
     table = dynamodb.Table(pipeline_table_name)
+    try:
+        conflicting_database_id = find_conflicting_database(
+            table, request_model.pipelineId, request_model.databaseId
+        )
+    except Exception as e:
+        logger.exception(f"Error checking pipelineId uniqueness: {e}")
+        return internal_error(event=event)
+
+    if conflicting_database_id:
+        logger.info(
+            f"pipelineId '{request_model.pipelineId}' already in use by database '{conflicting_database_id}'"
+        )
+        return validation_error(
+            body={
+                'message': "Pipeline ID is already in use by another database. Pipeline IDs must be "
+                           "unique across all databases (including GLOBAL). Choose a different ID."
+            },
+            event=event
+        )
+
+    # Prevent changing pipelineExecutionType on existing pipelines
     existing_item = table.get_item(
         Key={
             'databaseId': request_model.databaseId,
@@ -260,15 +319,38 @@ def upload_pipeline(request_model, claims_and_roles, event):
     # table already initialized above for the existence check
     keys_map, values_map, expr = to_update_expr(item)
 
-    table.update_item(
-        Key={
+    update_kwargs = {
+        'Key': {
             'databaseId': request_model.databaseId,
             'pipelineId': request_model.pipelineId,
         },
-        UpdateExpression=expr,
-        ExpressionAttributeNames=keys_map,
-        ExpressionAttributeValues=values_map,
-    )
+        'UpdateExpression': expr,
+        'ExpressionAttributeNames': keys_map,
+        'ExpressionAttributeValues': values_map,
+    }
+
+    # On create (no existing item), guard against a concurrent create of the same
+    # (databaseId, pipelineId) racing between the existence check and this write, closing
+    # the same-key clobber window. Cross-database pipelineId uniqueness (a non-key
+    # attribute) is still enforced by find_conflicting_database above.
+    if not existing_item:
+        update_kwargs['ConditionExpression'] = (
+            'attribute_not_exists(databaseId) AND attribute_not_exists(pipelineId)'
+        )
+
+    try:
+        table.update_item(**update_kwargs)
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+            logger.warning(
+                f"Concurrent create detected for pipelineId {request_model.pipelineId} "
+                f"in database {request_model.databaseId}"
+            )
+            return validation_error(
+                body={'message': "Pipeline ID is already in use. Choose a different ID."},
+                event=event
+            )
+        raise
 
     if request_model.updateAssociatedWorkflows:
         body_dict = request_model.dict()

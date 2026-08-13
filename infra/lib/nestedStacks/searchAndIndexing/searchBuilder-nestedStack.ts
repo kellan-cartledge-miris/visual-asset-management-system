@@ -17,7 +17,7 @@ import {
     buildAssetIndexingFunction,
     buildReindexerFunction,
 } from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
-import { attachFunctionToApi } from "../apiLambda/apiBuilder-nestedStack";
+import { RouteRegistry, attachFunctionToApi } from "../apiLambda/apiRouteRegistry";
 import { NestedStack } from "aws-cdk-lib";
 import { Construct } from "constructs";
 import * as apigwv2 from "aws-cdk-lib/aws-apigatewayv2";
@@ -25,15 +25,19 @@ import * as cdk from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import * as Config from "../../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
+import * as ssm from "aws-cdk-lib/aws-ssm";
 import { Service } from "../../helper/service-helper";
 import * as cr from "aws-cdk-lib/custom-resources";
+import { RESOURCE_PARAM_KEYS } from "../../../common/resourceParamKeys";
 
 export class SearchBuilderNestedStack extends NestedStack {
+    public reindexerFunctionName = "";
+
     constructor(
         parent: Construct,
         name: string,
         config: Config.Config,
-        api: apigwv2.HttpApi,
+        registry: RouteRegistry,
         storageResources: storageResources,
         lambdaCommonBaseLayer: LayerVersion,
         vpc: ec2.IVpc,
@@ -41,19 +45,27 @@ export class SearchBuilderNestedStack extends NestedStack {
     ) {
         super(parent, name);
 
-        searchBuilder(this, config, api, storageResources, lambdaCommonBaseLayer, vpc, subnets);
+        this.reindexerFunctionName = searchBuilder(
+            this,
+            config,
+            registry,
+            storageResources,
+            lambdaCommonBaseLayer,
+            vpc,
+            subnets
+        );
     }
 }
 
 export function searchBuilder(
     scope: Construct,
     config: Config.Config,
-    api: apigwv2.HttpApi,
+    registry: RouteRegistry,
     storageResources: storageResources,
     lambdaCommonBaseLayer: LayerVersion,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[]
-) {
+): string {
     const searchFun = buildSearchFunction(
         scope,
         lambdaCommonBaseLayer,
@@ -66,19 +78,19 @@ export function searchBuilder(
     attachFunctionToApi(scope, searchFun, {
         routePath: "/search",
         method: apigwv2.HttpMethod.POST,
-        api: api,
+        registry: registry,
     });
     attachFunctionToApi(scope, searchFun, {
         routePath: "/search",
         method: apigwv2.HttpMethod.GET,
-        api: api,
+        registry: registry,
     });
 
     // Add simple search endpoint
     attachFunctionToApi(scope, searchFun, {
         routePath: "/search/simple",
         method: apigwv2.HttpMethod.POST,
-        api: api,
+        registry: registry,
     });
 
     let fileIndexingFunction: lambda.Function | undefined = undefined;
@@ -254,6 +266,8 @@ export function searchBuilder(
             ebsVolumeSize: config.app.openSearch.useProvisioned.ebsInstanceNodeSizeGb
                 ? config.app.openSearch.useProvisioned.ebsInstanceNodeSizeGb
                 : undefined,
+            availabilityZoneCount: config.app.openSearch.useProvisioned.availabilityZoneCount,
+            numberOfShards: config.app.openSearch.useProvisioned.numberOfShards,
         });
 
         const osEndpointOutput = new cdk.CfnOutput(
@@ -413,6 +427,16 @@ export function searchBuilder(
         });
     }
 
+    // Publish the reindexer function name for data-migration tooling. Created here
+    // rather than through the resource-name registry because this stack builds after
+    // the ResourceNames stack materializes the registry.
+    if (reindexerFunction) {
+        new ssm.StringParameter(scope, "ResourceNameParamCrOsReindexer", {
+            parameterName: `${config.resourceNamesSSMParamPrefix}/${RESOURCE_PARAM_KEYS.lambdaFunctions.crOsReindexer}`,
+            stringValue: reindexerFunction.functionName,
+        });
+    }
+
     //Setup final index output
     const openSearchIndexAssetSOutput = new cdk.CfnOutput(scope, "OpenSearchIndexAssetsOutput", {
         value: config.openSearchAssetIndexName,
@@ -423,14 +447,6 @@ export function searchBuilder(
         value: config.openSearchFileIndexName,
         description: "The OpenSearch index name for files",
     });
-
-    // Output reindexer function name if it was created
-    if (reindexerFunction) {
-        const reindexerFunctionOutput = new cdk.CfnOutput(scope, "ReindexerFunctionNameOutput", {
-            value: reindexerFunction.functionName,
-            description: "The Lambda function name for the OpenSearch reindexer",
-        });
-    }
 
     //Nag supressions
     NagSuppressions.addResourceSuppressions(
@@ -460,26 +476,51 @@ export function searchBuilder(
         true
     );
 
-    NagSuppressions.addResourceSuppressions(scope, [
-        {
-            id: "AwsSolutions-L1",
-            reason: "Configured as intended.",
-        },
-    ]);
+    NagSuppressions.addResourceSuppressions(
+        scope,
+        [
+            {
+                id: "AwsSolutions-L1",
+                reason: "The non-latest runtime here belongs to the CDK custom-resource provider framework Lambda (cr.Provider / AwsCustomResource) that drives OpenSearch schema deployment and reindexing. VAMS does not author or control this function's runtime version; it is managed by the aws-cdk custom-resources framework.",
+            },
+        ],
+        true
+    );
 
+    // Scope IAM5 suppressions to the specific wildcards VAMS actually creates for the
+    // OpenSearch search/indexing roles (schema-deploy, search, fileIndexer, assetIndexer,
+    // crOsReindexer), rather than a blanket match-all. Each entry names the exact wildcard
+    // action/resource and why it is required, so a new, unrelated wildcard policy in this
+    // stack is still surfaced by CDK Nag.
     NagSuppressions.addResourceSuppressions(
         scope,
         [
             {
                 id: "AwsSolutions-IAM5",
-                reason: "Configured as intended.",
+                reason: "OpenSearch Serverless data-plane access uses the aoss:* action set scoped to the specific VAMS collection ARN. Index-level permissions in AOSS are enforced by the collection data-access policy (not the IAM action), and the schema-deploy resource creates indexes at runtime, so the action is left as aoss:* against the single collection resource.",
+                appliesTo: [{ regex: "/^Action::aoss:\\*$/g" }],
+            },
+            {
+                id: "AwsSolutions-IAM5",
+                reason: "The OpenSearch endpoint/index names are published to and read from SSM Parameter Store under this deployment's parameter prefix; the search/indexing roles read those parameters via a prefix wildcard scoped to the deployment name (parameter/*<config.name>*).",
                 appliesTo: [
-                    {
-                        regex: "/.*$/g",
-                    },
+                    { regex: "/^Action::ssm:\\*$/g" },
+                    { regex: "/^Resource::arn:.*:ssm:.*:parameter\\/.*$/g" },
                 ],
+            },
+            {
+                id: "AwsSolutions-IAM5",
+                reason: "grantReadData/grantReadWriteData on the DynamoDB tables the search/indexing Lambdas read (asset, constraints, etc.) includes the table's secondary indexes via the standard '<table>/index/*' resource wildcard, which is required to query any GSI on the table.",
+                appliesTo: [{ regex: "/^Resource::<.*Table.*\\.Arn>\\/index\\/\\*$/g" }],
+            },
+            {
+                id: "AwsSolutions-IAM5",
+                reason: "The CDK custom-resources provider framework (cr.Provider backing the OpenSearch schema-deploy resource) grants lambda:InvokeFunction on the versioned handler function ARN, which CDK renders with a trailing ':*'. This policy is generated by the aws-cdk framework, not authored by VAMS.",
+                appliesTo: [{ regex: "/^Resource::<.*DeploySchema.*\\.Arn>:\\*$/g" }],
             },
         ],
         true
     );
+
+    return reindexerFunction ? reindexerFunction.functionName : "";
 }

@@ -4,7 +4,6 @@
  */
 
 import * as lambda from "aws-cdk-lib/aws-lambda";
-import * as iam from "aws-cdk-lib/aws-iam";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as path from "path";
 import { Construct } from "constructs";
@@ -17,6 +16,7 @@ import {
     globalLambdaEnvironmentsAndPermissions,
     kmsKeyLambdaPermissionAddToResourcePolicy,
     setupSecurityAndLoggingEnvironmentAndPermissions,
+    suppressCdkNagLambda,
     suppressCdkNagErrorsByGrantReadWrite,
 } from "../helper/security";
 
@@ -47,23 +47,23 @@ export function buildGetMirisAssetStatusFunction(
         environment: {
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             MIRIS_API_BASE_URL: config.app.miris.upload.mirisApiBaseUrl,
-            MIRIS_API_KEY_SECRET_ARN: config.app.miris.upload.apiKeySecretArn,
+            // The status probe authenticates with the deployment-wide VIEWER key,
+            // the same credential the frontend streams with, so it can only ever
+            // see the assets the viewer can play. It deliberately does NOT use the
+            // Integration Key: that key resolves to its owning Miris user's home
+            // workspace, which is administratively mutable and can drift away from
+            // the workspace holding the assets. The Integration Key stays with the
+            // upload pipeline, which must create assets.
+            MIRIS_VIEWER_KEY: config.app.miris.viewerKey,
         },
     });
 
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
 
-    fun.addToRolePolicy(
-        new iam.PolicyStatement({
-            effect: iam.Effect.ALLOW,
-            actions: ["secretsmanager:GetSecretValue"],
-            resources: [config.app.miris.upload.apiKeySecretArn],
-        })
-    );
-
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;

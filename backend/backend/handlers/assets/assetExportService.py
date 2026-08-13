@@ -16,11 +16,15 @@ from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.s3MetadataKeys import VAMS_PRIMARY_TYPE_METADATA_KEY
+from common.s3PathPatterns import PREVIEW_FILE_PATTERN, ALLOWED_PREVIEW_FILE_EXTENSIONS
+from common.apiRoutes import API_ASSET_EXPORT
+from common.dynamoDbMetadataKeys import HIDDEN_FIELD_PREFIX
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, commonHeaders
 from models.assetExport import (
     AssetExportRequestModel,
     AssetExportResponseModel,
@@ -60,18 +64,19 @@ bucket_cache = {}
 
 # Load environment variables
 try:
-    asset_storage_table_name = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    asset_versions_table_name = os.environ["ASSET_VERSIONS_STORAGE_TABLE_NAME"]
-    asset_file_versions_table_name = os.environ["ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME"]
-    asset_file_metadata_table_name = os.environ["ASSET_FILE_METADATA_STORAGE_TABLE_NAME"]
-    file_attribute_table_name = os.environ["FILE_ATTRIBUTE_STORAGE_TABLE_NAME"]
-    asset_links_table_name = os.environ["ASSET_LINKS_STORAGE_TABLE_V2_NAME"]
-    asset_links_metadata_table_name = os.environ["ASSET_LINKS_METADATA_STORAGE_TABLE_NAME"]
-    s3_asset_buckets_table_name = os.environ["S3_ASSET_BUCKETS_STORAGE_TABLE_NAME"]
+    from common.resourceNames import ResourceKeys, get_table_name
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    asset_versions_table_name = get_table_name(ResourceKeys.ASSET_VERSIONS_STORAGE_TABLE)
+    asset_file_versions_table_name = get_table_name(ResourceKeys.ASSET_FILE_VERSIONS_STORAGE_TABLE)
+    asset_file_metadata_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
+    file_attribute_table_name = get_table_name(ResourceKeys.FILE_ATTRIBUTE_STORAGE_TABLE)
+    asset_links_table_name = get_table_name(ResourceKeys.ASSET_LINKS_STORAGE_TABLE_V2)
+    asset_links_metadata_table_name = get_table_name(ResourceKeys.ASSET_LINKS_METADATA_STORAGE_TABLE)
+    s3_asset_buckets_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
     asset_links_function_name = os.environ["ASSET_LINKS_FUNCTION_NAME"]
     presigned_url_timeout = os.environ["PRESIGNED_URL_TIMEOUT_SECONDS"]
 except Exception as e:
-    logger.exception("Failed loading environment variables")
+    logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
 # Initialize DynamoDB tables
@@ -84,7 +89,9 @@ buckets_table = dynamodb.Table(s3_asset_buckets_table_name)
 
 # Constants
 COMPRESSION_THRESHOLD = 102400  # 100KB
-ALLOWED_PREVIEW_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.svg', '.gif']
+ALLOWED_PREVIEW_EXTENSIONS = ALLOWED_PREVIEW_FILE_EXTENSIONS
+# Concurrency cap for parallel per-asset export work. Bounds Lambda memory; not a data cap.
+MAX_PARALLEL_EXPORT_WORKERS = 10
 
 #######################
 # Utility Functions
@@ -187,7 +194,7 @@ def compress_response(response_dict: Dict) -> Dict:
         return {
             'statusCode': 200,
             'headers': {
-                'Content-Type': 'application/json',
+                **commonHeaders(),
                 'Content-Encoding': 'gzip'
             },
             'body': base64.b64encode(compressed).decode('utf-8'),
@@ -196,7 +203,7 @@ def compress_response(response_dict: Dict) -> Dict:
     else:
         return {
             'statusCode': 200,
-            'headers': {'Content-Type': 'application/json'},
+            'headers': commonHeaders(),
             'body': json_str
         }
 
@@ -565,7 +572,7 @@ def list_s3_files(bucket: str, prefix: str) -> List[Dict]:
                     
                     # Get primaryType from metadata
                     metadata = version_info.get('Metadata', {})
-                    primary_type = metadata.get('vams-primarytype', '')
+                    primary_type = metadata.get(VAMS_PRIMARY_TYPE_METADATA_KEY, '')
                     item['primaryType'] = primary_type if primary_type else None
                     
                 except Exception as e:
@@ -624,16 +631,16 @@ def get_asset_link_metadata(assetLinkId: str) -> Dict:
 
 def is_preview_file(file_path: str) -> bool:
     """Determine if a file is a preview file based on its path"""
-    return '.previewFile.' in file_path
+    return PREVIEW_FILE_PATTERN in file_path
 
 def get_base_file_for_preview(preview_file_path: str) -> str:
     """Get the base file path for a preview file"""
-    return preview_file_path.split('.previewFile.')[0]
+    return preview_file_path.split(PREVIEW_FILE_PATTERN)[0]
 
 def is_allowed_preview_extension(file_path: str) -> bool:
     """Check if a preview file has an allowed extension"""
-    if '.previewFile.' in file_path:
-        extension = '.' + file_path.split('.previewFile.')[1]
+    if PREVIEW_FILE_PATTERN in file_path:
+        extension = '.' + file_path.split(PREVIEW_FILE_PATTERN)[1]
         return extension.lower() in ALLOWED_PREVIEW_EXTENSIONS
     return False
 
@@ -747,7 +754,7 @@ def process_asset_batch(
             if request_model.includeAssetMetadata:
                 raw_metadata = get_asset_metadata(asset_info['databaseId'], asset_info['assetId'])
                 for key, value in raw_metadata.items():
-                    if not key.startswith('_'):
+                    if not key.startswith(HIDDEN_FIELD_PREFIX):
                         asset_metadata[key] = {
                             'valueType': 'string',
                             'value': str(value)
@@ -814,7 +821,7 @@ def process_asset_batch(
                     )
                     if raw_file_metadata:
                         for key, value in raw_file_metadata.items():
-                            if not key.startswith('_'):
+                            if not key.startswith(HIDDEN_FIELD_PREFIX):
                                 file_metadata[key] = {
                                     'valueType': 'string',
                                     'value': str(value)
@@ -827,7 +834,7 @@ def process_asset_batch(
                     )
                     if raw_file_attributes:
                         for key, value in raw_file_attributes.items():
-                            if not key.startswith('_'):
+                            if not key.startswith(HIDDEN_FIELD_PREFIX):
                                 file_attributes[key] = {
                                     'valueType': 'string',
                                     'value': str(value)
@@ -905,7 +912,7 @@ def process_asset_batch(
             return None
 
     if authorized_assets:
-        max_workers = min(10, len(authorized_assets))
+        max_workers = min(MAX_PARALLEL_EXPORT_WORKERS, len(authorized_assets))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
                 executor.submit(_process_single_asset, asset_tuple): asset_tuple
@@ -1156,8 +1163,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         if not method_allowed_on_api:
             return authorization_error()
         
-        # Route to appropriate handler based on path pattern
-        if method == 'POST' and '/export' in path:
+        # Route to appropriate handler based on the master API route definitions
+        if method == 'POST' and API_ASSET_EXPORT.matches(path):
             return handle_post_export(event, context)
         else:
             return validation_error(body={'message': "Invalid API path or method"}, event=event)
