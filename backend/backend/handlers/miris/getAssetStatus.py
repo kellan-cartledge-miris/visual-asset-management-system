@@ -171,11 +171,16 @@ def _handle_get(event):
 
     # Proxy to the Miris viewer API using the viewer key (see module docstring for
     # why this is not the Integration Key).
+    #
+    # The key goes in a header, never the query string. The viewer API accepts
+    # both, but a `?viewerKey=` URL leaks the credential into anything that
+    # records URLs — and `requests` embeds the full URL in its exception messages,
+    # so a single connection error would write the key into CloudWatch.
     url = f"{miris_api_base_url}/viewer/v1/asset/{miris_asset_uuid}"
     try:
         r = requests.get(
             url,
-            params={"viewerKey": miris_viewer_key},
+            headers={"Miris-Viewer-Key": miris_viewer_key},
             timeout=15,
         )
     except requests.RequestException as e:
