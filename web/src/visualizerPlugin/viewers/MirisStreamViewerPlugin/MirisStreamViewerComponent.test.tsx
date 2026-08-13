@@ -129,10 +129,7 @@ beforeEach(() => {
     }) as unknown as typeof fetch;
     mockDownloadAsset.mockResolvedValue([true, "https://signed.example.com/manifest"]);
     // Default: asset is already streamable — happy-path tests don't need the overlay.
-    mockGetMirisAssetStatus.mockResolvedValue([
-        true,
-        { state: "streamable", isStreamable: true },
-    ]);
+    mockGetMirisAssetStatus.mockResolvedValue([true, { state: "streamable", isStreamable: true }]);
 });
 afterAll(() => {
     global.fetch = realFetch;

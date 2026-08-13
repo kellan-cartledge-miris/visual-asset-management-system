@@ -475,19 +475,19 @@ Amazon API Gateway itself does **not** remove a previously-set resource policy w
 Consumed by the static web hosting stack `infra/lib/nestedStacks/staticWebApp/staticWebBuilder-nestedStack.ts` (`StaticWebBuilderNestedStack`). `allowUnsafeEvalFeatures` feeds Content Security Policy generation in `infra/lib/helper/security.ts`.
 :::
 
-| Field                                 | Type    | Default | Description                                                                                                                                                                                                          |
-| ------------------------------------- | ------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `app.webUi.optionalBannerHtmlMessage` | string  | `""`    | Optional HTML message displayed as a banner in the web interface. Use for system notifications or compliance messages (for example, `"AWS Sandbox System. Do not upload sensitive information."`).                   |
+| Field                                 | Type    | Default | Description                                                                                                                                                                                                                                          |
+| ------------------------------------- | ------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.webUi.optionalBannerHtmlMessage` | string  | `""`    | Optional HTML message displayed as a banner in the web interface. Use for system notifications or compliance messages (for example, `"AWS Sandbox System. Do not upload sensitive information."`).                                                   |
 | `app.webUi.allowUnsafeEvalFeatures`   | boolean | `false` | Allows `unsafe-eval` in the Content Security Policy for script execution. Required for certain viewer plugins (for example, Needle USD WASM viewer, ThreeJS CAD viewer, Miris Spatial Streaming viewer). Consult your security team before enabling. |
 
 ## Miris Spatial Streaming viewer (`app.miris`)
 
 Enables the Miris Spatial Streaming viewer plugin for rendering `.mrx` manifest files stored in VAMS assets. When enabled, the `MIRIS_STREAMING` feature flag is pushed to the frontend so the viewer plugin is activated at runtime.
 
-| Field                  | Type    | Default | Description                                                                                                                                                                                     |
-| ---------------------- | ------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `app.miris.enabled`    | boolean | `false` | Enables the Miris Spatial Streaming viewer plugin. Requires `app.webUi.allowUnsafeEvalFeatures: true` (the SDK calls `eval()` at runtime). Cannot be combined with `app.govCloud.enabled`.       |
-| `app.miris.viewerKey`  | string  | `""`    | Miris viewer key used by the streaming viewer. Required when `enabled` is `true`. Generate via the Miris Portal or `miris viewerkey create`. Use `"UNDEFINED"` as a placeholder when disabled. |
+| Field                 | Type    | Default | Description                                                                                                                                                                                    |
+| --------------------- | ------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.miris.enabled`   | boolean | `false` | Enables the Miris Spatial Streaming viewer plugin. Requires `app.webUi.allowUnsafeEvalFeatures: true` (the SDK calls `eval()` at runtime). Cannot be combined with `app.govCloud.enabled`.     |
+| `app.miris.viewerKey` | string  | `""`    | Miris viewer key used by the streaming viewer. Required when `enabled` is `true`. Generate via the Miris Portal or `miris viewerkey create`. Use `"UNDEFINED"` as a placeholder when disabled. |
 
 :::warning[GovCloud incompatibility]
 Miris Spatial Streaming requires outbound WebSocket connections to `*.miris.com`. It cannot be enabled in AWS GovCloud deployments where external internet egress is restricted.
@@ -501,17 +501,17 @@ The `@miris-inc/three` SDK uses `eval()` at runtime, so enabling Miris also requ
 
 Automatically uploads supported USD source files to the Miris Spatial Streaming platform and writes a `.mrx` manifest back to the VAMS asset. Requires `app.miris.enabled: true`.
 
-| Field                                                    | Type    | Default                    | Description                                                                                                                                     |
-| -------------------------------------------------------- | ------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `app.miris.upload.enabled`                               | boolean | `false`                    | Enables the Miris auto-upload pipeline.                                                                                                         |
-| `app.miris.upload.autoRegisterWithVAMS`                  | boolean | `true`                     | Automatically registers the pipeline and workflow in the VAMS database during deployment.                                                       |
-| `app.miris.upload.autoRegisterAutoTriggerOnFileUpload`   | boolean | `true`                     | Automatically triggers the pipeline when a matching file is uploaded. Requires `autoRegisterWithVAMS: true`.                                    |
-| `app.miris.upload.triggerExtensions`                     | string  | `".usd,.usda,.usdc,.usdz"` | Comma-separated list of file extensions that trigger the pipeline on upload.                                                                    |
-| `app.miris.upload.apiKeySecretArn`                       | string  | _(required when enabled)_  | AWS Secrets Manager ARN containing the Miris Integration Key used to authenticate with the Miris content API.                                   |
-| `app.miris.upload.mirisApiBaseUrl`                       | string  | `"https://api.miris.com"`  | Base URL for the Miris content API. Override only for non-production Miris environments.                                                        |
-| `app.miris.upload.enabledDatabaseIds`                    | array   | `[]`                       | Array of VAMS database IDs for which the pipeline is active. Files uploaded to databases not in this list are skipped. An empty list skips all. |
-| `app.miris.upload.taskTimeoutSeconds`                    | number  | `1800`                     | Maximum seconds the pipeline waits for Miris streamable processing to complete before failing (default: 30 minutes).                            |
-| `app.miris.upload.maxAssetSizeBytes`                     | number  | `5000000000`               | Maximum source file size in bytes accepted by the pipeline (default: 5 GB). Files larger than this limit are skipped.                           |
+| Field                                                  | Type    | Default                    | Description                                                                                                                                     |
+| ------------------------------------------------------ | ------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.miris.upload.enabled`                             | boolean | `false`                    | Enables the Miris auto-upload pipeline.                                                                                                         |
+| `app.miris.upload.autoRegisterWithVAMS`                | boolean | `true`                     | Automatically registers the pipeline and workflow in the VAMS database during deployment.                                                       |
+| `app.miris.upload.autoRegisterAutoTriggerOnFileUpload` | boolean | `true`                     | Automatically triggers the pipeline when a matching file is uploaded. Requires `autoRegisterWithVAMS: true`.                                    |
+| `app.miris.upload.triggerExtensions`                   | string  | `".usd,.usda,.usdc,.usdz"` | Comma-separated list of file extensions that trigger the pipeline on upload.                                                                    |
+| `app.miris.upload.apiKeySecretArn`                     | string  | _(required when enabled)_  | AWS Secrets Manager ARN containing the Miris Integration Key used to authenticate with the Miris content API.                                   |
+| `app.miris.upload.mirisApiBaseUrl`                     | string  | `"https://api.miris.com"`  | Base URL for the Miris content API. Override only for non-production Miris environments.                                                        |
+| `app.miris.upload.enabledDatabaseIds`                  | array   | `[]`                       | Array of VAMS database IDs for which the pipeline is active. Files uploaded to databases not in this list are skipped. An empty list skips all. |
+| `app.miris.upload.taskTimeoutSeconds`                  | number  | `1800`                     | Maximum seconds the pipeline waits for Miris streamable processing to complete before failing (default: 30 minutes).                            |
+| `app.miris.upload.maxAssetSizeBytes`                   | number  | `5000000000`               | Maximum source file size in bytes accepted by the pipeline (default: 5 GB). Files larger than this limit are skipped.                           |
 
 :::warning[Requirements]
 Miris auto-upload requires `app.miris.enabled: true` and `app.webUi.allowUnsafeEvalFeatures: true`. Cannot be enabled in GovCloud or air-gapped deployments — outbound HTTPS to `api.miris.com` is required.

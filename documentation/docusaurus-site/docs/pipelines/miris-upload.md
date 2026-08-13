@@ -6,8 +6,8 @@ The Miris Auto-Upload pipeline streams supported source assets into the Miris Sp
 
 The pipeline runs in two ways:
 
-- **Automatically** — when a file with a supported extension is uploaded to a VAMS asset in a database listed in `app.miris.upload.enabledDatabaseIds`.
-- **Manually** — when a user opens a USD file that is not yet on Miris and clicks **Stream with Miris** in the viewer pane. This action is provided by the `miris-upload-viewer` plugin (requires the `MIRIS_UPLOAD` feature) and uploads the asset regardless of the per-database allow-list. See [Viewer Plugins Reference](../additional/viewer-plugins.md#miris-spatial-streaming-viewers).
+-   **Automatically** — when a file with a supported extension is uploaded to a VAMS asset in a database listed in `app.miris.upload.enabledDatabaseIds`.
+-   **Manually** — when a user opens a USD file that is not yet on Miris and clicks **Stream with Miris** in the viewer pane. This action is provided by the `miris-upload-viewer` plugin (requires the `MIRIS_UPLOAD` feature) and uploads the asset regardless of the per-database allow-list. See [Viewer Plugins Reference](../additional/viewer-plugins.md#miris-spatial-streaming-viewers).
 
 The manual trigger invokes the pipeline's workflow with the asset's **root USD file** as input. The pipeline requires a single source file — it does not accept a folder.
 
@@ -51,7 +51,7 @@ See `app.miris.upload.*` in the [Configuration Reference](../deployment/configur
 
 ## Requirements
 
-- `app.miris.enabled` must be true (the viewer plumbing the pipeline produces output for).
-- `app.webUi.allowUnsafeEvalFeatures` must be true (inherited Phase 1 gate).
-- Miris Integration Key stored in Secrets Manager; ARN in `app.miris.upload.apiKeySecretArn`.
-- Cannot be enabled in GovCloud or air-gapped deployments.
+-   `app.miris.enabled` must be true (the viewer plumbing the pipeline produces output for).
+-   `app.webUi.allowUnsafeEvalFeatures` must be true (inherited Phase 1 gate).
+-   Miris Integration Key stored in Secrets Manager; ARN in `app.miris.upload.apiKeySecretArn`.
+-   Cannot be enabled in GovCloud or air-gapped deployments.

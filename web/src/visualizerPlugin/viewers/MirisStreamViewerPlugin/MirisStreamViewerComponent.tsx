@@ -192,9 +192,7 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                         }
                         // Indeterminate => attempt the stream rather than showing an
                         // overlay we cannot substantiate.
-                        isStreamable = status.indeterminate
-                            ? true
-                            : status.isStreamable === true;
+                        isStreamable = status.indeterminate ? true : status.isStreamable === true;
                         if (!isStreamable) {
                             if (cancelled) return;
                             setProcessingState({ state: status.state });

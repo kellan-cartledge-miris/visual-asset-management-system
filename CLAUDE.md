@@ -172,19 +172,19 @@ if (config.featuresEnabled.includes("NEW_FEATURE")) {
 
 **Known feature flags** (defined in `infra/common/vamsAppFeatures.ts`):
 
-| Feature Flag                    | Description                                                                                                      |
-| ------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `GOVCLOUD`                      | GovCloud deployment mode (no CloudFront, no Location Service, FIPS endpoints)                                    |
-| `ALLOWUNSAFEEVAL`               | Permits `unsafe-eval` in CSP; required by certain viewer plugins (CesiumJS, Needle USD WASM, ThreeJS CAD, ThatOpen IFC, Miris Spatial Streaming) |
-| `LOCATIONSERVICES`              | Amazon Location Service map visualization                                                                        |
+| Feature Flag                    | Description                                                                                                                                                  |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GOVCLOUD`                      | GovCloud deployment mode (no CloudFront, no Location Service, FIPS endpoints)                                                                                |
+| `ALLOWUNSAFEEVAL`               | Permits `unsafe-eval` in CSP; required by certain viewer plugins (CesiumJS, Needle USD WASM, ThreeJS CAD, ThatOpen IFC, Miris Spatial Streaming)             |
+| `LOCATIONSERVICES`              | Amazon Location Service map visualization                                                                                                                    |
 | `MIRIS_STREAMING`               | Enables the Miris Spatial Streaming viewer plugin (requires `app.miris.viewerKey` AND `app.webUi.allowUnsafeEvalFeatures: true`; incompatible with GovCloud) |
-| `MIRIS_UPLOAD`                  | Enables the Miris auto-upload pipeline (requires `app.miris.enabled` AND `app.webUi.allowUnsafeEvalFeatures: true`; incompatible with GovCloud) |
-| `ALBDEPLOY`                     | ALB-based static website distribution                                                                            |
-| `CLOUDFRONTDEPLOY`              | CloudFront-based static website distribution                                                                     |
-| `NOOPENSEARCH`                  | OpenSearch is not deployed; disables search-dependent UI                                                         |
-| `AUTHPROVIDER_COGNITO`          | Amazon Cognito authentication provider                                                                           |
-| `AUTHPROVIDER_COGNITO_SAML`     | SAML federation through Amazon Cognito                                                                           |
-| `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth 2.0 / OIDC identity provider                                                                      |
+| `MIRIS_UPLOAD`                  | Enables the Miris auto-upload pipeline (requires `app.miris.enabled` AND `app.webUi.allowUnsafeEvalFeatures: true`; incompatible with GovCloud)              |
+| `ALBDEPLOY`                     | ALB-based static website distribution                                                                                                                        |
+| `CLOUDFRONTDEPLOY`              | CloudFront-based static website distribution                                                                                                                 |
+| `NOOPENSEARCH`                  | OpenSearch is not deployed; disables search-dependent UI                                                                                                     |
+| `AUTHPROVIDER_COGNITO`          | Amazon Cognito authentication provider                                                                                                                       |
+| `AUTHPROVIDER_COGNITO_SAML`     | SAML federation through Amazon Cognito                                                                                                                       |
+| `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth 2.0 / OIDC identity provider                                                                                                                  |
 
 ### **Pattern 4: Resource Names Resolve via SSM Parameter Store**
 
