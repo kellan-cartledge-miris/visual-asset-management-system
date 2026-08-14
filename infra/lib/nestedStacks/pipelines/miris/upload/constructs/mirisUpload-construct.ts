@@ -42,7 +42,7 @@ export interface MirisUploadConstructProps extends cdk.StackProps {
     pipelineSubnets: ec2.ISubnet[];
     pipelineSecurityGroups: ec2.ISecurityGroup[];
     lambdaCommonBaseLayer: LayerVersion;
-    importGlobalPipelineWorkflowFunctionName: string;
+    importGlobalPipelineWorkflowV2FunctionName: string;
 }
 
 const defaultProps: Partial<MirisUploadConstructProps> = {};
@@ -361,7 +361,7 @@ export class MirisUploadConstruct extends Construct {
                 this,
                 "ImportFunction",
                 `arn:${ServiceHelper.Partition()}:lambda:${region}:${account}:function:${
-                    props.importGlobalPipelineWorkflowFunctionName
+                    props.importGlobalPipelineWorkflowV2FunctionName
                 }`
             );
 

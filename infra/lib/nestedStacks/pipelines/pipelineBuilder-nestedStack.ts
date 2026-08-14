@@ -125,8 +125,8 @@ export class PipelineBuilderNestedStack extends NestedStack {
                     pipelineSubnets: pipelineNetwork.privateSubnets.pipeline,
                     pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
                     lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
-                    importGlobalPipelineWorkflowFunctionName:
-                        props.importGlobalPipelineWorkflowFunctionName,
+                    importGlobalPipelineWorkflowV2FunctionName:
+                        props.importGlobalPipelineWorkflowV2FunctionName,
                 }
             );
 
