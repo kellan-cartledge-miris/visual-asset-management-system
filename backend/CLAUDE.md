@@ -42,8 +42,11 @@ backend/
 │   │   ├── s3MetadataKeys.py, s3PathPatterns.py    # Canonical S3 keys, .previewFile. patterns (mirror web/src/common/constants/fileFormats.ts)
 │   │   ├── dynamoDbMetadataKeys.py                 # Reserved DynamoDB metadata keys
 │   │   ├── assetHistory.py, syncTracking.py        # Best-effort history / outbound-sync writers
-│   │   ├── stepfunctions_builder.py                # ASL builder (Lambda/SQS/EventBridge tasks)
-│   │   └── validators.py                           # validate() dispatcher + regex patterns
+│   │   ├── validators.py                           # validate() dispatcher + regex patterns
+│   │   └── workflows/                              # Execution/pipeline/workflow shared helpers (pure)
+│   │       ├── executionRecords.py                 #   storage record builders, keys, S3 prefixes
+│   │       ├── executionOutputs.py                 #   output attribution + resolved manifest build
+│   │       └── stepfunctions_builder.py            #   partition-aware ASL builder (Lambda/SQS/EventBridge/DeadlineCloud)
 │   ├── customLogging/
 │   │   ├── auditLogging.py                         # CloudWatch audit (9 event types, silent-fail)
 │   │   └── logger.py                               # safeLogger with sensitive-data redaction
@@ -54,7 +57,17 @@ backend/
 │   │   │                                           #   constraints, cognito, preTokenGen;
 │   │   │                                           #   __init__: request_to_claims() → claims
 │   │   ├── authz/__init__.py                       # CasbinEnforcer proxy (ABAC/RBAC)
-│   │   ├── pipelines/, workflows/                  # Pipeline CRUD; Step Functions workflow mgmt
+│   │   ├── pipelines/                              # Pipeline CRUD (pipelineService = full CRUD;
+│   │   │                                           #   pipelineTemplateService = templates + tagSchema)
+│   │   ├── workflows/                              # Step Functions workflow mgmt. API-facing:
+│   │   │                                           #   workflowService (CRUD), executeWorkflow
+│   │   │                                           #   (asset-less multi-file execute), executionService
+│   │   │                                           #   (list/abort/details/logs/rerun/permanent),
+│   │   │                                           #   workflowTriggerService, importGlobalPipelineWorkflow.
+│   │   │                                           #   sfn/ (SFN/EventBridge-invoked): interimPipelineTracking,
+│   │   │                                           #   handleExecutionError, processWorkflowExecutionOutput,
+│   │   │                                           #   registerPipelineExecution, workflowTriggerDispatch,
+│   │   │                                           #   deadlineCloudJobCallback
 │   │   ├── addon/garnetFramework/                  # Garnet NGSI-LD indexer Lambdas
 │   │   ├── addon/physna/                           # Physna Sync Lambdas (physnaCommon.py shared)
 │   │   └── assetLinks, comments, config, databases, indexing, metadata,
@@ -63,7 +76,7 @@ backend/
 │   └── models/                                     # Pydantic v1 models, one file per domain
 │       ├── assetsV3.py                             # GOLD STANDARD model file
 │       ├── common.py                               # Response helpers, APIGatewayProxyResponseV2
-│       └── apiKeys, pipelines, workflows, assetHistory, [domain].py
+│       └── apiKeys, pipelines, workflows, executions, assetHistory, [domain].py
 ├── lambdaLayers/                                   # Lambda layer definitions
 └── tests/                                          # See backend/tests/CLAUDE.md
 ```
@@ -107,7 +120,7 @@ backend/
 
 8.  **ALWAYS use `extra='ignore'`** on every Pydantic model class to silently drop unexpected fields.
 
-9.  **NEVER log sensitive data.** `safeLogger` auto-redacts `authorization`, `idJwtToken`, `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`. Do not circumvent this.
+9.  **NEVER log sensitive data.** `safeLogger` auto-redacts the credential keys `authorization`, `idJwtToken`, `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken` and the caller-authored content keys `configBody`, `templateTags`, `tagValues`, `customTemplateOverride`, `webFormJson`, `inputInstructions` (also inside a JSON-string request `body`), at every nesting level in dicts and lists. Do not circumvent this. The redaction is key-driven, so an f-string that interpolates a payload value bypasses it — log identifiers and counts, never rendered bodies or tag values.
 
 10. **ALWAYS resolve resource names at module level** via `get_table_name()`, `get_bucket_name()`, or `get_log_group_name()` from `common.resourceNames` inside a `try/except`. Never read `os.environ["TABLE_NAME"]` for resource names in non-pipeline handlers — SSM resolution provides centralized name management with env-var overrides for testing.
 
@@ -298,7 +311,7 @@ Reference: `backend/models/assetsV3.py`
 
 ### CORRECT Model Definition
 
-Import `BaseModel` from `aws_lambda_powertools.utilities.parser`; declare `extra='ignore'` on the class; use `Field(...)` with `pattern=` (loaded from `common.validators`); attach a `@root_validator` for cross-field logic that calls the `validate()` dispatcher.
+Import `BaseModel` from `aws_lambda_powertools.utilities.parser`; declare `extra='ignore'` on the class; use `Field(...)` with `regex=` (loaded from `common.validators`); attach a `@root_validator` for cross-field logic that calls the `validate()` dispatcher.
 
 ```python
 from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, ValidationError
@@ -306,8 +319,8 @@ from pydantic import Field
 from common.validators import validate, id_pattern, object_name_pattern
 
 class CreateItemRequestModel(BaseModel, extra='ignore'):
-    databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)
-    itemName:   str = Field(min_length=1, max_length=256, strip_whitespace=True, pattern=object_name_pattern)
+    databaseId: str = Field(min_length=4, max_length=256, strip_whitespace=True, regex=id_pattern)
+    itemName:   str = Field(min_length=1, max_length=256, strip_whitespace=True, regex=object_name_pattern)
     tags: Optional[list[str]] = []
 
     @root_validator
@@ -329,14 +342,30 @@ class CreateItemRequestModel(BaseModel, extra='ignore'):
 | `MyModel.model_validate(data)`           | `parse(body, model=MyModel)` (from `aws_lambda_powertools...parser`) |
 | `@field_validator('name')`               | `@validator('name')`                                                 |
 | `item.model_dump()`                      | `item.dict()`                                                        |
+| `Field(pattern=...)`                     | `Field(regex=...)`                                                   |
 
 Every model class must declare `extra='ignore'`.
+
+**`Field()` silently swallows unknown kwargs.** Pydantic v1 collects any keyword it does not
+recognize into `FieldInfo.extra` instead of raising, so a v2 spelling like `pattern=` becomes an
+inert annotation that validates **nothing** — the model imports cleanly, tests pass, and the
+field is unconstrained. `regex=` is the v1 spelling. `strip_whitespace=` is likewise inert on
+`Field()` (it is a `class Config` / `constr` option, not a field constraint); a padded value is
+stored verbatim, which matters for the ABAC-visible name fields. To confirm a constraint is live,
+assert on the parsed field rather than reading the declaration:
+
+```python
+assert MyModel.__fields__['databaseId'].field_info.regex is not None   # live
+assert not MyModel.__fields__['databaseId'].field_info.extra          # nothing swallowed
+```
+
+`tests/models/test_no_dead_field_kwargs.py` enforces this across every model.
 
 ### Field Validation Patterns
 
 Common shapes:
 
--   String with regex: `Field(min_length=4, max_length=256, strip_whitespace=True, pattern=id_pattern)`
+-   String with regex: `Field(min_length=4, max_length=256, strip_whitespace=True, regex=id_pattern)`
 -   Optional with default: `Optional[list[str]] = []`, `Optional[str] = None`
 -   Numeric constraints: `Field(None, ge=0)`, `Field(None, ge=0, le=10000)`
 -   Nested models: `Optional[CurrentVersionModel] = None`
@@ -376,7 +405,7 @@ if not casbin_enforcer.enforce(event, item):
 ### Key Concepts
 
 -   **CasbinEnforcer** is a proxy with a **60-second policy cache TTL** per user; policy is stored in DynamoDB (`ConstraintsStorageTable`).
--   `request_to_claims(event)` returns `{"tokens": ["userId", ...], "roles": [...], "mfaEnabled": bool}`.
+-   `request_to_claims(event)` returns `{"tokens": ["userId", ...], "roles": [...], "mfaEnabled": bool}`. `roles` comes from the `vams:roles` authorizer context value, which the authorizer (`common/auth/authorizerCore.py`) resolves from the user roles table with a 60-second per-user cache — so it is populated for every auth mode (Cognito, external OAuth IDP, API key), not only where a Cognito pre-token-generation trigger runs. It is informational for handlers and audit logs: `CasbinEnforcer` re-reads a user's roles from DynamoDB when building policy, so authorization does not depend on it.
 -   **MFA-aware**: roles with `mfaRequired=True` are only active when `mfaEnabled=True` in claims.
 -   **Object annotation**: set `item['object__type']` before every `enforce()` call.
 -   Valid object types: `database`, `asset`, `api`, `web`, `tag`, `tagType`, `role`, `userRole`, `pipeline`, `workflow`, `metadataSchema`, `apiKey`.
@@ -393,7 +422,7 @@ Defined in `common/constants.py`. Request: `(sub, obj, act)`; policy line: `(sub
 
 ### Constraint Fields (`PERMISSION_CONSTRAINT_FIELDS`)
 
-Fields that can be referenced in ABAC policy rules: `databaseId`, `assetName`, `assetType`, `tags`, `tagName`, `tagTypeName`, `roleName`, `userId`, `pipelineId`, `pipelineType`, `pipelineExecutionType`, `workflowId`, `metadataSchemaName`, `metadataSchemaEntityType`, `object__type`, `route__path`.
+Fields that can be referenced in ABAC policy rules: `databaseId`, `assetName`, `assetType`, `tags`, `tagName`, `tagTypeName`, `roleName`, `userId`, `pipelineId`, `pipelineExecutionType`, `workflowId`, `category`, `name`, `metadataSchemaName`, `metadataSchemaEntityType`, `object__type`, `route__path`.
 
 ---
 
@@ -431,8 +460,14 @@ Scalar validators: `ID` (`^[-_a-zA-Z0-9]{3,63}$` — databaseId, pipelineId, etc
 `STRING_30`, `STRING_256`, `STRING_JSON`,
 `FILE_EXTENSION` (`^[\\.]([a-zA-Z0-9]){1,7}$`).
 
+Partition-aware AWS-resource validators (used by pipeline sub-process registration):
+`ARN` (any AWS resource ARN), `CLOUDWATCH_LOG_GROUP_ARN`, `CLOUDWATCH_LOG_GROUP_NAME`
+(1-512 chars, `-_./#`+alnum), `LOG_STREAM_NAME` (1-512 chars, no `:`/`*`),
+plus `EVENTBRIDGE_BUS_ARN`, `EVENTBRIDGE_SOURCE`, `EVENTBRIDGE_DETAIL_TYPE`, `SQS_QUEUE_URL`.
+
 Array validators (each element runs the scalar rule): `ID_ARRAY`, `UUID_ARRAY`,
-`STRING_256_ARRAY`, `EMAIL_ARRAY`, `USERID_ARRAY`, `OBJECT_NAME_ARRAY`.
+`STRING_256_ARRAY`, `EMAIL_ARRAY`, `USERID_ARRAY`, `OBJECT_NAME_ARRAY`,
+`RELATIVE_FILE_PATH_ARRAY`, `DOWNLOAD_KEY_ARRAY`.
 
 ### Importing Regex Patterns for Pydantic Fields
 
@@ -532,11 +567,16 @@ logger = safeLogger(service_name="YourServiceName")
 logger.info(...); logger.warning(...); logger.error(...); logger.exception(...)  # exception adds stack trace
 ```
 
-`safeLogger` auto-redacts these keys at every nesting level: `authorization`, `idJwtToken`, `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`.
+`safeLogger` auto-redacts two key families at every nesting level, walking dicts, lists, and tuples (`customLogging.logger.mask_sensitive_data`, case-insensitive on the key name):
+
+-   **Credential keys** (`SENSITIVE_KEYS`) — `authorization`, `idJwtToken`, `Credentials`, `AccessKeyId`, `SecretAccessKey`, `SessionToken`.
+-   **Content keys** (`CONTENT_KEYS`) — `configBody`, `templateTags`, `tagValues`, `customTemplateOverride`, `webFormJson`, `inputInstructions`. A pipeline template body or tag value carries free-form caller content (prompts, model configuration). Every field that can carry a template body belongs here whichever request delivers it: an execute request supplies one as `customTemplateOverride`, a template record as `configBody`. The value is replaced with `<redacted>` and the key is kept, so the record still shows that the field was submitted.
+
+A request `body` is masked whether it arrives as a dict or as a JSON string — the string is parsed, masked, and re-serialized. Redaction is key-driven, so an f-string that interpolates a payload value (`logger.info(f"template {body}")`) bypasses it entirely: log identifiers, counts, and flags instead.
 
 ### Audit Logging
 
-`backend/customLogging/auditLogging.py` exposes `log_authentication`, `log_authorization`, `log_authorization_api`, `log_file_upload`, `log_file_download`, `log_errors`, and other event-type functions — writing to **9 CloudWatch log groups** whose names resolve from SSM via `get_log_group_name(ResourceKeys.*)`. All audit functions extract user context via `request_to_claims(event)`. **Silent failure**: a failed audit write is logged locally, and Lambda execution continues.
+`backend/customLogging/auditLogging.py` exposes `log_authentication`, `log_authorization`, `log_authorization_api`, `log_file_upload`, `log_file_download`, `log_errors`, and other event-type functions — writing to **9 CloudWatch log groups** whose names resolve from SSM via `get_log_group_name(ResourceKeys.*)`. All audit functions extract user context via `request_to_claims(event)`. Every entry carries a `--- [event: ...]` echo of the triggering API event, passed through `mask_sensitive_data` first. **Silent failure**: a failed audit write is logged locally, and Lambda execution continues — `mask_sensitive_data` upholds that contract by returning `<redacted>` rather than raising on a structure it cannot walk.
 
 ---
 
@@ -591,6 +631,37 @@ Uploads must be validated against **both** `UNALLOWED_FILE_EXTENSION_LIST` (`.ja
 
 ---
 
+## Partition Portability (Commercial / GovCloud / EU Sovereign)
+
+Handlers run in `aws`, `aws-us-gov`, `aws-eusc` (EU Sovereign, region `eusc-de-east-1`), and potentially `aws-cn` / `aws-iso*`. A partition defect here is invisible in commercial tests and surfaces as a runtime 500 or a validation rejection that only reproduces in the affected partition. There is deliberately **no central partition helper** in the backend — the four rules below are the whole contract.
+
+1. **Never build an ARN from a hardcoded partition.** Derive it, or take it as a parameter. Two patterns are already established, and new code should reuse one:
+
+    - **Parameterize.** `common/workflows/stepfunctions_builder.py` threads a `partition` argument (defaulting to `"aws"`) through every state-machine integration ARN. Its value originates as the `AWS_PARTITION` Lambda env var, read once in `common/workflows/workflowAsl.py` and passed down.
+    - **Parse an ARN you already hold.** `handlers/workflows/executionService.py` splits a resource ARN (falling back to the execution log-group ARN) to recover partition/region/account, so nothing is assumed. Prefer this when an ARN is already in hand — it needs no env var and cannot drift.
+
+    `AWS_PARTITION` is currently set on the `workflowService` Lambda only (`infra/lib/lambdaBuilder/workflowFunctions.ts`). A handler that needs the partition either gets the env var added in its CDK builder or derives it from an ARN — do not read `os.environ["AWS_PARTITION"]` in a handler whose builder does not set it.
+
+2. **Never hardcode an endpoint hostname or DNS suffix.** Suffixes differ per partition — `amazonaws.com`, `amazonaws.com.cn`, **`amazonaws.eu`** (EU Sovereign), `c2s.ic.gov`, `sc2s.sgov.gov`, `cloud.adc-e.uk`, `csp.hci.ic.gov`. Construct plain boto3 clients (`boto3.client("s3", config=retry_config)`) with **no `endpoint_url`** and let the SDK resolve per region; take service endpoints (e.g. the OpenSearch host) from SSM rather than composing them. Region comes from `os.environ["AWS_REGION"]`, which the Lambda runtime always sets — avoid a `"us-east-1"` default, which silently points at the wrong partition when the variable is missing.
+
+3. **New ARN/URL validators must accept every partition.** `common/validators.py` defines `aws_partition_group` (`aws`, `-us-gov`, `-cn`, `-eusc`, `-iso[-x]`) and `aws_dns_suffix_group` (all seven suffixes). Compose new patterns from these groups — never inline `arn:aws:`. A pattern that hardcodes the commercial partition passes every commercial test and rejects legitimate input **only** in the affected partition, which is the hardest failure mode to attribute.
+
+    ```python
+    # ✅ CORRECT — composed from the shared groups
+    my_arn_pattern = r'^arn:(' + aws_partition_group + r'):lambda:[a-z0-9\-]+:[0-9]{12}:function:.+$'
+
+    # ❌ INCORRECT — rejects GovCloud and EU Sovereign at runtime
+    my_arn_pattern = r'^arn:aws:lambda:.+$'
+    ```
+
+    `infra/lib/helper/const.ts` (`SERVICE_LOOKUP`) is the authoritative partition + suffix list; keep these groups in step with it.
+
+4. **A service or model may not exist in every partition.** Bedrock model ids differ (both restricted config templates pin an older Sonnet), OpenSearch engine versions differ, and some services are absent entirely. A handler that hard-codes a model id or assumes a service is reachable fails only where it is not — prefer taking such values from configuration that the CDK layer supplies per partition.
+
+Feature switches are the runtime signal for partition-conditional behavior: `GOVCLOUD` is present in `featuresEnabled` for **both** GovCloud and EU Sovereign (both templates set `app.govCloud.enabled: true`), so treat it as "restricted partition" rather than literally GovCloud. See `infra/CLAUDE.md` "Partition Portability" for the CDK-side rules, including the `AWS::Lambda::EventSourceMapping` tag restriction.
+
+---
+
 ## Testing
 
 Run `pytest` from `backend/` after `pip install -r requirements-dev.txt`. Tests live under `backend/tests/[domain]/`; markers are `unit`, `integration`, `slow`, `aws`. Full configuration, mock module hierarchy, `conftest.py` layering, and event-shape conventions: see `backend/tests/CLAUDE.md`.
@@ -603,7 +674,7 @@ New-handler / model / test skeletons: `backend/HANDLER_TEMPLATES.md`. Gold Stand
 
 ## Key Dependencies
 
-Runtime: `aws-lambda-powertools` 2.36.0 (Logger, Parser, BaseModel, typing), `boto3` 1.34.84 / `botocore` 1.34.162, `casbin` 1.33.0 (ABAC/RBAC), `pydantic` 1.10.13 (v1 ONLY), `opensearch-py` 2.5.0, `simpleeval` 1.0.7 (safe expression evaluation in Casbin matchers), `locked-dict` 2023.10.22 (thread-safe Casbin cache).
+Runtime: `aws-lambda-powertools` 2.36.0 (Logger, Parser, BaseModel, typing), `boto3` 1.43.45 / `botocore` 1.43.45 (botocore **≥1.36** is required for the `aws-eusc` EU Sovereign Cloud partition — older releases resolve `eusc-de-east-1` endpoints to the wrong `.amazonaws.com` suffix), `casbin` 1.33.0 (ABAC/RBAC), `pydantic` 1.10.13 (v1 ONLY), `opensearch-py` 2.5.0, `simpleeval` 1.0.7 (safe expression evaluation in Casbin matchers), `locked-dict` 2023.10.22 (thread-safe Casbin cache).
 
 Dev only: `moto` 5.1.0 (AWS mocks), `pytest` 9.0.3, `mypy` 1.0.0, `flake8` 6.0.0.
 
@@ -649,6 +720,8 @@ Most anti-patterns are the inverse of a Critical Rule above. The compact list ci
 -   Resolving resource names inside handler functions — Rule 10.
 -   Returning raw error strings (`{'statusCode': 400, 'body': 'bad request'}`) — Rules 7 and 11.
 -   Echoing user input or internal details in client error messages — Rule 11.
+-   Hardcoding `arn:aws:` in an ARN string or a validator regex — see Partition Portability. Compose from `aws_partition_group` / `aws_dns_suffix_group`, or derive the partition from an ARN already in hand; a commercial-only pattern fails only in GovCloud / EU Sovereign.
+-   Passing `endpoint_url` or a hardcoded hostname to a boto3 client — see Partition Portability. Let the SDK resolve per region; read service endpoints from SSM.
 
 ### Swallowing exceptions silently
 

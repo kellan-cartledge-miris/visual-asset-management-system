@@ -51,6 +51,16 @@ export const SUPPORTED_API_TYPES = [API_TYPE_APIGATEWAY_REST];
 // base URLs remain /api/*.
 export const API_GATEWAY_STAGE_NAME = "api";
 
+// REST API integration timeout bounds, in seconds. 29 seconds is the API Gateway default
+// integration timeout and the floor VAMS allows. Raising it above the default requires an
+// account-level quota increase for the "Integration timeout" quota (L-E5AE38E3) in the
+// deployment Region first — the increase applies to Regional and Private APIs (edge-optimized
+// cannot be raised, and VAMS uses neither). Without the approved quota the deployment fails
+// when API Gateway rejects the higher TimeoutInMillis. The 300-second ceiling is VAMS' own
+// cap, matching the practical upper bound for a synchronous request/response API.
+export const API_GATEWAY_DEFAULT_TIMEOUT_SECONDS = 29;
+export const API_GATEWAY_MAX_TIMEOUT_SECONDS = 300;
+
 export function getConfig(app: cdk.App): Config {
     const file: string = readFileSync(join(__dirname, "config.json"), {
         encoding: "utf8",
@@ -235,6 +245,10 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useSplatToolbox.enabled = false;
     }
 
+    if (config.app.pipelines.useSplatToolbox.useCodeBuild == undefined) {
+        config.app.pipelines.useSplatToolbox.useCodeBuild = false;
+    }
+
     if (config.app.pipelines.usePreviewPcPotreeViewer.enabled == undefined) {
         config.app.pipelines.usePreviewPcPotreeViewer.enabled = false;
     }
@@ -368,6 +382,49 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useNvidiaCosmos.enabled = false;
     }
 
+    // Cosmos 3 (omni) defaults
+    if (config.app.pipelines.useNvidiaCosmos3 == undefined) {
+        config.app.pipelines.useNvidiaCosmos3 = {
+            enabled: false,
+            huggingFaceToken: "",
+            useCodeBuild: false,
+            useWarmInstances: false,
+            warmInstanceCount: 1,
+            modelsOmni: {
+                nano16B: {
+                    enabled: false,
+                    autoRegisterWithVAMS: true,
+                    autoTriggerOnFileExtensionsUpload: "",
+                    instanceTypes: ["g6e.4xlarge", "g6e.12xlarge"],
+                    maxVCpus: 192,
+                },
+                super64B: {
+                    enabled: false,
+                    autoRegisterWithVAMS: true,
+                    autoTriggerOnFileExtensionsUpload: "",
+                    instanceTypes: ["p5.48xlarge", "p5e.48xlarge", "p4de.24xlarge"],
+                    maxVCpus: 192,
+                },
+                superText2Image64B: {
+                    enabled: false,
+                    autoRegisterWithVAMS: true,
+                    instanceTypes: ["p5.48xlarge", "p5e.48xlarge"],
+                    maxVCpus: 192,
+                },
+                superImage2Video64B: {
+                    enabled: false,
+                    autoRegisterWithVAMS: true,
+                    autoTriggerOnFileExtensionsUpload: "",
+                    instanceTypes: ["p5.48xlarge", "p5e.48xlarge", "p4de.24xlarge"],
+                    maxVCpus: 192,
+                },
+            },
+        };
+    }
+    if (config.app.pipelines.useNvidiaCosmos3.enabled == undefined) {
+        config.app.pipelines.useNvidiaCosmos3.enabled = false;
+    }
+
     // Gr00t Fine-Tuning defaults
     if (config.app.pipelines.useNvidiaGr00t == undefined) {
         config.app.pipelines.useNvidiaGr00t = {
@@ -388,6 +445,12 @@ export function getConfig(app: cdk.App): Config {
     }
     if (config.app.pipelines.useNvidiaGr00t.enabled == undefined) {
         config.app.pipelines.useNvidiaGr00t.enabled = false;
+    }
+
+    // Deadline Cloud pipeline execution-type support (workflow createJob task states +
+    // job-callback lambda). Off by default.
+    if (config.app.pipelines.deadlineCloudExecutionTypeEnabled == undefined) {
+        config.app.pipelines.deadlineCloudExecutionTypeEnabled = false;
     }
 
     if (config.app.addons.useGarnetFramework == undefined) {
@@ -428,9 +491,25 @@ export function getConfig(app: cdk.App): Config {
     if (config.app.pipelines.useConversion3dBasic.enabled == undefined) {
         config.app.pipelines.useConversion3dBasic.enabled = true;
     }
+    if (config.app.pipelines.useConversion3dBasic.autoRegisterWithVAMS == undefined) {
+        config.app.pipelines.useConversion3dBasic.autoRegisterWithVAMS = true;
+    }
 
     if (config.app.pipelines.useConversionCadMeshMetadataExtraction.enabled == undefined) {
         config.app.pipelines.useConversionCadMeshMetadataExtraction.enabled = false;
+    }
+    if (
+        config.app.pipelines.useConversionCadMeshMetadataExtraction.autoRegisterWithVAMS ==
+        undefined
+    ) {
+        config.app.pipelines.useConversionCadMeshMetadataExtraction.autoRegisterWithVAMS = true;
+    }
+    if (
+        config.app.pipelines.useConversionCadMeshMetadataExtraction
+            .autoRegisterAutoTriggerOnFileUpload == undefined
+    ) {
+        config.app.pipelines.useConversionCadMeshMetadataExtraction.autoRegisterAutoTriggerOnFileUpload =
+            false;
     }
 
     if (config.app.pipelines.useConversionCoordinateTransform == undefined) {
@@ -440,6 +519,76 @@ export function getConfig(app: cdk.App): Config {
             autoRegisterWithVAMS: false,
             autoRegisterAutoTriggerOnFileUpload: false,
         };
+    }
+
+    // Pipeline constructs gate the VamsSchemaRegistration custom resource on
+    // `autoRegisterWithVAMS === true`, so an omitted flag on an otherwise-present pipeline block
+    // would deploy the pipeline stack with no VAMS registration. A partially-specified block
+    // defaults to registering (as the config templates do) with its upload trigger disarmed.
+    const defaultAutoRegisterFlags = (
+        block:
+            | { autoRegisterWithVAMS?: boolean; autoRegisterAutoTriggerOnFileUpload?: boolean }
+            | undefined,
+        hasUploadTrigger = false
+    ) => {
+        if (block == undefined) return;
+        if (block.autoRegisterWithVAMS == undefined) {
+            block.autoRegisterWithVAMS = true;
+        }
+        if (hasUploadTrigger && block.autoRegisterAutoTriggerOnFileUpload == undefined) {
+            block.autoRegisterAutoTriggerOnFileUpload = false;
+        }
+    };
+
+    defaultAutoRegisterFlags(config.app.pipelines.useConversion3dBasic);
+    defaultAutoRegisterFlags(config.app.pipelines.useConversionCadMeshMetadataExtraction, true);
+    defaultAutoRegisterFlags(config.app.pipelines.useConversionCoordinateTransform, true);
+    defaultAutoRegisterFlags(config.app.pipelines.usePreviewPcPotreeViewer, true);
+    defaultAutoRegisterFlags(config.app.pipelines.usePreview3dThumbnail, true);
+    defaultAutoRegisterFlags(config.app.pipelines.useGenAiMetadata3dLabeling, true);
+    defaultAutoRegisterFlags(config.app.pipelines.useSplatToolbox);
+    defaultAutoRegisterFlags(config.app.pipelines.useRapidPipeline?.useEcs);
+    defaultAutoRegisterFlags(config.app.pipelines.useRapidPipeline?.useEks);
+    defaultAutoRegisterFlags(config.app.pipelines.useModelOps);
+    defaultAutoRegisterFlags(config.app.pipelines.useIsaacLabTraining);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos.modelsPredict?.text2world2B_v2);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos.modelsPredict?.video2world2B_v2);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos.modelsPredict?.text2world14B_v2);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos.modelsPredict?.video2world14B_v2);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos.modelsReason?.reason2B);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos.modelsReason?.reason8B);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos.modelsTransfer?.transfer2B);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos3.modelsOmni?.nano16B);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos3.modelsOmni?.super64B);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos3.modelsOmni?.superText2Image64B);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaCosmos3.modelsOmni?.superImage2Video64B);
+    defaultAutoRegisterFlags(config.app.pipelines.useNvidiaGr00t.modelsFinetune?.gr00tN1_5_3B);
+
+    //The upload trigger ships with the VamsSchemaRegistration custom resource, which is created only
+    //when autoRegisterWithVAMS is true, so an armed trigger on an unregistered pipeline is discarded.
+    for (const [name, block] of Object.entries<{
+        enabled?: boolean;
+        autoRegisterWithVAMS?: boolean;
+        autoRegisterAutoTriggerOnFileUpload?: boolean;
+    }>({
+        useConversionCadMeshMetadataExtraction:
+            config.app.pipelines.useConversionCadMeshMetadataExtraction,
+        useConversionCoordinateTransform: config.app.pipelines.useConversionCoordinateTransform,
+        usePreviewPcPotreeViewer: config.app.pipelines.usePreviewPcPotreeViewer,
+        usePreview3dThumbnail: config.app.pipelines.usePreview3dThumbnail,
+        useGenAiMetadata3dLabeling: config.app.pipelines.useGenAiMetadata3dLabeling,
+    })) {
+        if (
+            block?.enabled &&
+            block.autoRegisterAutoTriggerOnFileUpload &&
+            block.autoRegisterWithVAMS !== true
+        ) {
+            console.warn(
+                `Configuration Warning: pipelines.${name}.autoRegisterAutoTriggerOnFileUpload is true but ` +
+                    "autoRegisterWithVAMS is not, so no registration and no upload trigger are created. " +
+                    "Set autoRegisterWithVAMS to true to arm the trigger."
+            );
+        }
     }
 
     if (config.app.authProvider.useExternalOAuthIdp.enabled == undefined) {
@@ -606,6 +755,7 @@ export function getConfig(app: cdk.App): Config {
                 globalBurstLimit: 100,
                 endpointType: "REGIONAL",
                 optionalExternalPrivateApigVPCEId: "",
+                apiGatewayTimeoutTime: API_GATEWAY_DEFAULT_TIMEOUT_SECONDS,
             },
         };
     }
@@ -624,6 +774,8 @@ export function getConfig(app: cdk.App): Config {
             globalBurstLimit: legacyApi.globalBurstLimit ?? 100,
             endpointType: legacyApi.endpointType ?? "REGIONAL",
             optionalExternalPrivateApigVPCEId: legacyApi.externalRegionalAPIGatewayVPCEId ?? "",
+            apiGatewayTimeoutTime:
+                legacyApi.apiGatewayTimeoutTime ?? API_GATEWAY_DEFAULT_TIMEOUT_SECONDS,
         };
     }
 
@@ -640,6 +792,9 @@ export function getConfig(app: cdk.App): Config {
     }
     if (config.app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId == undefined) {
         config.app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId = "";
+    }
+    if (config.app.api.apiGatewayRest.apiGatewayTimeoutTime == undefined) {
+        config.app.api.apiGatewayRest.apiGatewayTimeoutTime = API_GATEWAY_DEFAULT_TIMEOUT_SECONDS;
     }
 
     // Initialize CloudFront custom domain configuration if undefined (backward compatibility)
@@ -772,6 +927,36 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
+    //app.govCloud.enabled is the restricted-partition switch, not literally a GovCloud switch: the
+    //GovCloud, EU Sovereign Cloud, and ISO partitions all set it. Every capability downgrade keyed on
+    //it — most consequentially stripping Tags from each AWS::Lambda::EventSourceMapping, which those
+    //partitions reject outright — is skipped when it is left false. Nothing downstream detects that,
+    //so the deployment synthesizes cleanly and then fails partway through creating the core stack,
+    //rolling the whole stack back. Assert the flag against the resolved partition here instead.
+    //Defaulted to "" so an unrecognized region — whose partition resolves to undefined — surfaces as
+    //whatever validation owns that region rather than a TypeError raised from here.
+    const resolvedPartition = config.env.partition ?? "";
+    const isIsoPartition = resolvedPartition.startsWith("aws-iso");
+    const restrictedPartitionRequiringFlag =
+        resolvedPartition === "aws-us-gov" || resolvedPartition === "aws-eusc" || isIsoPartition;
+    if (restrictedPartitionRequiringFlag && config.app.govCloud.enabled !== true) {
+        throw new Error(
+            `Configuration Error: deploying to the '${resolvedPartition}' partition requires ` +
+                "app.govCloud.enabled to be true. The flag gates the partition's capability " +
+                "downgrades (including removing unsupported EventSourceMapping tags), so leaving it " +
+                "false deploys resources the partition rejects."
+        );
+    }
+
+    //The ISO partitions are accredited for classified workloads, so they additionally require the IL6
+    //control set rather than treating it as opt-in.
+    if (isIsoPartition && config.app.govCloud.il6Compliant !== true) {
+        throw new Error(
+            `Configuration Error: deploying to the '${resolvedPartition}' partition requires ` +
+                "app.govCloud.il6Compliant to be true."
+        );
+    }
+
     //If we are govCloud, check for certain features that are required to be on or off.
     //Note: FIP not required for use in GovCloud. Some GovCloud endpoints are natively FIPS compliant regardless of this flag to use specific FIPS endpoints.
     //Note: FedRAMP best practices require all Lambdas/OpenSearch behind VPC but not required for GovCloud
@@ -791,6 +976,13 @@ export function getConfig(app: cdk.App): Config {
         if (config.app.useLocationService.enabled) {
             throw new Error(
                 "Configuration Error: GovCloud must have app.useLocationService.enabled set to false"
+            );
+        }
+
+        if (config.app.pipelines.deadlineCloudExecutionTypeEnabled) {
+            throw new Error(
+                "Configuration Error: AWS Deadline Cloud is not available in GovCloud. " +
+                    "Set app.pipelines.deadlineCloudExecutionTypeEnabled to false."
             );
         }
 
@@ -847,6 +1039,8 @@ export function getConfig(app: cdk.App): Config {
         vpcRequiringFeatures.push("pipelines.usePreview3dThumbnail");
     if (config.app.pipelines.useNvidiaCosmos.enabled)
         vpcRequiringFeatures.push("pipelines.useNvidiaCosmos");
+    if (config.app.pipelines.useNvidiaCosmos3.enabled)
+        vpcRequiringFeatures.push("pipelines.useNvidiaCosmos3");
     if (config.app.pipelines.useNvidiaGr00t.enabled)
         vpcRequiringFeatures.push("pipelines.useNvidiaGr00t");
     if (config.app.pipelines.useConversionCoordinateTransform.enabled)
@@ -963,6 +1157,63 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
+    if (config.app.pipelines.useNvidiaCosmos3.enabled) {
+        const c3 = config.app.pipelines.useNvidiaCosmos3.modelsOmni;
+        const anyC3Enabled =
+            c3?.nano16B?.enabled ||
+            c3?.super64B?.enabled ||
+            c3?.superText2Image64B?.enabled ||
+            c3?.superImage2Video64B?.enabled;
+        if (!anyC3Enabled) {
+            throw new Error(
+                "Configuration Error: useNvidiaCosmos3 is enabled but no model variants are enabled. " +
+                    "Enable at least one model in useNvidiaCosmos3.modelsOmni."
+            );
+        }
+        if (
+            !config.app.pipelines.useNvidiaCosmos3.huggingFaceToken ||
+            config.app.pipelines.useNvidiaCosmos3.huggingFaceToken.trim() === ""
+        ) {
+            throw new Error(
+                "Configuration Error: useNvidiaCosmos3 requires huggingFaceToken when enabled."
+            );
+        }
+        if (
+            c3?.nano16B?.enabled &&
+            (!c3.nano16B.instanceTypes || c3.nano16B.instanceTypes.length === 0)
+        ) {
+            throw new Error(
+                "Configuration Error: useNvidiaCosmos3.modelsOmni.nano16B.instanceTypes must be a non-empty array."
+            );
+        }
+        if (
+            c3?.super64B?.enabled &&
+            (!c3.super64B.instanceTypes || c3.super64B.instanceTypes.length === 0)
+        ) {
+            throw new Error(
+                "Configuration Error: useNvidiaCosmos3.modelsOmni.super64B.instanceTypes must be a non-empty array."
+            );
+        }
+        if (
+            c3?.superText2Image64B?.enabled &&
+            (!c3.superText2Image64B.instanceTypes ||
+                c3.superText2Image64B.instanceTypes.length === 0)
+        ) {
+            throw new Error(
+                "Configuration Error: useNvidiaCosmos3.modelsOmni.superText2Image64B.instanceTypes must be a non-empty array."
+            );
+        }
+        if (
+            c3?.superImage2Video64B?.enabled &&
+            (!c3.superImage2Video64B.instanceTypes ||
+                c3.superImage2Video64B.instanceTypes.length === 0)
+        ) {
+            throw new Error(
+                "Configuration Error: useNvidiaCosmos3.modelsOmni.superImage2Video64B.instanceTypes must be a non-empty array."
+            );
+        }
+    }
+
     // Gr00t Fine-Tuning validation
     if (config.app.pipelines.useNvidiaGr00t.enabled) {
         const gr00tModels = config.app.pipelines.useNvidiaGr00t.modelsFinetune;
@@ -1024,6 +1275,25 @@ export function getConfig(app: cdk.App): Config {
             config.app.assetBuckets.externalAssetBuckets,
             config.env.partition,
             config.env.account
+        );
+    }
+
+    // Validate the default asset bucket (houses all VAMS-managed pipeline template + run I/O data).
+    // Exactly one bucket across the deployment is the default. An imported bucket marked
+    // isDefault=true is the default (and overrides the created bucket); otherwise the created bucket
+    // is the default. At most one external may be marked default, and when no bucket is created one
+    // external MUST be marked default.
+    const defaultExternalCount = (config.app.assetBuckets.externalAssetBuckets || []).filter(
+        (b) => b.isDefault
+    ).length;
+    if (defaultExternalCount > 1) {
+        throw new Error(
+            "Configuration Error: at most one app.assetBuckets.externalAssetBuckets entry may set isDefault=true"
+        );
+    }
+    if (!config.app.assetBuckets.createNewBucket && defaultExternalCount === 0) {
+        throw new Error(
+            "Configuration Error: exactly one app.assetBuckets.externalAssetBuckets entry must set isDefault=true when app.assetBuckets.createNewBucket is false"
         );
     }
 
@@ -1094,7 +1364,7 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
-    //If using RapidPipeline or ModelOps, make sure Imported VPC has at least one private subnet included
+    //If using a pipeline that runs in (or reaches an endpoint in) private subnets, make sure Imported VPC has at least one private subnet included
     if (
         config.app.useGlobalVpc.enabled &&
         config.app.useGlobalVpc.optionalExternalVpcId &&
@@ -1104,7 +1374,12 @@ export function getConfig(app: cdk.App): Config {
         if (
             config.app.pipelines.useRapidPipeline.useEcs.enabled ||
             config.app.pipelines.useRapidPipeline.useEks.enabled ||
-            config.app.pipelines.useModelOps.enabled
+            config.app.pipelines.useModelOps.enabled ||
+            config.app.pipelines.useSplatToolbox.enabled ||
+            config.app.pipelines.useIsaacLabTraining.enabled ||
+            config.app.pipelines.useNvidiaCosmos.enabled ||
+            config.app.pipelines.useNvidiaCosmos3?.enabled ||
+            config.app.pipelines.useNvidiaGr00t.enabled
         ) {
             if (
                 !config.app.useGlobalVpc.optionalExternalPrivateSubnetIds ||
@@ -1112,7 +1387,7 @@ export function getConfig(app: cdk.App): Config {
                 config.app.useGlobalVpc.optionalExternalPrivateSubnetIds == ""
             ) {
                 throw new Error(
-                    "Configuration Error: Must define at least one private subnet ID when using RapidPipeline."
+                    "Configuration Error: Must define at least one private subnet ID when using a pipeline that requires private subnets."
                 );
             }
         }
@@ -1229,6 +1504,19 @@ export function getConfig(app: cdk.App): Config {
         throw new Error(
             "Configuration Error: openSearch.useServerless.nextGen is not supported when app.govCloud.enabled " +
                 "is true (GovCloud and EU Sovereign Cloud). Set openSearch.useServerless.nextGen to false for these partitions."
+        );
+    }
+
+    //OpenSearch Serverless is not supported in the EU Sovereign Cloud: the aoss service has no
+    //endpoint entry for the aws-eusc partition, so the security helper's Service("AOSS") lookup
+    //throws mid-synth with a message that names the service rather than the configuration field
+    //that caused it. Keyed on the partition rather than app.govCloud.enabled because GovCloud does
+    //have an aoss entry and only the EU Sovereign Cloud is affected. Use useProvisioned there.
+    if (config.app.openSearch.useServerless.enabled && config.env.partition === "aws-eusc") {
+        throw new Error(
+            "Configuration Error: openSearch.useServerless is not supported in the 'aws-eusc' partition for VAMS" +
+                "(EU Sovereign Cloud). Set openSearch.useServerless.enabled to false and use " +
+                "openSearch.useProvisioned instead."
         );
     }
 
@@ -1460,6 +1748,17 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
+    //AWS Deadline Cloud is offered only in the commercial partition, so the execution type (and its
+    //VPC interface endpoint) cannot be enabled anywhere else. This partition check is authoritative
+    //regardless of the app.govCloud.enabled flag — a deployment into a GovCloud/EU-Sovereign
+    //partition without that flag set is still blocked.
+    if (config.app.pipelines.deadlineCloudExecutionTypeEnabled && config.env.partition !== "aws") {
+        throw new Error(
+            `Configuration Error: AWS Deadline Cloud is not available in the '${config.env.partition}' partition. ` +
+                "Set app.pipelines.deadlineCloudExecutionTypeEnabled to false."
+        );
+    }
+
     if (
         config.app.authProvider.useExternalOAuthIdp.enabled &&
         (!config.app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl ||
@@ -1529,6 +1828,28 @@ export function getConfig(app: cdk.App): Config {
     if (apiGatewayRest.endpointType !== "REGIONAL" && apiGatewayRest.endpointType !== "PRIVATE") {
         throw new Error(
             "Configuration Error: app.api.apiGatewayRest.endpointType must be 'REGIONAL' or 'PRIVATE'."
+        );
+    }
+
+    if (
+        !Number.isInteger(apiGatewayRest.apiGatewayTimeoutTime) ||
+        apiGatewayRest.apiGatewayTimeoutTime < API_GATEWAY_DEFAULT_TIMEOUT_SECONDS ||
+        apiGatewayRest.apiGatewayTimeoutTime > API_GATEWAY_MAX_TIMEOUT_SECONDS
+    ) {
+        throw new Error(
+            `Configuration Error: app.api.apiGatewayRest.apiGatewayTimeoutTime must be a whole number of ` +
+                `seconds between ${API_GATEWAY_DEFAULT_TIMEOUT_SECONDS} and ${API_GATEWAY_MAX_TIMEOUT_SECONDS}. ` +
+                `Got: '${apiGatewayRest.apiGatewayTimeoutTime}'.`
+        );
+    }
+
+    if (apiGatewayRest.apiGatewayTimeoutTime > API_GATEWAY_DEFAULT_TIMEOUT_SECONDS) {
+        console.warn(
+            `Configuration Warning: app.api.apiGatewayRest.apiGatewayTimeoutTime is set to ` +
+                `${apiGatewayRest.apiGatewayTimeoutTime} seconds, above the ${API_GATEWAY_DEFAULT_TIMEOUT_SECONDS}-second ` +
+                `API Gateway default. This requires an approved account-level increase to the API Gateway ` +
+                `"Integration timeout" quota (L-E5AE38E3) in ${config.env.region} before deploying. Without it, ` +
+                `the deployment fails when API Gateway rejects the higher integration timeout.`
         );
     }
 
@@ -1648,11 +1969,17 @@ export function getConfig(app: cdk.App): Config {
             );
         }
 
-        // Validate SQS URL format (basic validation)
-        const sqsUrlPattern = /^https:\/\/sqs\.[a-z0-9-]+\.amazonaws\.com\/\d+\/[a-zA-Z0-9_-]+$/;
+        // Validate SQS URL format against the deployment partition's DNS suffix (amazonaws.com in
+        // the commercial and GovCloud partitions, amazonaws.com.cn in China, amazonaws.eu in the
+        // EU Sovereign Cloud, and the ISO suffixes). A queue lives in the deployment partition.
+        const sqsDnsSuffix =
+            region_info.RegionInfo.get(config.env.region).domainSuffix || "amazonaws.com";
+        const sqsUrlPattern = new RegExp(
+            `^https://sqs\\.[a-z0-9-]+\\.${sqsDnsSuffix.replace(/\./g, "\\.")}/\\d+/[a-zA-Z0-9_-]+$`
+        );
         if (!sqsUrlPattern.test(config.app.addons.useGarnetFramework.garnetIngestionQueueSqsUrl)) {
             throw new Error(
-                `Configuration Error: Garnet Framework garnetIngestionQueueSqsUrl must be a valid SQS URL. Expected format: https://sqs.region.amazonaws.com/account/queue-name. Got: ${config.app.addons.useGarnetFramework.garnetIngestionQueueSqsUrl}`
+                `Configuration Error: Garnet Framework garnetIngestionQueueSqsUrl must be a valid SQS URL. Expected format: https://sqs.region.${sqsDnsSuffix}/account/queue-name. Got: ${config.app.addons.useGarnetFramework.garnetIngestionQueueSqsUrl}`
             );
         }
 
@@ -1958,6 +2285,12 @@ export interface ConfigPublicAssetS3Buckets {
     bucketArn: string;
     baseAssetsPrefix: string;
     defaultSyncDatabaseId: string;
+    // Marks this imported bucket as the VAMS default asset bucket (houses all pipeline template
+    // data + execution-time run I/O under the pipelines/ prefix). At most one bucket across the
+    // deployment may be the default. When createNewBucket is false, exactly one external bucket
+    // must set this true; when createNewBucket is true, an external bucket set true overrides the
+    // created bucket as the default.
+    isDefault?: boolean;
     // Optional cross-account / encryption fields. Required for buckets that live
     // in a different account (bucketAccountId) or use a customer managed KMS key
     // (bucketKmsKeyArn). bucketRegion defaults to the deployment region.
@@ -2056,6 +2389,7 @@ export interface ConfigPublic {
             };
         };
         pipelines: {
+            deadlineCloudExecutionTypeEnabled: boolean;
             useConversion3dBasic: {
                 enabled: boolean;
                 autoRegisterWithVAMS: boolean;
@@ -2075,12 +2409,11 @@ export interface ConfigPublic {
                 enabled: boolean;
                 autoRegisterWithVAMS: boolean;
                 autoRegisterAutoTriggerOnFileUpload: boolean;
-                sqsAutoRunOnAssetModified: boolean;
             };
             useSplatToolbox: {
                 enabled: boolean;
+                useCodeBuild: boolean;
                 autoRegisterWithVAMS: boolean;
-                sqsAutoRunOnAssetModified: boolean;
             };
             useGenAiMetadata3dLabeling: {
                 enabled: boolean;
@@ -2191,6 +2524,42 @@ export interface ConfigPublic {
                     };
                 };
             };
+            useNvidiaCosmos3: {
+                enabled: boolean;
+                huggingFaceToken: string;
+                useCodeBuild: boolean;
+                useWarmInstances: boolean;
+                warmInstanceCount: number;
+                modelsOmni: {
+                    nano16B: {
+                        enabled: boolean;
+                        autoRegisterWithVAMS: boolean;
+                        autoTriggerOnFileExtensionsUpload: string;
+                        instanceTypes: string[];
+                        maxVCpus: number;
+                    };
+                    super64B: {
+                        enabled: boolean;
+                        autoRegisterWithVAMS: boolean;
+                        autoTriggerOnFileExtensionsUpload: string;
+                        instanceTypes: string[];
+                        maxVCpus: number;
+                    };
+                    superText2Image64B: {
+                        enabled: boolean;
+                        autoRegisterWithVAMS: boolean;
+                        instanceTypes: string[];
+                        maxVCpus: number;
+                    };
+                    superImage2Video64B: {
+                        enabled: boolean;
+                        autoRegisterWithVAMS: boolean;
+                        autoTriggerOnFileExtensionsUpload: string;
+                        instanceTypes: string[];
+                        maxVCpus: number;
+                    };
+                };
+            };
             useNvidiaGr00t: {
                 enabled: boolean;
                 huggingFaceToken: string;
@@ -2276,6 +2645,7 @@ export interface ConfigPublic {
                 globalBurstLimit: number;
                 endpointType: "REGIONAL" | "PRIVATE";
                 optionalExternalPrivateApigVPCEId: string;
+                apiGatewayTimeoutTime: number;
             };
         };
         metadataSchema: {

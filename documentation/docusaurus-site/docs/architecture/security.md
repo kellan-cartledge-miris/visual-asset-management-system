@@ -65,7 +65,7 @@ When Amazon Cognito is not available, VAMS supports external OAuth identity prov
 
 ### API Keys
 
-VAMS supports API key authentication for machine-to-machine access. API keys are stored as SHA-256 hashes in the `ApiKeyStorageTable`. The custom authorizer validates incoming API keys by hashing them and comparing against stored hashes.
+VAMS supports API key authentication for machine-to-machine access. API keys are stored as SHA-256 hashes in the `ApiKeyStorageTable`. The custom authorizer validates incoming API keys by hashing them and comparing against stored hashes, caching each key's record per key for `API_KEY_CACHE_TTL` (15 seconds). A key that is not found is cached as a negative result for the same lifetime, so repeated requests presenting an invalid key do not re-query the table.
 
 ## Custom Lambda Authorizer
 
@@ -78,7 +78,9 @@ VAMS uses a custom Lambda authorizer for all Amazon API Gateway endpoints, provi
 -   **IP Range Restrictions**: Optional IP-based access control with configurable IP range pairs (validated before JWT verification for performance)
 -   **Payload Format Version 2.0**: Simple boolean responses (`isAuthorized: true/false`)
 -   **Comprehensive JWT Claims Context**: All JWT claims are passed to downstream Lambda functions
--   **Public Key Caching**: One-hour TTL for JWKS public keys to reduce external API calls
+-   **Public Key Caching**: `CACHE_TTL` (1 hour) for JWKS public keys to reduce external API calls
+-   **User Role Caching**: `USER_ROLES_CACHE_TTL` (60 seconds) per user for resolved role names
+-   **API Key Caching**: `API_KEY_CACHE_TTL` (15 seconds) per key, including negative results for unknown keys
 -   **Dedicated Lambda Layer**: Isolated dependencies for security and performance
 
 ### Authorizer Configuration
@@ -136,6 +138,14 @@ elif 'lambdaCrossCall' in event:
 | Amazon Cognito     | `sub`, `cognito:username`, `email`, `token_use`, `aud`, `iss`, `exp` |
 | External OAuth IDP | `sub`, `preferred_username`, `email`, `upn`, `username`              |
 | VAMS custom        | `vams:tokens`, `vams:roles`, `vams:externalAttributes`               |
+
+#### Role Resolution
+
+The `vams:roles` context value is resolved by the custom Lambda authorizer, which reads the caller's assigned roles from the user roles table after verifying the presented credential and passes them to handler Lambda functions through the authorizer context. Resolved roles are cached per user for `USER_ROLES_CACHE_TTL` (60 seconds); an empty role list is cached as well, so a user with no roles does not re-query the table on every request. Resolving roles at authorization time applies to every authentication mechanism — Amazon Cognito, an external OAuth identity provider, and API keys — and means a role assignment or revocation takes effect within that cache lifetime rather than persisting for the lifetime of an issued token. The Amazon Cognito pre-token-generation trigger therefore populates only `vams:tokens` and `email`, leaving `vams:roles` empty in the token itself.
+
+Authorization decisions do not depend on this context value: `CasbinEnforcer` independently reads the caller's roles from the user roles table when it builds policy. The context value carries the resolved roles for handler-side use and records them in the audit logs.
+
+For the full request path from the identity provider through the authorizer to both Casbin tiers, see [Authentication and Authorization Flow](../developer/security.md#authentication-and-authorization-flow) in the developer guide.
 
 The Lambda cross-call format is used for internal Lambda-to-Lambda invocations that carry no API Gateway request context (for example, workflow execution processing and bucket-sync ingestion). The `lambdaCrossCall` object supplies a `userName` claim identifying the acting user; when no user context applies, the reserved system user ID `SYSTEM_USER` is used. Because cross-call events bypass JWT verification, access to direct Lambda invocation is controlled through AWS IAM permissions.
 
@@ -208,40 +218,52 @@ flowchart TD
 
 The following fields can be used in ABAC policy rules:
 
-| Field                      | Description                                        |
-| -------------------------- | -------------------------------------------------- |
-| `databaseId`               | Database identifier                                |
-| `assetName`                | Asset name                                         |
-| `assetType`                | Asset type classification                          |
-| `tags`                     | Asset tags                                         |
-| `tagName`                  | Tag name                                           |
-| `tagTypeName`              | Tag type name                                      |
-| `roleName`                 | Role name                                          |
-| `userId`                   | User identifier                                    |
-| `pipelineId`               | Pipeline identifier                                |
-| `pipelineType`             | Pipeline type                                      |
-| `pipelineExecutionType`    | Pipeline execution type (Lambda, SQS, EventBridge) |
-| `workflowId`               | Workflow identifier                                |
-| `metadataSchemaName`       | Metadata schema name                               |
-| `metadataSchemaEntityType` | Metadata entity type                               |
-| `object__type`             | Entity type for Tier 2 enforcement                 |
-| `route__path`              | API route path for Tier 1 enforcement              |
+| Field                      | Description                                                                   |
+| -------------------------- | ----------------------------------------------------------------------------- |
+| `databaseId`               | Database identifier                                                           |
+| `assetName`                | Asset name                                                                    |
+| `assetType`                | Asset type classification                                                     |
+| `tags`                     | Asset tags -- a **list** of values, so it takes `is_one_of` / `is_not_one_of` |
+| `tagName`                  | Tag name                                                                      |
+| `tagTypeName`              | Tag type name                                                                 |
+| `roleName`                 | Role name                                                                     |
+| `userId`                   | User identifier                                                               |
+| `pipelineId`               | Pipeline identifier                                                           |
+| `pipelineExecutionType`    | Pipeline execution type (`Lambda`, `SQS`, `EventBridge`, `DeadlineCloud`)     |
+| `workflowId`               | Workflow identifier                                                           |
+| `category`                 | Pipeline or workflow category, the grouping label assigned when it is created |
+| `name`                     | Pipeline name or workflow name (the display name, not the identifier)         |
+| `metadataSchemaName`       | Metadata schema name                                                          |
+| `metadataSchemaEntityType` | Metadata entity type                                                          |
+| `object__type`             | Entity type for Tier 2 enforcement                                            |
+| `route__path`              | API route path for Tier 1 enforcement                                         |
+
+Each object type accepts only the fields that are meaningful for it. `category` and `name` are valid on the
+`pipeline` and `workflow` object types, which lets a role be scoped to a family of pipelines or workflows
+without listing every identifier — for example allowing GET where `category equals conversion`, or denying
+PUT where `name starts_with prod-`. The authoritative per-type field matrix is returned by
+`GET /auth/constraints/permissionObjects`, which is the same mapping the backend validates a submitted
+constraint against.
+
+:::note
+A pipeline's `name` and `pipelineExecutionType` are stored structurally on the pipeline record
+(`pipelineName` and `executionConfig.executionType`) and are surfaced as these flat fields on the Tier 2
+object before enforcement, so a constraint on either one evaluates against the real value.
+:::
 
 ### MFA-Aware Roles
 
 Roles can require MFA verification. When a role has `mfaRequired=True`, it is only active when the user's authentication claims include `mfaEnabled=True`. This provides an additional security layer for privileged operations.
 
-The API Gateway custom authorizer performs the MFA check: after verifying the caller's JWT, it calls the customizable `customMFATokenScopeCheckOverride` hook (`customConfigCommon/customAuthClaimsCheck.py`) and passes the result to handler Lambda functions as the `vams:mfaEnabled` authorizer context value. For Amazon Cognito, the default hook reads the user's MFA preference with the `AdminGetUser` API (cached per user per sign-in session); for external OAuth IDPs, organizations implement their own MFA verification in the hook. Handler Lambda functions read this context value and need no identity provider access of their own. When Amazon Cognito is the authentication provider, VAMS creates `cognito-idp` and `cognito-identity` VPC interface endpoints, so an authorizer running in the VPC — including in isolated subnets — can reach Amazon Cognito and perform the MFA check. The check (the `COGNITO_AUTH_ENABLED` environment variable on the authorizer Lambda) is therefore enabled in VPC deployments, and MFA-aware roles are enforced.
+The API Gateway custom authorizer performs the MFA check: after verifying the caller's JWT, it calls the customizable `customMFATokenScopeCheckOverride` hook (`customConfigCommon/customAuthClaimsCheck.py`) and passes the result to handler Lambda functions as the `vams:mfaEnabled` authorizer context value. For Amazon Cognito, the default hook reads the user's MFA preference with the `AdminGetUser` API (cached per user per sign-in session); for external OAuth IDPs, organizations implement their own MFA verification in the hook. Handler Lambda functions read this context value and need no identity provider access of their own. The check runs against Amazon Cognito over the public service endpoint, so it requires the authorizer to have a network path to Amazon Cognito.
 
-When `app.useGlobalVpc.addVpcEndpoints = false`, VAMS does not create the VPC endpoints and the operator is expected to create the required endpoints by hand (a topology used when organizational policy prohibits the solution from creating VPC endpoints). VAMS still enables the MFA check in that case, on the assumption that the Cognito endpoints (`cognito-idp` and `cognito-identity`) are among the endpoints created — so **when creating endpoints manually, include the Cognito endpoints** or the in-VPC MFA check will fail.
-
-:::warning[MFA is disabled in GovCloud / EU Sovereign Cloud VPC deployments]
-Amazon Cognito PrivateLink is not available in the AWS GovCloud (US) or AWS European Sovereign Cloud partitions. When VAMS Lambda functions run in the VPC (`app.useGlobalVpc.useForAllLambdas`) in those partitions, the authorizer has no in-VPC path to Amazon Cognito, so VAMS disables the Cognito MFA check (`COGNITO_AUTH_ENABLED = FALSE` on the authorizer Lambda) and `mfaRequired` on a role has no effect. In all other partitions the Cognito VPC endpoints are available and MFA-aware roles are enforced in VPC deployments.
+:::warning[MFA requires the authorizer to run outside the VPC]
+VAMS does not create Amazon Cognito VPC interface endpoints, so an authorizer running inside the VPC has no in-VPC path to Amazon Cognito. When VAMS Lambda functions run in the VPC (`app.useGlobalVpc.useForAllLambdas`), the Cognito MFA check is disabled (`COGNITO_AUTH_ENABLED = FALSE` on the authorizer Lambda) and `mfaRequired` on a role has no effect. The MFA check (`COGNITO_AUTH_ENABLED = TRUE`) and MFA-aware role enforcement apply only when the authorizer runs outside the VPC.
 :::
 
 ### Policy Caching
 
-The Casbin enforcer caches user policies with a 60-second TTL per user. This reduces Amazon DynamoDB reads while ensuring policy changes propagate within one minute.
+The Casbin enforcer caches compiled user policies per user for `CASBIN_REFRESH_POLICY_SECONDS` (60 seconds). This reduces Amazon DynamoDB reads while ensuring policy changes propagate within one minute. Because a user's MFA state changes which of their roles are active, the cache is also keyed on that state and is invalidated when it changes.
 
 ### Pipeline Lambda invocation scope
 
@@ -303,8 +325,25 @@ All data in transit is encrypted using TLS:
 -   **Amazon S3 bucket policies** enforce TLS by denying all `s3:*` actions when `aws:SecureTransport=false`
 -   **Amazon SNS topics** enforce SSL with the `enforceSSL` property
 -   **Amazon SQS queues** enforce SSL with the `enforceSSL` property
--   **Amazon API Gateway** uses HTTPS endpoints exclusively
+-   **Amazon API Gateway** uses HTTPS endpoints exclusively, with a security policy that sets the minimum TLS version
 -   **Amazon CloudFront / Application Load Balancer** terminates TLS at the edge
+
+#### REST API TLS Security Policy
+
+A security policy is a predefined combination of minimum TLS version and cipher suites that Amazon API Gateway offers during the TLS handshake. VAMS sets one on the REST API resource itself, so it applies to the default `execute-api` endpoint the API serves from rather than only to a custom domain name.
+
+| Deployment                                               | Security policy                          | TLS versions accepted |
+| -------------------------------------------------------- | ---------------------------------------- | --------------------- |
+| Commercial                                               | `SecurityPolicy_TLS13_1_2_2021_06`       | TLS 1.3, TLS 1.2      |
+| GovCloud and EU Sovereign Cloud (`app.govCloud.enabled`) | Partition and Region default (unchanged) | TLS 1.3, TLS 1.2      |
+
+In the commercial partition, a Regional REST API would otherwise default to the `TLS_1_0` policy, which accepts TLS 1.0 and TLS 1.1. VAMS raises the floor to `SecurityPolicy_TLS13_1_2_2021_06`, which accepts TLS 1.3 and TLS 1.2 and rejects TLS 1.1 and TLS 1.0. That policy stays compatible with every supported fronting mode: Amazon CloudFront negotiates at most TLS 1.2 to a custom origin, so a TLS 1.3-only policy would fail every `/api/*` origin handshake.
+
+This policy is an enhanced policy, identified by the `SecurityPolicy_` prefix, and requires an endpoint access mode. VAMS sets `BASIC` rather than `STRICT`: the CloudFront `/api/*` origin request, the ALB redirect to `execute-api`, and direct `execute-api` access are cross-host or cross-endpoint-type by design, and `STRICT` rejects requests that do not originate from the same endpoint type with a matching SNI host.
+
+The GovCloud mode, which AWS European Sovereign Cloud deployments also enable for their partition guardrails, leaves the security policy unset so the API keeps the default its partition and Region apply. Those partitions do not offer the `TLS_1_0` policy for Regional APIs, and APIs created there are FIPS-compliant by default, so the minimum version is already TLS 1.2 without VAMS asserting a specific policy.
+
+Changing a security policy takes about 15 minutes to propagate. The API remains invocable while its status is `UPDATING`. To see which TLS version and cipher a client negotiated, use the `$context.tlsVersion` and `$context.cipherSuite` variables in the API access logs.
 
 The following bucket policy statement is applied to every Amazon S3 bucket in VAMS:
 
@@ -379,6 +418,14 @@ Enforcement occurs at URL use time. Restriction changes applied through a redepl
 For external (imported) asset buckets, VAMS does not apply resource policies to buckets it does not own. To restrict presigned URLs on an external bucket, the bucket owner applies an equivalent deny statement manually to the bucket policy. See [External Amazon S3 bucket setup](../deployment/external-s3-setup.md) for the complete statement and instructions.
 
 For custom bucket policy statements beyond network restrictions, `infra/config/policy/s3AdditionalBucketPolicyConfig.json` applies an operator-defined statement to all VAMS-created buckets. See the [configuration reference](../deployment/configuration-reference.md) for details.
+
+## AWS WAF and Rate Limiting
+
+When `app.useWaf` is enabled, AWS WAF protects the Amazon API Gateway API and — when present — the Amazon CloudFront distribution or Application Load Balancer. The rules come from `infra/config/policy/wafPolicyConfig.json` and apply identically to the CloudFront-scoped and regional web ACLs. The shipped policy enforces the AWS Common Rule Set, Known Bad Inputs, and Amazon IP Reputation List in block mode, plus a rate-based rule.
+
+The rate-based rule limits each client to a fixed number of requests per rolling 5-minute window. It aggregates on the `X-Forwarded-For` client IP (`FORWARDED_IP`) rather than the immediate connection source, so it counts each real end user even when requests arrive through CloudFront, an Application Load Balancer, or a shared corporate NAT gateway or VPN egress IP. The limit is set well above a single active user's normal request rate — VAMS issues many requests per user action (live execution-status polling, multi-part uploads, and large-file viewer streaming) — so that legitimate use is not throttled while request floods are still stopped.
+
+When the rate-based rule blocks a request, AWS WAF returns HTTP `429 Too Many Requests` with a small JSON body. This is the correct throttle status and is deliberately distinct from the `403 Forbidden` returned for an authorization denial, so a throttled request is never mistaken for a permission failure. The VAMS web application and the VAMS CLI both treat `429` as a transient, retryable condition — they honor the `Retry-After` header and retry with backoff rather than forcing re-authentication. Tune the limit, aggregation key, and response code in `wafPolicyConfig.json`; see the [configuration reference](../deployment/configuration-reference.md).
 
 ## IAM Least Privilege
 
