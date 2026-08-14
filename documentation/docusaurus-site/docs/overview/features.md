@@ -205,7 +205,7 @@ VAMS includes thirteen built-in processing pipelines, each deployable through co
 | RapidPipeline (ECS/EKS)      | `useRapidPipeline`                       | Licensed spatial data optimization                                                                                                                                                            | Disabled |
 | VNTANA ModelOps              | `useModelOps`                            | Licensed ModelOps optimization                                                                                                                                                                | Disabled |
 | NVIDIA Isaac Lab Training    | `useIsaacLabTraining`                    | Reinforcement learning training and evaluation                                                                                                                                                | Disabled |
-| Miris Auto-Upload            | `app.miris.upload`                       | Upload USD assets to Miris Spatial Streaming; emit `.mrx` manifest                                                                                                                           | Disabled |
+| Miris Auto-Upload            | `app.miris.upload`                       | Upload USD assets to Miris Spatial Streaming; emit `.mrx` manifest                                                                                                                            | Disabled |
 
 ### Pipeline Capabilities
 

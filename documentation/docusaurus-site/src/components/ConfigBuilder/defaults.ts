@@ -285,6 +285,24 @@ const COMMERCIAL: ConfigShape = {
                 clientSecret: "",
             },
         },
+        // Miris Spatial Streaming. Disabled by default in every preset; Miris is a
+        // SaaS integration and is incompatible with GovCloud (see config.ts
+        // validation), so the govcloud and eusovereign presets must leave it off.
+        miris: {
+            enabled: false,
+            viewerKey: "UNDEFINED",
+            upload: {
+                enabled: false,
+                autoRegisterWithVAMS: true,
+                autoRegisterAutoTriggerOnFileUpload: true,
+                triggerExtensions: ".usd,.usda,.usdc,.usdz",
+                apiKeySecretArn: "UNDEFINED",
+                mirisApiBaseUrl: "https://api.miris.com",
+                enabledDatabaseIds: [],
+                taskTimeoutSeconds: 1800,
+                maxAssetSizeBytes: 5000000000,
+            },
+        },
         authProvider: {
             presignedUrlTimeoutSeconds: 86400,
             authorizerOptions: {

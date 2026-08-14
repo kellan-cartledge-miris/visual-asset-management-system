@@ -77,7 +77,11 @@ test("Core stack synthesizes", () => {
             region: mockConfig.env.region,
         },
         stackName: mockConfig.app.baseStackName,
-        ssmWafArn: "",
+        // WAF ARNs are scope-split: regional (API Gateway / ALB) and CloudFront
+        // (us-east-1). Empty strings represent WAF disabled, which is what this
+        // synthesis smoke test wants.
+        ssmWafArnRegional: "",
+        ssmWafArnCloudfront: "",
         config: mockConfig,
         description: "Test stack for VAMS",
     });

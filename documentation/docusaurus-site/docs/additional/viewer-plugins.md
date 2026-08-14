@@ -33,9 +33,9 @@ Viewer plugins are configured in `web/src/visualizerPlugin/config/viewerConfig.j
 
 VAMS includes two Miris viewer plugins that let a user stream a Miris-hosted asset by selecting either the generated `.mrx` manifest or the original USD source file.
 
-| Plugin ID             | Extensions                        | Priority | Feature flag      | Role                                                          |
-| --------------------- | --------------------------------- | -------- | ----------------- | ------------------------------------------------------------ |
-| `miris-stream-viewer` | `.mrx`                            | 1        | `MIRIS_STREAMING` | Streams a Miris-hosted asset referenced by a `.mrx` manifest. |
+| Plugin ID             | Extensions                        | Priority | Feature flag      | Role                                                                                                             |
+| --------------------- | --------------------------------- | -------- | ----------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `miris-stream-viewer` | `.mrx`                            | 1        | `MIRIS_STREAMING` | Streams a Miris-hosted asset referenced by a `.mrx` manifest.                                                    |
 | `miris-upload-viewer` | `.usd`, `.usda`, `.usdc`, `.usdz` | 0        | `MIRIS_UPLOAD`    | Streams a USD asset already on Miris, or offers a one-click **Stream with Miris** upload. Auto-selected for USD. |
 
 :::note

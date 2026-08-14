@@ -4,13 +4,13 @@ Run once against a real Miris account before merging this branch.
 
 ## Prerequisites
 
-- Phase 1 (viewer) deployed and working (smoke-tested per its checklist).
-- A Miris account with a valid Integration Key stored as a Secrets Manager
-  plaintext secret. Capture the ARN.
-- `app.miris.upload.enabled: true`, `apiKeySecretArn` pointing at that ARN,
-  and at least one databaseId in `enabledDatabaseIds`.
-- `app.webUi.allowUnsafeEvalFeatures: true` (inherited gate).
-- A known good `.usdz` file you can upload to VAMS.
+-   Phase 1 (viewer) deployed and working (smoke-tested per its checklist).
+-   A Miris account with a valid Integration Key stored as a Secrets Manager
+    plaintext secret. Capture the ARN.
+-   `app.miris.upload.enabled: true`, `apiKeySecretArn` pointing at that ARN,
+    and at least one databaseId in `enabledDatabaseIds`.
+-   `app.webUi.allowUnsafeEvalFeatures: true` (inherited gate).
+-   A known good `.usdz` file you can upload to VAMS.
 
 ## Steps
 
@@ -35,69 +35,62 @@ Should print the JSON array of allowed databaseIds.
 
 ### 3. Upload to an ALLOWED database (auto-trigger path)
 
-- [ ] Upload `model.usdz` to an asset in a database listed in `enabledDatabaseIds`.
-- [ ] In Step Functions, find the new execution. Trace through: gate
-      Lambda → vamsExecuteMirisUpload → openMirisUploadPipeline → inner
-      SFN → Batch container.
-- [ ] Container logs (CloudWatch) show, in order:
-      - `downloaded`
-      - `start_upload`  (POST /v1/content)
-      - `sigv4_put_complete`
-      - `upload_marked_complete`  (PUT /v1/content/{id})
-      - `terminal_state_reached` with `state=preview` (or already `streamable`)
-      - `generate_triggered` OR `generate_skipped` (best-effort streamable promotion)
-      - `manifest_written`
-- [ ] Within `taskTimeoutSeconds`, a `model.usdz.mrx` file appears in the asset's
-      file list.
-- [ ] In the Miris Portal, the asset shows up at state `preview`. If the
-      best-effort `generate` call worked it will move on to `streamable` over
-      the next few hours. If `generate_skipped` was logged, manually click
-      "Generate streamable" in the Portal for that asset (one credit).
-- [ ] Once the Miris asset reaches `streamable`, open the `.mrx` in the
-      VAMS web UI → Phase 1 viewer streams the asset.
+-   [ ] Upload `model.usdz` to an asset in a database listed in `enabledDatabaseIds`.
+-   [ ] In Step Functions, find the new execution. Trace through: gate
+        Lambda → vamsExecuteMirisUpload → openMirisUploadPipeline → inner
+        SFN → Batch container.
+-   [ ] Container logs (CloudWatch) show, in order: - `downloaded` - `start_upload` (POST /v1/content) - `sigv4_put_complete` - `upload_marked_complete` (PUT /v1/content/{id}) - `terminal_state_reached` with `state=preview` (or already `streamable`) - `generate_triggered` OR `generate_skipped` (best-effort streamable promotion) - `manifest_written`
+-   [ ] Within `taskTimeoutSeconds`, a `model.usdz.mrx` file appears in the asset's
+        file list.
+-   [ ] In the Miris Portal, the asset shows up at state `preview`. If the
+        best-effort `generate` call worked it will move on to `streamable` over
+        the next few hours. If `generate_skipped` was logged, manually click
+        "Generate streamable" in the Portal for that asset (one credit).
+-   [ ] Once the Miris asset reaches `streamable`, open the `.mrx` in the
+        VAMS web UI → Phase 1 viewer streams the asset.
 
 ### 4. Upload to a NON-allowed database
 
-- [ ] Upload another `model.usdz` to an asset in a database NOT in
-      `enabledDatabaseIds`.
-- [ ] In Step Functions, the gate Lambda fires and the workflow records a
-      `skipped` outcome. No Batch job. No `.mrx`.
+-   [ ] Upload another `model.usdz` to an asset in a database NOT in
+        `enabledDatabaseIds`.
+-   [ ] In Step Functions, the gate Lambda fires and the workflow records a
+        `skipped` outcome. No Batch job. No `.mrx`.
 
 ### 5. UI button (manual trigger)
 
-- [ ] Delete the `.mrx` from the asset in step 3.
-- [ ] On the asset detail page, the "Stream with Miris" button appears.
-- [ ] Click it. The button is bypassed of the gate (via `manual: true`).
-- [ ] The pipeline runs again; `.mrx` reappears.
+-   [ ] Delete the `.mrx` from the asset in step 3.
+-   [ ] On the asset detail page, the "Stream with Miris" button appears.
+-   [ ] Click it. The button is bypassed of the gate (via `manual: true`).
+-   [ ] The pipeline runs again; `.mrx` reappears.
 
 ### 6. Validation gate
 
-- [ ] Try `cdk deploy` with `app.miris.upload.enabled: true` but
-      `app.webUi.allowUnsafeEvalFeatures: false`. CDK synth rejects with
-      a clear error.
+-   [ ] Try `cdk deploy` with `app.miris.upload.enabled: true` but
+        `app.webUi.allowUnsafeEvalFeatures: false`. CDK synth rejects with
+        a clear error.
 
 ### 7. Oversize file
 
-- [ ] Set `app.miris.upload.maxAssetSizeBytes: 1000` temporarily and
-      redeploy. Upload anything larger. Container fails clean with
-      `file_too_large` log entry. Outer workflow records failure.
-      Revert the config after.
+-   [ ] Set `app.miris.upload.maxAssetSizeBytes: 1000` temporarily and
+        redeploy. Upload anything larger. Container fails clean with
+        `file_too_large` log entry. Outer workflow records failure.
+        Revert the config after.
 
 ### 8. Multi-file USD (textures / sublayers)
 
-- [ ] Upload a USD asset folder: a root `.usda` plus a `textures/` subfolder it
-      references by relative path.
-- [ ] Container logs show, in order: `artifact_ready`, `packaged_usdz`
-      (with `assets` >= 1), `start_upload`, `sigv4_put_complete`,
-      `upload_marked_complete`, `terminal_state_reached`.
-- [ ] The Miris asset reaches `preview`/`streamable` (textures resolved).
+-   [ ] Upload a USD asset folder: a root `.usda` plus a `textures/` subfolder it
+        references by relative path.
+-   [ ] Container logs show, in order: `artifact_ready`, `packaged_usdz`
+        (with `assets` >= 1), `start_upload`, `sigv4_put_complete`,
+        `upload_marked_complete`, `terminal_state_reached`.
+-   [ ] The Miris asset reaches `preview`/`streamable` (textures resolved).
 
 ### 9. Unresolved references (clean failure)
 
-- [ ] Upload a `.usda` that references an absolute texture path
-      (e.g. `@/Users/.../tex.png@`).
-- [ ] Container exits non-zero; logs show `unresolved_references` with the
-      offending path(s). No partial/broken asset is left streamable.
+-   [ ] Upload a `.usda` that references an absolute texture path
+        (e.g. `@/Users/.../tex.png@`).
+-   [ ] Container exits non-zero; logs show `unresolved_references` with the
+        offending path(s). No partial/broken asset is left streamable.
 
 ## Sign-off
 

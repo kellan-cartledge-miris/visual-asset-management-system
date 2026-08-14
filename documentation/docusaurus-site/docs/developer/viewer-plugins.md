@@ -315,11 +315,11 @@ To enable this viewer, set `app.webUi.allowUnsafeEvalFeatures` to `true` in the 
 
 ### Available Feature Flags
 
-| Flag               | Effect on Viewers                                                                      |
-| ------------------ | -------------------------------------------------------------------------------------- |
-| `ALLOWUNSAFEEVAL`  | Enables Needle USD and SuperSplat Editor viewers (require `unsafe-eval` CSP directive) |
-| `LOCATIONSERVICES` | Can be used to gate geospatial viewers                                                 |
-| `MIRIS_STREAMING`  | Enables the Miris stream viewer (`miris-stream-viewer`) for `.mrx` manifest files      |
+| Flag               | Effect on Viewers                                                                                                                       |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `ALLOWUNSAFEEVAL`  | Enables Needle USD and SuperSplat Editor viewers (require `unsafe-eval` CSP directive)                                                  |
+| `LOCATIONSERVICES` | Can be used to gate geospatial viewers                                                                                                  |
+| `MIRIS_STREAMING`  | Enables the Miris stream viewer (`miris-stream-viewer`) for `.mrx` manifest files                                                       |
 | `MIRIS_UPLOAD`     | Enables the Miris upload/USD viewer (`miris-upload-viewer`) for USD files — streams via an existing `.mrx` or offers a one-click upload |
 
 ### Multiple Requirements

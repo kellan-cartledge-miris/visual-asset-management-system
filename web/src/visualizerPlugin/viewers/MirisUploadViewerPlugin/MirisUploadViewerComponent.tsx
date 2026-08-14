@@ -152,8 +152,8 @@ const MirisUploadViewerComponent: React.FC<ViewerPluginProps> = (props) => {
     if (!source) {
         return center(
             <Box variant="p" color="text-body-secondary">
-                No USD source file (.usd / .usda / .usdc / .usdz) was found in this asset to
-                upload to Miris.
+                No USD source file (.usd / .usda / .usdc / .usdz) was found in this asset to upload
+                to Miris.
             </Box>
         );
     }
@@ -174,9 +174,9 @@ const MirisUploadViewerComponent: React.FC<ViewerPluginProps> = (props) => {
         <SpaceBetween size="m">
             <Box variant="h3">Stream this asset with Miris</Box>
             <Box variant="p" color="text-body-secondary">
-                Upload this USD asset to Miris Spatial Streaming. Miris prepares it for
-                progressive 3D streaming; when ready, a <code>.mrx</code> manifest is added to
-                the asset and you can stream it in the browser.
+                Upload this USD asset to Miris Spatial Streaming. Miris prepares it for progressive
+                3D streaming; when ready, a <code>.mrx</code> manifest is added to the asset and you
+                can stream it in the browser.
             </Box>
             <Button variant="primary" loading={running} onClick={() => onClick(source.key)}>
                 Stream with Miris
