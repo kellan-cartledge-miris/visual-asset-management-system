@@ -103,6 +103,8 @@ const externalVpc = (c: ConfigShape) => {
 };
 const garnet = (c: ConfigShape) => !!getByPath(c, "app.addons.useGarnetFramework.enabled");
 const physna = (c: ConfigShape) => !!getByPath(c, "app.addons.usePhysnaSync.enabled");
+const miris = (c: ConfigShape) => !!getByPath(c, "app.miris.enabled");
+const mirisUpload = (c: ConfigShape) => !!getByPath(c, "app.miris.upload.enabled");
 
 /**
  * Factory for a GPU model sub-tree (Cosmos / Gr00t). Each model has enabled,
@@ -1433,6 +1435,106 @@ export const FIELDS: FieldMeta[] = [
         advanced: true,
         help: "Optional: ARN of an operator-managed Secrets Manager secret ({clientId, clientSecret}). When set, client ID/secret above are ignored.",
         visibleWhen: physna,
+    },
+
+    // ===== Miris Spatial Streaming =====
+    {
+        path: "app.miris.enabled",
+        label: "Miris Spatial Streaming",
+        input: "boolean",
+        section: "addons",
+        advanced: true,
+        help: "Enables the Miris streaming viewer plugin. Requires allowUnsafeEvalFeatures; incompatible with GovCloud.",
+    },
+    {
+        path: "app.miris.viewerKey",
+        label: "Miris — viewer key",
+        input: "text",
+        section: "addons",
+        advanced: true,
+        help: "Deployment-wide Miris viewer key, served to the frontend via /secure-config and used by the streaming SDK. Treat as a secret; Miris shows it only once at creation.",
+        visibleWhen: miris,
+    },
+    {
+        path: "app.miris.upload.enabled",
+        label: "Miris — auto-upload pipeline",
+        input: "boolean",
+        section: "addons",
+        advanced: true,
+        help: "Uploads USD source assets to Miris and writes a .mrx manifest so they become streamable. Requires Miris Spatial Streaming to be enabled.",
+        visibleWhen: miris,
+    },
+    {
+        path: "app.miris.upload.apiKeySecretArn",
+        label: "Miris — Integration Key secret ARN",
+        input: "text",
+        section: "addons",
+        advanced: true,
+        placeholder: "arn:aws:secretsmanager:us-east-1:123456789012:secret:miris-integration-key",
+        help: "Secrets Manager ARN holding the Miris Integration Key. Used by the upload pipeline to create assets. Note: Integration Keys resolve to their owning Miris user's home workspace, so prefer a service account scoped to the shared workspace.",
+        visibleWhen: mirisUpload,
+    },
+    {
+        path: "app.miris.upload.mirisApiBaseUrl",
+        label: "Miris — API base URL",
+        input: "text",
+        section: "addons",
+        advanced: true,
+        placeholder: "https://api.miris.com",
+        visibleWhen: mirisUpload,
+    },
+    {
+        path: "app.miris.upload.autoRegisterWithVAMS",
+        label: "Miris — auto-register pipeline and workflow",
+        input: "boolean",
+        section: "addons",
+        advanced: true,
+        help: "Registers the upload pipeline and its global workflow in VAMS at deploy time.",
+        visibleWhen: mirisUpload,
+    },
+    {
+        path: "app.miris.upload.autoRegisterAutoTriggerOnFileUpload",
+        label: "Miris — trigger automatically on file upload",
+        input: "boolean",
+        section: "addons",
+        advanced: true,
+        help: "Runs the pipeline automatically when a matching file is uploaded to an enabled database. Leave off to upload only via the Stream with Miris action.",
+        visibleWhen: mirisUpload,
+    },
+    {
+        path: "app.miris.upload.enabledDatabaseIds",
+        label: "Miris — enabled database IDs",
+        input: "string-array",
+        section: "addons",
+        advanced: true,
+        help: "Databases the auto-trigger applies to. Empty means no database auto-uploads; the manual Stream with Miris action still works everywhere.",
+        visibleWhen: mirisUpload,
+    },
+    {
+        path: "app.miris.upload.triggerExtensions",
+        label: "Miris — trigger file extensions",
+        input: "text",
+        section: "addons",
+        advanced: true,
+        placeholder: ".usd,.usda,.usdc,.usdz",
+        help: "Comma-separated list of extensions that trigger an upload.",
+        visibleWhen: mirisUpload,
+    },
+    {
+        path: "app.miris.upload.taskTimeoutSeconds",
+        label: "Miris — upload task timeout (seconds)",
+        input: "number",
+        section: "addons",
+        advanced: true,
+        visibleWhen: mirisUpload,
+    },
+    {
+        path: "app.miris.upload.maxAssetSizeBytes",
+        label: "Miris — max asset size (bytes)",
+        input: "number",
+        section: "addons",
+        advanced: true,
+        visibleWhen: mirisUpload,
     },
 
     // ===== API & Web UI =====
