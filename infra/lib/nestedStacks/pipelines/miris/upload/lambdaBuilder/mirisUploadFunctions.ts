@@ -12,6 +12,7 @@ import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import * as path from "path";
 import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
+import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../../../../config/config";
 import { LAMBDA_PYTHON_RUNTIME } from "../../../../../../config/config";
 import { storageResources } from "../../../../storage/storageBuilder-nestedStack";
@@ -97,6 +98,7 @@ export function buildVamsExecuteMirisUploadFunction(
         handler: "vamsExecuteMirisUpload.lambda_handler",
         environment: {
             OPEN_PIPELINE_FUNCTION_NAME: openPipelineFunctionName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
         },
         ..._commonProps(config, vpc, subnets, lambdaCommonBaseLayer),
     });
@@ -109,11 +111,30 @@ export function buildVamsExecuteMirisUploadFunction(
             ],
         })
     );
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["states:SendTaskFailure"],
+            resources: ["*"],
+        })
+    );
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(scope);
+    NagSuppressions.addResourceSuppressions(
+        fun,
+        [
+            {
+                id: "AwsSolutions-IAM5",
+                reason: "Step Functions task tokens are not addressable by ARN, so reporting a callback failure requires a wildcard resource. Scope is limited to the token this function itself receives from the workflow.",
+                appliesTo: ["Resource::*"],
+            },
+        ],
+        true
+    );
     return fun;
 }
 
