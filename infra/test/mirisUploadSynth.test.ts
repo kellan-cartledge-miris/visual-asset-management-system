@@ -113,4 +113,24 @@ test("Core stack synthesizes with the Miris upload pipeline enabled", () => {
     ) as cdk.NestedStack;
     const mirisTemplate = Template.fromStack(mirisUploadBuilder);
     mirisTemplate.resourceCountIs("AWS::Batch::JobDefinition", 1);
+
+    const resources = mirisTemplate.toJSON().Resources as Record<string, any>;
+
+    // The vamsExecute handler resolves its inputs from the workflow manifest in S3. Without a read
+    // grant every execution fails at the first step with AccessDenied.
+    const vamsExecuteRoleIds = Object.keys(resources).filter(
+        (id) => resources[id].Type === "AWS::IAM::Role" && id.includes("vamsExecuteMirisUpload")
+    );
+    expect(vamsExecuteRoleIds).toHaveLength(1);
+    const vamsExecuteStatements = Object.values(resources)
+        .filter(
+            (r: any) =>
+                r.Type === "AWS::IAM::Policy" &&
+                JSON.stringify(r.Properties.Roles ?? []).includes(vamsExecuteRoleIds[0])
+        )
+        .flatMap((r: any) => r.Properties.PolicyDocument.Statement as any[]);
+    const vamsExecuteActions = vamsExecuteStatements.flatMap((s) =>
+        Array.isArray(s.Action) ? s.Action : [s.Action]
+    );
+    expect(vamsExecuteActions).toContain("s3:GetObject*");
 });

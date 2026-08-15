@@ -18,6 +18,7 @@ import * as Config from "../../../../../../config/config";
 import { LAMBDA_PYTHON_RUNTIME } from "../../../../../../config/config";
 import { storageResources } from "../../../../storage/storageBuilder-nestedStack";
 import {
+    grantReadPermissionsToAllAssetBuckets,
     kmsKeyLambdaPermissionAddToResourcePolicy,
     setupSecurityAndLoggingEnvironmentAndPermissions,
     globalLambdaEnvironmentsAndPermissions,
@@ -108,6 +109,10 @@ export function buildVamsExecuteMirisUploadFunction(
             ],
         })
     );
+    // The handler resolves its inputs from the workflow manifest, which lives in the asset bucket
+    // (or the auxiliary bucket for an auxiliary-scoped manifest).
+    grantReadPermissionsToAllAssetBuckets(fun);
+    storageResources.s3.assetAuxiliaryBucket.grantRead(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     fun.addToRolePolicy(
         new iam.PolicyStatement({
