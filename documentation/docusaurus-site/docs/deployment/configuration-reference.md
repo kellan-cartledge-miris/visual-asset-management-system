@@ -539,6 +539,12 @@ Automatically uploads supported USD source files to the Miris Spatial Streaming 
 | `app.miris.upload.taskTimeoutSeconds`                  | number  | `1800`                     | Maximum seconds the pipeline waits for Miris streamable processing to complete before failing (default: 30 minutes).                            |
 | `app.miris.upload.maxAssetSizeBytes`                   | number  | `5000000000`               | Maximum source file size in bytes accepted by the pipeline (default: 5 GB). Files larger than this limit are skipped.                           |
 
+:::note[Two independent timeouts]
+`app.miris.upload.taskTimeoutSeconds` governs the **container's own budget**: how long the upload container waits for Miris streamable processing before failing the run. It is applied to the container and to the pipeline's inner AWS Step Functions state machine, so raising it gives the container more time.
+
+The **workflow task timeout** is a separate value carried in the registered pipeline record (`executionConfig.taskTimeout` in the pipeline's `vamsSchema/pipeline.json`), set to 172800 seconds (48 hours). It bounds how long the calling workflow waits for the pipeline's callback token, and it is not derived from `taskTimeoutSeconds`. Keep `taskTimeoutSeconds` well below 48 hours so the container's own failure handling reports the real cause instead of the workflow task expiring first. Adjusting the workflow task timeout means editing the pipeline record (or the bundled `pipeline.json` before deployment), not the configuration file.
+:::
+
 :::warning[Requirements]
 Miris auto-upload requires `app.miris.enabled: true` and `app.webUi.allowUnsafeEvalFeatures: true`. Cannot be enabled in GovCloud or air-gapped deployments — outbound HTTPS to `api.miris.com` is required.
 :::

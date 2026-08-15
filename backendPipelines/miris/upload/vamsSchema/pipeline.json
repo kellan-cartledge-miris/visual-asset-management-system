@@ -5,7 +5,7 @@
     "executionConfig": {
         "executionType": "Lambda",
         "waitForCallback": "Enabled",
-        "taskTimeout": "1800",
+        "taskTimeout": "172800",
         "taskHeartbeatTimeout": "",
         "lambda": {}
     },
