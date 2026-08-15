@@ -94,7 +94,7 @@ produces no execution — no Batch job, no `.mrx`.
         `s3://<auxiliary-bucket>/locks/miris-upload/<assetId>/<currentVersionId>.claim`
         and run the workflow again from **Automation -> Execute Workflow**.
         The pipeline runs to completion and the `.mrx` is rewritten.
--   [ ] Creating a new **asset version** (the *Create Asset Version* action)
+-   [ ] Creating a new **asset version** (the _Create Asset Version_ action)
         also re-runs the pipeline, since the claim key includes the version
         id. Re-uploading files into the same asset does **not** create an
         asset version, so it keeps the same claim key: deleting the claim
