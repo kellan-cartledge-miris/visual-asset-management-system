@@ -80,19 +80,29 @@ produces no execution — no Batch job, no `.mrx`.
 
 ### 6. Manual trigger via Automation, and forcing a re-run
 
--   [ ] On the asset from step 3, select it (or its USD source file) in the
-        file manager and choose **Automation -> Execute Workflow**. Pick the
+-   [ ] On the asset from step 3, select its root USD source file in the file
+        manager and choose **Automation -> Execute Workflow**. Pick the
         **Miris Spatial Streaming Upload** workflow and the **Stream with
         Miris** template, optionally filling in the asset name / tags fields,
         and run it.
+-   [ ] Selecting the whole asset (`/`) instead blocks **Continue** with
+        "Workflow does not allow whole-asset ('/') selection" — the workflow
+        takes exactly one file.
 -   [ ] Because the asset's current version already holds a claim, this run
         reports `skipped` and does not re-upload.
 -   [ ] Delete the claim object at
         `s3://<auxiliary-bucket>/locks/miris-upload/<assetId>/<currentVersionId>.claim`
         and run the workflow again from **Automation -> Execute Workflow**.
         The pipeline runs to completion and the `.mrx` is rewritten.
--   [ ] Uploading a new version of the asset (rather than deleting the claim)
-        also re-runs the pipeline, since the claim key includes the version id.
+-   [ ] Creating a new **asset version** (the *Create Asset Version* action)
+        also re-runs the pipeline, since the claim key includes the version
+        id. Re-uploading files into the same asset does **not** create an
+        asset version, so it keeps the same claim key: deleting the claim
+        object is the way to force a re-run after a file re-upload.
+-   [ ] Force a container failure (for example with the oversize limit from
+        step 8) on an asset version with no claim yet. The claim is released
+        automatically, so the next Automation run for that same version starts
+        a new upload rather than reporting `skipped`.
 
 ### 7. Validation gate
 
@@ -104,8 +114,10 @@ produces no execution — no Batch job, no `.mrx`.
 
 -   [ ] Set `app.miris.upload.maxAssetSizeBytes: 1000` temporarily and
         redeploy. Upload anything larger. Container fails clean with
-        `file_too_large` log entry. Outer workflow records failure.
-        Revert the config after.
+        `file_too_large` log entry. The outer workflow records a failure
+        within seconds (the pipeline reports `SendTaskFailure`; it does not
+        sit until the workflow task timeout), and the claim for that asset
+        version is gone from the auxiliary bucket. Revert the config after.
 
 ### 9. Multi-file USD (textures / sublayers, single upload)
 
