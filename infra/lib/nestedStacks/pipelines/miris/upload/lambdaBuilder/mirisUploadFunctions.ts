@@ -62,11 +62,6 @@ export function buildMirisUploadGateFunction(
     const fun = new lambda.Function(scope, "mirisUploadGate", {
         code: lambda.Code.fromAsset(LAMBDA_SRC),
         handler: "mirisUploadGate.lambda_handler",
-        environment: {
-            MIRIS_UPLOAD_ENABLED_DATABASES: JSON.stringify(
-                config.app.miris.upload.enabledDatabaseIds
-            ),
-        },
         ..._commonProps(config, vpc, subnets, lambdaCommonBaseLayer),
     });
     fun.addToRolePolicy(
@@ -76,6 +71,7 @@ export function buildMirisUploadGateFunction(
             resources: ["*"],
         })
     );
+    storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
