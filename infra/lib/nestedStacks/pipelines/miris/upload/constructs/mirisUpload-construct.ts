@@ -320,7 +320,8 @@ export class MirisUploadConstruct extends Construct {
             props.config,
             props.vpc,
             props.pipelineSubnets,
-            stateMachine.stateMachineArn
+            stateMachine.stateMachineArn,
+            stateMachineLogGroup
         );
         stateMachine.grantStartExecution(openFn);
 

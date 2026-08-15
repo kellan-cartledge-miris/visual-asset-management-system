@@ -8,6 +8,7 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as kms from "aws-cdk-lib/aws-kms";
 import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as logs from "aws-cdk-lib/aws-logs";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import * as path from "path";
 import { Construct } from "constructs";
@@ -141,7 +142,8 @@ export function buildOpenMirisUploadPipelineFunction(
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
-    stateMachineArn: string
+    stateMachineArn: string,
+    stateMachineLogGroup: logs.ILogGroup
 ): lambda.Function {
     const fun = new lambda.Function(scope, "openMirisUploadPipeline", {
         code: lambda.Code.fromAsset(LAMBDA_SRC),
@@ -150,6 +152,8 @@ export function buildOpenMirisUploadPipelineFunction(
             STATE_MACHINE_ARN: stateMachineArn,
             ALLOWED_INPUT_FILEEXTENSIONS: config.app.miris.upload.triggerExtensions,
             ORCHESTRATION_BUS_NAME: storageResources.eventBridge.orchestrationBus.eventBusName,
+            STATE_MACHINE_LOG_GROUP_NAME: stateMachineLogGroup.logGroupName,
+            STATE_MACHINE_LOG_GROUP_ARN: stateMachineLogGroup.logGroupArn,
         },
         ..._commonProps(config, vpc, subnets, lambdaCommonBaseLayer),
     });
