@@ -7,10 +7,15 @@ A fileUpload trigger fires once per uploaded file, so a multi-file USD asset fan
 execution per matching layer — each of which would package the same dependency graph and create a
 duplicate Miris asset. This gate collapses that fan-out to a single upload.
 
-The claim is an S3 conditional put (``If-None-Match: *``) keyed on the asset and its current
-version. Exactly one caller can create the object; every other caller receives
+The claim is an S3 conditional put (``If-None-Match: *``) at a key derived only from the asset and
+its current version (``mirisClaim.claim_location``), so every execution fanned out from one upload
+computes the same key. Exactly one caller can create the object; every other caller receives
 ``PreconditionFailed`` and exits as a no-op success, reporting against its own task token so the
 workflow task does not wait out its timeout.
+
+A claim that is not followed by a successful upload is released again by ``pipelineEnd`` (or by the
+lambda that detected the failure), so a failed run does not leave the asset version permanently
+skipped.
 
 Per-database scoping is NOT handled here: a database-scoped trigger fires only for uploads in its
 own database, which VAMS resolves natively during trigger matching.
@@ -21,11 +26,11 @@ import os
 import boto3
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service="MirisUploadGate")
-s3_client = boto3.client("s3")
-sfn_client = boto3.client("stepfunctions")
+from mirisClaim import claim_location
 
-CLAIM_PREFIX = os.environ.get("MIRIS_UPLOAD_CLAIM_PREFIX", "locks/miris-upload")
+logger = safeLogger(service="MirisUploadGate")
+s3_client = boto3.client("s3", region_name=os.environ.get("AWS_REGION"))
+sfn_client = boto3.client("stepfunctions", region_name=os.environ.get("AWS_REGION"))
 
 
 def _parse_body(event):
@@ -33,24 +38,6 @@ def _parse_body(event):
     if isinstance(body, str):
         body = json.loads(body)
     return body
-
-
-def _claim_location(aux_uri, asset_id, asset_version_id):
-    """(bucket, key) for this asset+version claim, or (None, None) when there is no aux path.
-
-    The version segment falls back to 'live' so an asset with no recorded version still collapses
-    its fan-out rather than skipping the claim entirely.
-    """
-    if not aux_uri or not asset_id:
-        return None, None
-    without_scheme = aux_uri.replace("s3://", "")
-    bucket, _, prefix = without_scheme.partition("/")
-    if not bucket:
-        return None, None
-    version = asset_version_id or "live"
-    key = "/".join(p for p in [prefix.rstrip("/"), CLAIM_PREFIX, asset_id,
-                               f"{version}.claim"] if p)
-    return bucket, key
 
 
 def _report_skipped(task_token, reason):
@@ -74,7 +61,7 @@ def lambda_handler(event, context):
     asset_version_id = body.get("assetVersionId", "")
     task_token = body.get("sfnExternalTaskToken", "") or ""
 
-    bucket, key = _claim_location(
+    bucket, key = claim_location(
         body.get("inputOutputS3AssetAuxiliaryFilesPath", ""), asset_id, asset_version_id)
 
     # No auxiliary location means no place to record a claim. Proceed rather than block: a missing
