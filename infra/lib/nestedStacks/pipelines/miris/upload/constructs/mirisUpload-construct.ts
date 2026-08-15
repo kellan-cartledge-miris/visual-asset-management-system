@@ -207,8 +207,9 @@ export class MirisUploadConstruct extends Construct {
          * Inner Step Functions state machine
          *
          * Flow:
-         *   constructPipelineTask → SubmitBatchJob → endTask
-         *                         ↘ (on catch) → failState
+         *   constructPipelineTask → SubmitBatchJob → endTask (SendTaskSuccess)
+         *        ↘ (on catch) ────────↙
+         *          endFailureTask (SendTaskFailure + claim release) → failState
          */
         const constructFn = buildConstructMirisUploadPipelineFunction(
             this,
@@ -258,12 +259,33 @@ export class MirisUploadConstruct extends Construct {
             }),
         });
 
+        // Failure branch: the same end Lambda with a failure status, so the outer workflow's
+        // callback token receives SendTaskFailure and the gate's claim is released before the
+        // Fail state stops the execution.
+        const endFailureTask = new tasks.LambdaInvoke(this, "MirisUploadEndFailure", {
+            lambdaFunction: endFn,
+            payload: sfn.TaskInput.fromObject({
+                "externalSfnTaskToken.$": "$.externalSfnTaskToken",
+                status: "failed",
+                error: "MirisUploadFailed",
+                "cause.$": "States.JsonToString($.error)",
+                "assetId.$": "$.assetId",
+                "assetVersionId.$": "$.assetVersionId",
+                "inputOutputS3AssetAuxiliaryFilesPath.$": "$.inputOutputS3AssetAuxiliaryFilesPath",
+            }),
+            resultPath: sfn.JsonPath.DISCARD,
+        });
+
         const failState = new sfn.Fail(this, "MirisUploadFail", {
             error: "MirisUploadFailed",
             cause: "See Batch / container logs for details.",
         });
 
-        submitBatchTask.addCatch(failState, { resultPath: "$.error" }).next(endTask);
+        endFailureTask.next(failState);
+        // A failure in either task carries the same state fields: constructPipeline returns the
+        // claim fields it was given, so both catches resolve the same JSONPaths.
+        constructTask.addCatch(endFailureTask, { resultPath: "$.error" });
+        submitBatchTask.addCatch(endFailureTask, { resultPath: "$.error" }).next(endTask);
 
         const sfnDefinition = sfn.Chain.start(constructTask.next(submitBatchTask));
 

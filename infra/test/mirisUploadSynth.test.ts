@@ -133,4 +133,15 @@ test("Core stack synthesizes with the Miris upload pipeline enabled", () => {
         Array.isArray(s.Action) ? s.Action : [s.Action]
     );
     expect(vamsExecuteActions).toContain("s3:GetObject*");
+    // Releases the gate's claim when the pipeline cannot be handed off.
+    expect(vamsExecuteActions).toContain("s3:DeleteObject*");
+
+    // Every failure route must report against the workflow's callback token, so the Batch failure
+    // branch runs the end Lambda with a failure status rather than reaching sfn.Fail directly.
+    const stateMachine = Object.values(resources).find(
+        (r: any) => r.Type === "AWS::StepFunctions::StateMachine"
+    ) as any;
+    const definition = JSON.stringify(stateMachine.Properties.DefinitionString);
+    expect(definition).toContain("MirisUploadEndFailure");
+    expect(definition).toContain("States.JsonToString($.error)");
 });

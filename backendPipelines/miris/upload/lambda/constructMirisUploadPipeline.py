@@ -27,6 +27,7 @@ def lambda_handler(event, context):
     output_files_uri = event.get("outputS3AssetFilesPath", "")
     asset_id = event.get("assetId", "")
     database_id = event.get("databaseId", "")
+    asset_version_id = event.get("assetVersionId", "")
     input_configuration_s3_location = event.get("inputConfigurationS3Location", "")
     miris_asset_name = event.get("mirisAssetName", "")
 
@@ -84,5 +85,9 @@ def lambda_handler(event, context):
         "definition": [json.dumps(definition)],
         "inputMetadataS3Location": event.get("inputMetadataS3Location", ""),
         "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
+        # The failure branch reads these off the state to release the gate's claim.
+        "assetId": asset_id,
+        "assetVersionId": asset_version_id,
+        "inputOutputS3AssetAuxiliaryFilesPath": aux_uri,
         "status": "STARTING",
     }

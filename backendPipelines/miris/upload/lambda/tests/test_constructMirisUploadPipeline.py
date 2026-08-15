@@ -1,7 +1,13 @@
 #  Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 import json
+import os
 import pytest
+
+# This module's boto3 clients are constructed at import time from AWS_REGION. Set it
+# defensively so this test file does not depend on the ambient shell environment.
+os.environ.setdefault("AWS_REGION", "us-east-1")
+os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
 
 
 @pytest.fixture
@@ -52,3 +58,18 @@ def test_no_duplicate_short_circuit_remains(construct):
 
     assert first["status"] == "STARTING"
     assert second["status"] == "STARTING"
+
+
+def test_claim_fields_are_carried_to_the_failure_branch(construct):
+    # The state machine's failure branch reads these JSONPaths off the construct result.
+    result = construct.lambda_handler(_event(assetVersionId="v7"), None)
+
+    assert result["assetId"] == "a1"
+    assert result["assetVersionId"] == "v7"
+    assert result["inputOutputS3AssetAuxiliaryFilesPath"] == "s3://aux/a1"
+
+
+def test_claim_fields_are_present_when_the_version_is_unknown(construct):
+    result = construct.lambda_handler(_event(), None)
+
+    assert result["assetVersionId"] == ""

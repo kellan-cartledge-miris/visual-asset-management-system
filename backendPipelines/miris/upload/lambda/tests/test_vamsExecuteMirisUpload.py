@@ -1,9 +1,15 @@
 #  Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 import json
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+# This module's boto3 clients are constructed at import time from AWS_REGION. Set it
+# defensively so this test file does not depend on the ambient shell environment.
+os.environ.setdefault("AWS_REGION", "us-east-1")
+os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
 
 
 @pytest.fixture
@@ -86,3 +92,90 @@ def test_gate_skip_short_circuits(handler):
     assert resp["statusCode"] == 200
     # Only the gate was invoked — openPipeline must not run.
     assert lc.invoke.call_count == 1
+
+
+def _resolved(**overrides):
+    resolved = {
+        "assetId": "a1",
+        "databaseId": "db1",
+        "inputS3AssetFilePath": "s3://b/a1/model.usd",
+        "outputS3AssetFilesPath": "s3://b/a1/",
+        "outputS3AssetPreviewPath": "",
+        "outputS3AssetMetadataPath": "",
+        "inputOutputS3AssetAuxiliaryFilesPath":
+            "s3://vams-aux-bucket/pipelines/miris-upload/exec-aaaa1111/",
+        "inputMetadataS3Location": "",
+        "inputConfigurationS3Location": "s3://b/cfg.json",
+        "orchestrationEventPrefix": "",
+        "inputFiles": [{"assetId": "a1"}],
+        "manifestUsed": True,
+    }
+    resolved.update(overrides)
+    return resolved
+
+
+def _asset_table_mock(asset_name="Pump Housing", version="v7"):
+    table = MagicMock()
+    table.get_item.return_value = {
+        "Item": {"assetName": asset_name, "currentVersionId": version}}
+    return table
+
+
+def test_asset_version_is_carried_into_the_pipeline_payload(handler):
+    """openPipeline (and everything downstream) needs the version to release the claim."""
+    with patch.object(handler.manifestHelper, "resolve_pipeline_inputs",
+                      return_value=_resolved()), \
+         patch.object(handler, "_asset_table", return_value=_asset_table_mock()), \
+         patch.object(handler, "lambda_client") as lc:
+        lc.invoke.return_value = {
+            "StatusCode": 200,
+            "Payload": MagicMock(read=lambda: json.dumps({"gate": "proceed"}).encode()),
+        }
+        handler.lambda_handler({"body": json.dumps({"TaskToken": "tok-1"})}, None)
+
+    open_payload = json.loads(lc.invoke.call_args_list[1].kwargs["Payload"].decode())
+    assert open_payload["assetVersionId"] == "v7"
+
+
+def test_failure_after_claim_releases_it(handler):
+    with patch.object(handler.manifestHelper, "resolve_pipeline_inputs",
+                      return_value=_resolved()), \
+         patch.object(handler, "_asset_table", return_value=_asset_table_mock()), \
+         patch.object(handler, "s3_client") as s3, \
+         patch.object(handler, "sfn_client"), \
+         patch.object(handler, "lambda_client") as lc:
+        lc.invoke.side_effect = [
+            {"StatusCode": 200,
+             "Payload": MagicMock(read=lambda: json.dumps({"gate": "proceed"}).encode())},
+            Exception("openPipeline unreachable"),
+        ]
+        resp = handler.lambda_handler({"body": json.dumps({"TaskToken": "tok-1"})}, None)
+
+    assert resp["statusCode"] == 500
+    s3.delete_object.assert_called_once_with(
+        Bucket="vams-aux-bucket", Key="locks/miris-upload/a1/v7.claim")
+
+
+def test_failure_before_the_gate_releases_nothing(handler):
+    with patch.object(handler.manifestHelper, "resolve_pipeline_inputs",
+                      side_effect=Exception("manifest unreadable")), \
+         patch.object(handler, "s3_client") as s3, \
+         patch.object(handler, "sfn_client"):
+        handler.lambda_handler({"body": json.dumps({"TaskToken": "tok-1"})}, None)
+
+    s3.delete_object.assert_not_called()
+
+
+def test_gate_skip_does_not_release_the_winning_claim(handler):
+    with patch.object(handler.manifestHelper, "resolve_pipeline_inputs",
+                      return_value=_resolved()), \
+         patch.object(handler, "_asset_table", return_value=_asset_table_mock()), \
+         patch.object(handler, "s3_client") as s3, \
+         patch.object(handler, "lambda_client") as lc:
+        lc.invoke.return_value = {
+            "StatusCode": 200,
+            "Payload": MagicMock(read=lambda: json.dumps({"gate": "skip"}).encode()),
+        }
+        handler.lambda_handler({"body": json.dumps({"TaskToken": "tok-1"})}, None)
+
+    s3.delete_object.assert_not_called()

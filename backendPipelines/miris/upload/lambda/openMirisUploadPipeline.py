@@ -9,11 +9,13 @@ import boto3
 from customLogging.logger import safeLogger
 
 import manifestHelper
+import mirisClaim
 
 logger = safeLogger(service="OpenMirisUploadPipeline")
 
 sfn = boto3.client("stepfunctions", region_name=os.environ["AWS_REGION"])
 events_client = boto3.client("events", region_name=os.environ["AWS_REGION"])
+s3_client = boto3.client("s3", region_name=os.environ["AWS_REGION"])
 
 STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
 ALLOWED_INPUT_FILEEXTENSIONS = os.environ["ALLOWED_INPUT_FILEEXTENSIONS"]
@@ -23,7 +25,10 @@ STATE_MACHINE_LOG_GROUP_ARN = os.environ.get("STATE_MACHINE_LOG_GROUP_ARN", "")
 REGISTER_DETAIL_TYPE = "pipeline.execution.register"
 
 
-def _abort_external_workflow(error, task_token):
+def _abort_external_workflow(error, task_token, claim=None):
+    """Fail the workflow task and release the gate's claim, so the asset version can run again."""
+    if claim:
+        mirisClaim.release_claim(s3_client, logger, *claim)
     if task_token:
         logger.error(f"Aborting external task: {task_token}")
         sfn.send_task_failure(
@@ -84,10 +89,12 @@ def lambda_handler(event, context):
     aux_s3 = event["inputOutputS3AssetAuxiliaryFilesPath"]
     asset_id = event.get("assetId", "")
     database_id = event.get("databaseId", "")
+    asset_version_id = event.get("assetVersionId", "")
+    claim = (aux_s3, asset_id, asset_version_id)
 
     if input_s3_uri.endswith("/"):
         _abort_external_workflow(
-            "Input S3 URI cannot be a folder for this pipeline", external_task_token
+            "Input S3 URI cannot be a folder for this pipeline", external_task_token, claim
         )
         return {"statusCode": 400, "body": "Input S3 URI cannot be a folder"}
 
@@ -99,6 +106,7 @@ def lambda_handler(event, context):
         _abort_external_workflow(
             f"Pipeline cannot process file extension {extension!r}",
             external_task_token,
+            claim,
         )
         return {"statusCode": 400, "body": f"Unsupported extension {extension!r}"}
 
@@ -117,6 +125,7 @@ def lambda_handler(event, context):
         "externalSfnTaskToken": external_task_token,
         "assetId": asset_id,
         "databaseId": database_id,
+        "assetVersionId": asset_version_id,
     }
 
     try:
@@ -135,5 +144,5 @@ def lambda_handler(event, context):
         return {"statusCode": 200, "body": {"message": "Started", "execution": response}}
     except Exception as e:
         logger.exception(e)
-        _abort_external_workflow("Internal Server Error", external_task_token)
+        _abort_external_workflow("Internal Server Error", external_task_token, claim)
         return {"statusCode": 500, "body": "Internal Server Error"}

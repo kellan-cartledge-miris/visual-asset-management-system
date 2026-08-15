@@ -11,6 +11,7 @@ import boto3
 from customLogging.logger import safeLogger
 
 import manifestHelper
+import mirisClaim
 
 logger = safeLogger(service="VamsExecuteMirisUpload")
 lambda_client = boto3.client("lambda")
@@ -89,7 +90,7 @@ def invoke_gate(resolved, asset_version_id, miris_asset_name, task_token):
     return result.get("gate") != "skip"
 
 
-def execute_pipeline(resolved, miris_asset_name, external_task_token,
+def execute_pipeline(resolved, asset_version_id, miris_asset_name, external_task_token,
                      executing_userName, executing_requestContext):
     """Invoke openMirisUploadPipeline with the full pipeline payload."""
     message_payload = {
@@ -106,6 +107,8 @@ def execute_pipeline(resolved, miris_asset_name, external_task_token,
         "orchestrationEventPrefix": resolved["orchestrationEventPrefix"],
         "assetId": resolved["assetId"],
         "databaseId": resolved["databaseId"],
+        # Carried through the whole chain so any downstream failure can release the gate's claim.
+        "assetVersionId": asset_version_id,
         "mirisAssetName": miris_asset_name,
     }
 
@@ -130,6 +133,8 @@ def execute_pipeline(resolved, miris_asset_name, external_task_token,
 def lambda_handler(event, context):
     logger.info("VamsExecuteMirisUpload received event")
     external_task_token = None
+    # Set once the gate has written a claim, so a later failure can release it again.
+    claim = None
     try:
         body = event.get("body")
         if not body:
@@ -156,8 +161,12 @@ def lambda_handler(event, context):
             logger.info("Gate returned skip; this execution is a no-op")
             return {"statusCode": 200, "body": "Skipped (gate)"}
 
+        claim = (resolved["inputOutputS3AssetAuxiliaryFilesPath"],
+                 resolved["assetId"], asset_version_id)
+
         execute_pipeline(
             resolved,
+            asset_version_id,
             asset_name,
             external_task_token,
             data.get("executingUserName", ""),
@@ -166,5 +175,9 @@ def lambda_handler(event, context):
         return {"statusCode": 200, "body": "Success"}
     except Exception as e:
         logger.exception(e)
+        # The claim is only released when the pipeline never got started. Leaving it behind would
+        # skip this asset version on every later trigger and manual run.
+        if claim:
+            mirisClaim.release_claim(s3_client, logger, *claim)
         abort_external_workflow(e, external_task_token)
         return {"statusCode": 500, "body": json.dumps({"message": "Internal Server Error"})}

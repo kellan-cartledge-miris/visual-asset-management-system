@@ -9,6 +9,7 @@ import pytest
 # This module's boto3 clients are constructed at import time from AWS_REGION. Set it
 # defensively so this test file does not depend on the ambient shell environment.
 os.environ.setdefault("AWS_REGION", "us-east-1")
+os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
 
 
 @pytest.fixture
@@ -103,3 +104,68 @@ def test_put_events_failure_is_swallowed(open_pipeline):
         # Must not raise: registration is best-effort and must never fail the pipeline.
         open_pipeline.register_sub_execution(
             "my-bus", "vams.prod.execution.exec1.pipeline.pe1", "exec-arn", "sm-arn")
+
+
+AUX = "s3://vams-aux-bucket/pipelines/miris-upload/exec-aaaa1111/"
+
+
+def _execute_event(**overrides):
+    event = {
+        "inputS3AssetFilePath": "s3://assets/a1/model.usd",
+        "inputOutputS3AssetAuxiliaryFilesPath": AUX,
+        "assetId": "a1",
+        "assetVersionId": "v7",
+        "databaseId": "db1",
+        "sfnExternalTaskToken": "tok-1",
+    }
+    event.update(overrides)
+    return event
+
+
+def test_rejected_extension_releases_the_claim(open_pipeline):
+    with patch.object(open_pipeline, "sfn") as sfn, \
+         patch.object(open_pipeline, "s3_client") as s3:
+        resp = open_pipeline.lambda_handler(
+            _execute_event(inputS3AssetFilePath="s3://assets/a1/model.obj"), None)
+
+    assert resp["statusCode"] == 400
+    sfn.send_task_failure.assert_called_once()
+    s3.delete_object.assert_called_once_with(
+        Bucket="vams-aux-bucket", Key="locks/miris-upload/a1/v7.claim")
+
+
+def test_folder_input_releases_the_claim(open_pipeline):
+    with patch.object(open_pipeline, "sfn"), patch.object(open_pipeline, "s3_client") as s3:
+        resp = open_pipeline.lambda_handler(
+            _execute_event(inputS3AssetFilePath="s3://assets/a1/"), None)
+
+    assert resp["statusCode"] == 400
+    s3.delete_object.assert_called_once()
+
+
+def test_start_execution_failure_releases_the_claim(open_pipeline):
+    with patch.object(open_pipeline, "sfn") as sfn, \
+         patch.object(open_pipeline, "s3_client") as s3:
+        sfn.start_execution.side_effect = Exception("state machine unavailable")
+        resp = open_pipeline.lambda_handler(_execute_event(), None)
+
+    assert resp["statusCode"] == 500
+    s3.delete_object.assert_called_once()
+
+
+def test_started_execution_keeps_the_claim_and_forwards_the_version(open_pipeline):
+    import datetime
+
+    with patch.object(open_pipeline, "sfn") as sfn, \
+         patch.object(open_pipeline, "s3_client") as s3:
+        sfn.start_execution.return_value = {
+            "executionArn": "arn:aws:states:us-east-1:123456789012:execution:x:y",
+            "startDate": datetime.datetime(2026, 8, 14),
+        }
+        resp = open_pipeline.lambda_handler(_execute_event(), None)
+
+    assert resp["statusCode"] == 200
+    s3.delete_object.assert_not_called()
+    sfn_input = json.loads(sfn.start_execution.call_args.kwargs["input"])
+    assert sfn_input["assetVersionId"] == "v7"
+    assert sfn_input["inputOutputS3AssetAuxiliaryFilesPath"] == AUX
