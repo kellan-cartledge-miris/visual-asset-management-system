@@ -397,8 +397,8 @@
         },
         {
             "id": "miris-upload-viewer",
-            "name": "Stream with Miris",
-            "description": "Upload this USD asset to Miris Spatial Streaming. Shown for USD source files when the Miris upload pipeline is enabled and the asset has not yet been uploaded.",
+            "name": "Miris Upload Status",
+            "description": "Shows Miris Spatial Streaming upload status for USD source files, and streams the asset once uploaded.",
             "componentPath": "./viewers/MirisUploadViewerPlugin/MirisUploadViewerComponent",
             "supportedExtensions": [".usd", ".usda", ".usdc", ".usdz"],
             "supportsMultiFile": false,
