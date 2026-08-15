@@ -8,12 +8,19 @@ import os
 import boto3
 from customLogging.logger import safeLogger
 
+import manifestHelper
+
 logger = safeLogger(service="OpenMirisUploadPipeline")
 
 sfn = boto3.client("stepfunctions", region_name=os.environ["AWS_REGION"])
+events_client = boto3.client("events", region_name=os.environ["AWS_REGION"])
 
 STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
 ALLOWED_INPUT_FILEEXTENSIONS = os.environ["ALLOWED_INPUT_FILEEXTENSIONS"]
+ORCHESTRATION_BUS_NAME = os.environ.get("ORCHESTRATION_BUS_NAME", "")
+STATE_MACHINE_LOG_GROUP_NAME = os.environ.get("STATE_MACHINE_LOG_GROUP_NAME", "")
+STATE_MACHINE_LOG_GROUP_ARN = os.environ.get("STATE_MACHINE_LOG_GROUP_ARN", "")
+REGISTER_DETAIL_TYPE = "pipeline.execution.register"
 
 
 def _abort_external_workflow(error, task_token):
@@ -26,11 +33,49 @@ def _abort_external_workflow(error, task_token):
         )
 
 
+def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
+                           sub_execution_arn, state_machine_arn):
+    """Best-effort report of this pipeline's sub-SFN execution to the orchestration bus."""
+    if not orchestration_bus_name or not orchestration_event_prefix:
+        logger.info("Orchestration bus/prefix not configured; skipping sub-process registration")
+        return
+    pipeline_execution_id = manifestHelper.pipeline_execution_id_from_event_prefix(
+        orchestration_event_prefix)
+    if not pipeline_execution_id:
+        logger.warning("Could not derive pipelineExecutionId from event prefix; skipping registration")
+        return
+    detail = {
+        "pipelineExecutionId": pipeline_execution_id,
+        "subExecution": {
+            "stateMachineArn": state_machine_arn or "",
+            "executionArn": sub_execution_arn or "",
+        },
+    }
+    if STATE_MACHINE_LOG_GROUP_NAME or STATE_MACHINE_LOG_GROUP_ARN:
+        detail["logs"] = [{
+            "logGroupArn": STATE_MACHINE_LOG_GROUP_ARN,
+            "logGroupName": STATE_MACHINE_LOG_GROUP_NAME,
+            "logStreamName": "",
+        }]
+    try:
+        events_client.put_events(Entries=[{
+            "EventBusName": orchestration_bus_name,
+            "Source": orchestration_event_prefix,
+            "DetailType": REGISTER_DETAIL_TYPE,
+            "Detail": json.dumps(detail),
+        }])
+        logger.info(f"Registered sub-execution for pipeline execution {pipeline_execution_id}")
+    except Exception as e:  # nosec B110 - registration is best-effort; never fail the pipeline
+        logger.warning(f"Sub-process registration failed (non-critical): {e}")
+
+
 def lambda_handler(event, context):
     logger.info("OpenMirisUploadPipeline received event")
 
-    input_metadata = event.get("inputMetadata", "")
-    input_parameters = event.get("inputParameters", "")
+    input_metadata_s3_location = event.get("inputMetadataS3Location", "")
+    input_configuration_s3_location = event.get("inputConfigurationS3Location", "")
+    miris_asset_name = event.get("mirisAssetName", "")
+    orchestration_event_prefix = event.get("orchestrationEventPrefix", "")
     external_task_token = event.get("sfnExternalTaskToken", "")
     input_s3_uri = event["inputS3AssetFilePath"]
     output_s3_files = event.get("outputS3AssetFilesPath", "")
@@ -66,8 +111,9 @@ def lambda_handler(event, context):
         "outputS3AssetPreviewPath": output_s3_preview,
         "outputS3AssetMetadataPath": output_s3_metadata,
         "inputOutputS3AssetAuxiliaryFilesPath": aux_s3,
-        "inputMetadata": input_metadata,
-        "inputParameters": input_parameters,
+        "inputMetadataS3Location": input_metadata_s3_location,
+        "inputConfigurationS3Location": input_configuration_s3_location,
+        "mirisAssetName": miris_asset_name,
         "externalSfnTaskToken": external_task_token,
         "assetId": asset_id,
         "databaseId": database_id,
@@ -80,6 +126,11 @@ def lambda_handler(event, context):
             name=job_name,
             input=json.dumps(sfn_input),
         )
+
+        register_sub_execution(
+            ORCHESTRATION_BUS_NAME, orchestration_event_prefix,
+            response.get("executionArn", ""), STATE_MACHINE_ARN)
+
         response["startDate"] = response["startDate"].strftime("%m-%d-%Y %H:%M:%S")
         return {"statusCode": 200, "body": {"message": "Started", "execution": response}}
     except Exception as e:

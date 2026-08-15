@@ -149,6 +149,7 @@ export function buildOpenMirisUploadPipelineFunction(
         environment: {
             STATE_MACHINE_ARN: stateMachineArn,
             ALLOWED_INPUT_FILEEXTENSIONS: config.app.miris.upload.triggerExtensions,
+            ORCHESTRATION_BUS_NAME: storageResources.eventBridge.orchestrationBus.eventBusName,
         },
         ..._commonProps(config, vpc, subnets, lambdaCommonBaseLayer),
     });
@@ -159,6 +160,7 @@ export function buildOpenMirisUploadPipelineFunction(
             resources: ["*"],
         })
     );
+    storageResources.eventBridge.orchestrationBus.grantPutEventsTo(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
