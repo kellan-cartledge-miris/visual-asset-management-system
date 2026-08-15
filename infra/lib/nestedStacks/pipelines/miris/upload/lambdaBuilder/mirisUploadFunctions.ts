@@ -71,7 +71,7 @@ export function buildMirisUploadGateFunction(
             resources: ["*"],
         })
     );
-    storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
+    storageResources.s3.assetAuxiliaryBucket.grantPut(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
