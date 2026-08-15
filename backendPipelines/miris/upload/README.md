@@ -11,7 +11,6 @@ For the end-to-end integration (viewer plugins, configuration, architecture), se
 -   **`__main__.py`** - Entrypoint; runs the 6-step Miris upload flow and writes the `.mrx` manifest
 -   **`usd_packager.py`** - USD dependency resolution and `.usdz` packaging via OpenUSD (`UsdUtils.ComputeAllDependencies`)
 -   **`miris_uploader.py`** - Miris content API client (`MirisClient`): start upload, mark complete, poll, generate
--   **`pipeline_vams.py`** - VAMS pipeline definition parsing and output handling
 -   **`utils/secrets.py`** - Retrieves the Miris Integration Key from AWS Secrets Manager
 -   **`Dockerfile`** / **`entrypoint.sh`** - x86_64 image (the `usd-core` wheel has no aarch64 build)
 

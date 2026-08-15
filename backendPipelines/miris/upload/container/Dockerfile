@@ -13,8 +13,8 @@ COPY __init__.py .
 COPY __main__.py .
 COPY entrypoint.sh .
 COPY config.json .
-COPY pipeline_vams.py .
 COPY miris_uploader.py .
+COPY upload_config.py .
 COPY usd_packager.py .
 COPY utils/ utils/
 
