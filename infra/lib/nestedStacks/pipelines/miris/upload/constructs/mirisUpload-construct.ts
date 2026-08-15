@@ -208,8 +208,10 @@ export class MirisUploadConstruct extends Construct {
          *
          * Flow:
          *   constructPipelineTask → SubmitBatchJob → endTask (SendTaskSuccess)
-         *        ↘ (on catch) ────────↙
-         *          endFailureTask (SendTaskFailure + claim release) → failState
+         *          │ on catch          │ on catch
+         *          └─────────┬─────────┘
+         *                    ▼
+         *   endFailureTask (SendTaskFailure + claim release) → failState
          */
         const constructFn = buildConstructMirisUploadPipelineFunction(
             this,
