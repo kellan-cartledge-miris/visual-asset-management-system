@@ -208,11 +208,8 @@ export class MirisUploadConstruct extends Construct {
          * Inner Step Functions state machine
          *
          * Flow:
-         *   constructPipelineTask
-         *     → DuplicateCheck (choice)
-         *         - DUPLICATE_DETECTED → DuplicateSucceed (terminal)
-         *         - otherwise          → SubmitBatchJob → endTask
-         *                              ↘ (on catch) → failState
+         *   constructPipelineTask → SubmitBatchJob → endTask
+         *                         ↘ (on catch) → failState
          */
         const constructFn = buildConstructMirisUploadPipelineFunction(
             this,
@@ -267,18 +264,9 @@ export class MirisUploadConstruct extends Construct {
             cause: "See Batch / container logs for details.",
         });
 
-        const duplicateSucceedState = new sfn.Succeed(this, "DuplicateAlreadyStreamed");
-
         submitBatchTask.addCatch(failState, { resultPath: "$.error" }).next(endTask);
 
-        const duplicateCheck = new sfn.Choice(this, "DuplicateCheck")
-            .when(
-                sfn.Condition.stringEquals("$.status", "DUPLICATE_DETECTED"),
-                duplicateSucceedState
-            )
-            .otherwise(submitBatchTask);
-
-        const sfnDefinition = sfn.Chain.start(constructTask.next(duplicateCheck));
+        const sfnDefinition = sfn.Chain.start(constructTask.next(submitBatchTask));
 
         /**
          * CloudWatch Log Group for the inner state machine
