@@ -536,7 +536,6 @@ Automatically uploads supported USD source files to the Miris Spatial Streaming 
 | `app.miris.upload.triggerExtensions`                   | string  | `".usd,.usda,.usdc,.usdz"` | Comma-separated list of file extensions that trigger the pipeline on upload.                                                                    |
 | `app.miris.upload.apiKeySecretArn`                     | string  | _(required when enabled)_  | AWS Secrets Manager ARN containing the Miris Integration Key used to authenticate with the Miris content API.                                   |
 | `app.miris.upload.mirisApiBaseUrl`                     | string  | `"https://api.miris.com"`  | Base URL for the Miris content API. Override only for non-production Miris environments.                                                        |
-| `app.miris.upload.enabledDatabaseIds`                  | array   | `[]`                       | Array of VAMS database IDs for which the pipeline is active. Files uploaded to databases not in this list are skipped. An empty list skips all. |
 | `app.miris.upload.taskTimeoutSeconds`                  | number  | `1800`                     | Maximum seconds the pipeline waits for Miris streamable processing to complete before failing (default: 30 minutes).                            |
 | `app.miris.upload.maxAssetSizeBytes`                   | number  | `5000000000`               | Maximum source file size in bytes accepted by the pipeline (default: 5 GB). Files larger than this limit are skipped.                           |
 

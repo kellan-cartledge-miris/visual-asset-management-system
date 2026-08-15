@@ -151,8 +151,8 @@ const MirisUploadViewerComponent: React.FC<ViewerPluginProps> = (props) => {
             <Box variant="p" color="text-body-secondary">
                 This USD asset has not been uploaded to Miris Spatial Streaming. Use the file
                 manager&apos;s <strong>Automation</strong> action to run the Miris upload workflow
-                on it; once processing completes, a <code>.mrx</code> manifest is added to the
-                asset and you can stream it here.
+                on it; once processing completes, a <code>.mrx</code> manifest is added to the asset
+                and you can stream it here.
             </Box>
         </SpaceBetween>
     );

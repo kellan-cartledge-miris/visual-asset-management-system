@@ -636,7 +636,6 @@ export function getConfig(app: cdk.App): Config {
                 triggerExtensions: ".usd,.usda,.usdc,.usdz",
                 apiKeySecretArn: "",
                 mirisApiBaseUrl: "https://api.miris.com",
-                enabledDatabaseIds: [],
                 taskTimeoutSeconds: 1800,
                 maxAssetSizeBytes: 5_000_000_000,
             },
@@ -651,7 +650,6 @@ export function getConfig(app: cdk.App): Config {
             triggerExtensions: ".usd,.usda,.usdc,.usdz",
             apiKeySecretArn: "",
             mirisApiBaseUrl: "https://api.miris.com",
-            enabledDatabaseIds: [],
             taskTimeoutSeconds: 1800,
             maxAssetSizeBytes: 5_000_000_000,
         };
@@ -690,16 +688,6 @@ export function getConfig(app: cdk.App): Config {
             throw new Error(
                 "Configuration Error: app.miris.upload.enabled requires " +
                     "app.miris.upload.mirisApiBaseUrl (default https://api.miris.com)."
-            );
-        }
-        if (
-            config.app.miris.upload.autoRegisterAutoTriggerOnFileUpload &&
-            config.app.miris.upload.enabledDatabaseIds.length === 0
-        ) {
-            console.warn(
-                "Configuration Warning: app.miris.upload.autoRegisterAutoTriggerOnFileUpload " +
-                    "is true but app.miris.upload.enabledDatabaseIds is empty. The pipeline " +
-                    "will register but never auto-fire (the gate Lambda blocks all databases)."
             );
         }
     }
@@ -2633,7 +2621,6 @@ export interface ConfigPublic {
                 triggerExtensions: string;
                 apiKeySecretArn: string;
                 mirisApiBaseUrl: string;
-                enabledDatabaseIds: string[];
                 taskTimeoutSeconds: number;
                 maxAssetSizeBytes: number;
             };

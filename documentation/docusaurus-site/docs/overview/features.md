@@ -13,7 +13,7 @@ The VAMS web interface is a React 17 application built with Vite and the AWS Clo
 VAMS includes built-in viewer plugins across five categories (3D, Media, Document, Data, and Preview), covering 3D meshes, CAD, point clouds, Gaussian splats, USD, and IFC/BIM models. The plugin-based architecture supports lazy loading, per-plugin dependency management, automatic viewer selection based on file extension, and fullscreen mode. Two additional licensed viewers (VNTANA and VEERUM) provide commercial-grade rendering for GLB models and point clouds.
 
 -   **Miris Spatial Streaming** — Stream 3D assets at progressive levels of detail via the Miris platform. Stream by selecting either a `.mrx` manifest or, with the upload viewer enabled, the original USD source file.
--   **Miris Auto-Upload Pipeline** — Uploads supported USD source assets to the Miris Spatial Streaming platform and emits a `.mrx` manifest, so assets become streamable in the VAMS viewer. Runs automatically on upload for enabled databases, or on demand via the **Stream with Miris** action in the viewer.
+-   **Miris Auto-Upload Pipeline** — Uploads supported USD source assets to the Miris Spatial Streaming platform and emits a `.mrx` manifest, so assets become streamable in the VAMS viewer. Runs automatically on upload, or on demand via the file manager's **Automation** action.
 
 For the complete list of supported file viewers and extensions, see [File Viewers](../concepts/viewers.md).
 
@@ -284,7 +284,7 @@ VAMS uses a feature flag system to conditionally enable capabilities at deployme
 | `ALLOWUNSAFEEVAL`               | Enables viewers requiring `unsafe-eval` CSP (Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Three.js CAD formats)                                                   |
 | `LOCATIONSERVICES`              | Enables Amazon Location Service integration for map views                                                                                                            |
 | `MIRIS_STREAMING`               | Enables the Miris Spatial Streaming viewer for `.mrx` manifest files                                                                                                 |
-| `MIRIS_UPLOAD`                  | Enables the Miris auto-upload pipeline and its one-click "Stream with Miris" USD viewer                                                                              |
+| `MIRIS_UPLOAD`                  | Enables the Miris auto-upload pipeline and its USD upload-status viewer                                                                                              |
 | `ALBDEPLOY`                     | Indicates Application Load Balancer web distribution                                                                                                                 |
 | `CLOUDFRONTDEPLOY`              | Indicates Amazon CloudFront web distribution                                                                                                                         |
 | `NOOPENSEARCH`                  | Indicates Amazon OpenSearch is disabled                                                                                                                              |

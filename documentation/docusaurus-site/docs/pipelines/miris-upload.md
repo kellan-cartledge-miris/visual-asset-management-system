@@ -4,12 +4,12 @@ The Miris Auto-Upload pipeline streams supported source assets into the Miris Sp
 
 ## When it fires
 
-The pipeline runs in two ways:
+The pipeline auto-registers as a GLOBAL VAMS workflow (`miris-upload`) with a `fileUpload` trigger, and runs in two ways:
 
--   **Automatically** — when a file with a supported extension is uploaded to a VAMS asset in a database listed in `app.miris.upload.enabledDatabaseIds`.
--   **Manually** — when a user opens a USD file that is not yet on Miris and clicks **Stream with Miris** in the viewer pane. This action is provided by the `miris-upload-viewer` plugin (requires the `MIRIS_UPLOAD` feature) and uploads the asset regardless of the per-database allow-list. See [Viewer Plugins Reference](../additional/viewer-plugins.md#miris-spatial-streaming-viewers).
+-   **Automatically** — when a file with a supported extension is uploaded to a VAMS asset, provided `app.miris.upload.autoRegisterAutoTriggerOnFileUpload` is enabled. The trigger is GLOBAL, so it fires for uploads in any database; restricting it to specific databases is a matter of registering a database-scoped copy of the workflow instead of relying on the global one.
+-   **On demand** — select the asset or its USD source file in the file manager and choose **Automation -> Execute Workflow**, then pick the **Miris Spatial Streaming Upload** workflow and its **Stream with Miris** template. See [Viewer Plugins Reference](../additional/viewer-plugins.md#miris-spatial-streaming-viewers).
 
-The manual trigger invokes the pipeline's workflow with the asset's **root USD file** as input. The pipeline requires a single source file — it does not accept a folder.
+Either trigger invokes the pipeline's workflow with the asset's **root USD file** as input. The pipeline requires a single source file — it does not accept a folder. A `fileUpload` trigger fires once per matching file, so a multi-file USD asset made up of several standalone USD layers can fan out to one execution per layer; the upload gate claims the asset's current version and lets only the first execution proceed, so the asset is uploaded to Miris exactly once regardless of how many files triggered it.
 
 ## Viewing the result
 
@@ -51,7 +51,7 @@ See `app.miris.upload.*` in the [Configuration Reference](../deployment/configur
 
 ## Requirements
 
--   `app.miris.enabled` must be true (the viewer plumbing the pipeline produces output for).
--   `app.webUi.allowUnsafeEvalFeatures` must be true (inherited Phase 1 gate).
+-   `app.miris.enabled` must be true (the viewer that renders the pipeline's output requires it).
+-   `app.webUi.allowUnsafeEvalFeatures` must be true (required by the Miris viewer's CSP gate).
 -   Miris Integration Key stored in Secrets Manager; ARN in `app.miris.upload.apiKeySecretArn`.
 -   Cannot be enabled in GovCloud or air-gapped deployments.

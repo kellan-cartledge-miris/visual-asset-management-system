@@ -1573,16 +1573,7 @@ export const FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "addons",
         advanced: true,
-        help: "Runs the pipeline automatically when a matching file is uploaded to an enabled database. Leave off to upload only via the Stream with Miris action.",
-        visibleWhen: mirisUpload,
-    },
-    {
-        path: "app.miris.upload.enabledDatabaseIds",
-        label: "Miris — enabled database IDs",
-        input: "string-array",
-        section: "addons",
-        advanced: true,
-        help: "Databases the auto-trigger applies to. Empty means no database auto-uploads; the manual Stream with Miris action still works everywhere.",
+        help: "Runs the pipeline automatically when a matching file is uploaded. Leave off to upload only via the file manager's Automation action.",
         visibleWhen: mirisUpload,
     },
     {

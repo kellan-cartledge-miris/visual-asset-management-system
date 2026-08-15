@@ -337,7 +337,6 @@ const COMMERCIAL: ConfigShape = {
                 triggerExtensions: ".usd,.usda,.usdc,.usdz",
                 apiKeySecretArn: "UNDEFINED",
                 mirisApiBaseUrl: "https://api.miris.com",
-                enabledDatabaseIds: [],
                 taskTimeoutSeconds: 1800,
                 maxAssetSizeBytes: 5000000000,
             },

@@ -8,10 +8,10 @@
 
 The integration has two halves that work together:
 
--   **Viewer plugins** render Miris-hosted assets in the VAMS file viewer. A `.mrx` manifest file (a small pointer to a Miris asset) triggers streaming, and USD source files can stream the same asset or start an upload.
+-   **Viewer plugins** render Miris-hosted assets in the VAMS file viewer. A `.mrx` manifest file (a small pointer to a Miris asset) triggers streaming, and a USD source file streams the same asset once it is on Miris.
 -   **The Miris Auto-Upload pipeline** uploads supported USD source assets to Miris, waits for processing, and writes the `.mrx` manifest back to the asset's file list. See the [Miris Auto-Upload Pipeline](../../pipelines/miris-upload.md) for the pipeline details.
 
-The end-to-end flow is: a USD asset is uploaded to Miris (automatically on file upload, or on demand from the viewer) → Miris processes it into a streamable asset → a `.mrx` manifest is added to the VAMS asset → the viewer streams the asset when a user opens the `.mrx` or the USD source file.
+The end-to-end flow is: a USD asset is uploaded to Miris (automatically on file upload, or on demand through the file manager's **Automation** action) → Miris processes it into a streamable asset → a `.mrx` manifest is added to the VAMS asset → the viewer streams the asset when a user opens the `.mrx` or the USD source file.
 
 :::info
 Miris integration is optional and does not affect core VAMS functionality. It cannot be enabled in GovCloud or air-gapped deployments, and it requires the `unsafe-eval` Content Security Policy directive (see [Requirements](#requirements-and-limitations)).
@@ -23,10 +23,10 @@ Miris integration is optional and does not affect core VAMS functionality. It ca
 
 VAMS includes two Miris viewer plugins. Together they let a user stream a Miris-hosted asset by selecting either the generated `.mrx` manifest or the original USD source file.
 
-| Plugin ID             | Extensions                        | Priority | Feature flag      | Role                                                                |
-| --------------------- | --------------------------------- | -------- | ----------------- | ------------------------------------------------------------------- |
-| `miris-stream-viewer` | `.mrx`                            | 1        | `MIRIS_STREAMING` | Streams a Miris-hosted asset referenced by a `.mrx` manifest.       |
-| `miris-upload-viewer` | `.usd`, `.usda`, `.usdc`, `.usdz` | 0        | `MIRIS_UPLOAD`    | Streams a USD asset already on Miris, or offers a one-click upload. |
+| Plugin ID             | Extensions                        | Priority | Feature flag      | Role                                                                 |
+| --------------------- | --------------------------------- | -------- | ----------------- | --------------------------------------------------------------------- |
+| `miris-stream-viewer` | `.mrx`                            | 1        | `MIRIS_STREAMING` | Streams a Miris-hosted asset referenced by a `.mrx` manifest.        |
+| `miris-upload-viewer` | `.usd`, `.usda`, `.usdc`, `.usdz` | 0        | `MIRIS_UPLOAD`    | Streams a USD asset already on Miris, or shows its upload status.   |
 
 ### Stream viewer (`.mrx`)
 
@@ -38,7 +38,7 @@ The `miris-upload-viewer` plugin handles USD source files. Because it has priori
 
 -   **A `.mrx` exists and streaming is configured** — streams the asset by delegating to the stream viewer, so selecting the USD file behaves the same as selecting the `.mrx`.
 -   **A `.mrx` exists but streaming is not configured** — shows an "Already on Miris" note.
--   **No `.mrx` yet** — shows a **Stream with Miris** action that uploads the asset's root USD file to Miris.
+-   **No `.mrx` yet** — shows a note pointing to the file manager's **Automation** action, which runs the auto-registered `miris-upload` workflow on the asset.
 
 :::note
 The `.mrx` manifest is only a streaming pointer; the geometry is hosted on Miris and is never downloaded through VAMS. For this reason, the manifest download is permitted even when the asset is marked non-distributable. Per-asset access authorization still applies.
@@ -66,7 +66,6 @@ Enable Miris by setting `app.miris.enabled` to `true` and providing a viewer key
                 "triggerExtensions": ".usd,.usda,.usdc,.usdz",
                 "apiKeySecretArn": "arn:aws:secretsmanager:REGION:ACCOUNT:secret:miris-integration-key-XXXX",
                 "mirisApiBaseUrl": "https://app.miris.com",
-                "enabledDatabaseIds": ["MirisStreamableDatabase"],
                 "taskTimeoutSeconds": 1800,
                 "maxAssetSizeBytes": 5000000000
             }
@@ -81,12 +80,13 @@ Enable Miris by setting `app.miris.enabled` to `true` and providing a viewer key
 | `miris.viewerKey`                 | Yes        | Miris viewer key used by the stream viewer for authentication. Treat as a secret; only shown once at creation in Miris.     |
 | `miris.upload.enabled`            | For upload | Deploys the auto-upload pipeline and enables the `miris-upload-viewer` (the `MIRIS_UPLOAD` feature).                        |
 | `miris.upload.apiKeySecretArn`    | For upload | AWS Secrets Manager ARN holding the Miris Integration Key used by the upload pipeline.                                      |
-| `miris.upload.enabledDatabaseIds` | For upload | Databases whose USD uploads auto-trigger the pipeline. The viewer's manual **Stream with Miris** action bypasses this list. |
 | `miris.upload.triggerExtensions`  | For upload | Comma-separated extensions that auto-trigger the pipeline (default `.usd,.usda,.usdc,.usdz`).                               |
 | `miris.upload.mirisApiBaseUrl`    | For upload | Miris content API base URL (default `https://app.miris.com`).                                                               |
 | `miris.upload.taskTimeoutSeconds` | For upload | Maximum time the upload container waits for Miris processing.                                                               |
 | `miris.upload.maxAssetSizeBytes`  | For upload | Maximum source asset size accepted for upload.                                                                              |
 | `webUi.allowUnsafeEvalFeatures`   | Yes        | Must be `true`; the Miris SDK requires the `unsafe-eval` CSP directive.                                                     |
+
+Database scope for the auto-trigger is a property of the workflow that owns it, not a pipeline-level setting. The upload pipeline auto-registers a GLOBAL workflow (`miris-upload`) whose `fileUpload` trigger fires for a matching USD upload in any database. To restrict auto-uploads to specific databases, disable the global trigger and register a database-scoped copy of the workflow for each database that should auto-trigger — VAMS resolves database scope natively when it matches an uploaded file against workflow triggers.
 
 Enabling these options sets the corresponding feature flags, which the frontend reads from `/api/secure-config`:
 
@@ -104,7 +104,8 @@ For the complete configuration reference, see the [Configuration Reference](../.
 ```mermaid
 flowchart LR
     subgraph VAMS
-        UP["USD upload or Stream with Miris action"]
+        UP["USD upload\n(auto-trigger or Automation action)"]
+        GATE["Upload gate\n(claims the asset version)"]
         PIPE["Miris Auto-Upload pipeline\nAWS Batch container"]
         MRX[".mrx manifest in asset files"]
         VIEW["Miris viewer plugins"]
@@ -114,7 +115,8 @@ flowchart LR
         STREAM["Spatial Streaming CDN"]
     end
 
-    UP --> PIPE
+    UP --> GATE
+    GATE -->|first execution proceeds| PIPE
     PIPE -->|package and upload USD| API
     API -->|asset UUID| MRX
     VIEW -->|read UUID from .mrx| MRX
@@ -125,28 +127,17 @@ The upload pipeline packages a multi-file USD root into a single `.usdz` (using 
 
 ---
 
-## Implementation notes and future improvements
+## Implementation notes
 
-The integration registers two viewer plugins, `miris-stream-viewer` (`.mrx`) and `miris-upload-viewer` (USD). The USD viewer is, in practice, a small controller: the viewer-plugin registry selects a plugin by **file extension** alone, but whether a USD asset already has a `.mrx` is **per-asset runtime data**. So the component fetches the asset's file list at render time and branches between streaming an existing asset and offering the upload action.
+The integration registers two viewer plugins, `miris-stream-viewer` (`.mrx`) and `miris-upload-viewer` (USD). The viewer-plugin registry selects a plugin by **file extension** alone, but whether a USD asset already has a `.mrx` is **per-asset runtime data**, so `miris-upload-viewer` fetches the asset's file list at render time and branches:
 
-As a result, the USD viewer currently carries two distinct concerns in one component:
+-   **A `.mrx` exists and streaming is configured** — delegates to the stream viewer, so opening the USD source behaves the same as opening the `.mrx`.
+-   **A `.mrx` exists but streaming is not configured** — shows an "Already on Miris" note.
+-   **No `.mrx` yet** — shows a note pointing to the file manager's Automation action.
 
--   **Viewing** — resolving the associated `.mrx` and delegating to the stream viewer.
--   **Pipeline triggering** — resolving the root USD file and running the upload workflow.
+The viewer is a read-only status surface; it never triggers the pipeline itself. Triggering an upload is a standard Workflows/Executions operation: run the auto-registered `miris-upload` workflow from the file manager's **Automation -> Execute Workflow** action (selecting the asset or its USD source file), or let the auto-registered `fileUpload` trigger fire automatically when `app.miris.upload.autoRegisterAutoTriggerOnFileUpload` is enabled.
 
-This structure exists because the viewer-plugin registry is the only feature-gated UI extension point in VAMS that does not require modifying core components. VAMS has **no dedicated "asset action" plugin slot** — asset actions otherwise live in core components (the file manager Operations menus) or are run through the standard Workflows and Executions feature. The Miris upload pipeline already auto-registers a `miris-upload-streamable` workflow, which is the canonical way to trigger the pipeline on an asset.
-
-The integration works as designed and is intentionally kept as-is for now. A future refactor could separate the viewing and triggering responsibilities along one of these lines:
-
-| Direction                   | Idea                                                                                                                                        | Trade-off                                                                              |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| Stream viewer + thin router | Extend the stream viewer to stream from `.mrx` **or** USD; split the USD entry into a thin router plus an isolated upload-prompt component. | Keeps the one-click in-viewer button with no core edits; adds one small component.     |
-| Action in Operations menu   | Stream viewer handles all viewing; the upload trigger moves to the file manager Operations dropdown (gated by `MIRIS_UPLOAD`).              | Cleanest separation (action lives with other actions); requires a core-component edit. |
-| Trigger via Workflows       | Stream viewer handles all viewing; rely on the standard Workflows/Executions feature and auto-trigger-on-upload for triggering.             | Least custom code; removes the in-viewer one-click upload button.                      |
-
-:::note
-No change is planned for the current release. This section records the rationale and the options so a future refactor can cleanly separate the viewing and pipeline-triggering responsibilities.
-:::
+Because a `fileUpload` trigger fires once per matching file, a multi-file USD asset made up of several standalone `.usd`/`.usda`/`.usdc` layers can fan out to one execution per layer. The gate Lambda (`mirisUploadGate`) collapses that fan-out to a single upload by claiming the asset's `(assetId, currentVersionId)` pair with a conditional S3 put — the first execution to reach the gate proceeds, and every other execution for the same asset version reports itself as skipped and exits as a no-op. See the [Miris Auto-Upload Pipeline](../../pipelines/miris-upload.md) for the pipeline-side detail.
 
 ---
 
