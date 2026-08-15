@@ -8,18 +8,17 @@ import { Duration, Stack } from "aws-cdk-lib";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as iam from "aws-cdk-lib/aws-iam";
-import * as lambda from "aws-cdk-lib/aws-lambda";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
-import * as cr from "aws-cdk-lib/custom-resources";
 import { Construct } from "constructs";
 import { NagSuppressions } from "cdk-nag";
 import * as path from "path";
 import * as Config from "../../../../../../config/config";
 import { storageResources } from "../../../../storage/storageBuilder-nestedStack";
 import { BatchFargatePipelineConstruct } from "../../../constructs/batch-fargate-pipeline";
+import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
 import { Service } from "../../../../../helper/service-helper";
@@ -343,70 +342,34 @@ export class MirisUploadConstruct extends Construct {
         gateFn.grantInvoke(vamsExecuteFn);
 
         /**
-         * VAMS CustomResource auto-registration
+         * VAMS vamsSchema auto-registration (V2 pipeline/workflow/template tables)
          */
         if (props.config.app.miris.upload.autoRegisterWithVAMS) {
-            const importFunction = lambda.Function.fromFunctionArn(
-                this,
-                "ImportFunction",
-                `arn:${ServiceHelper.Partition()}:lambda:${region}:${account}:function:${
-                    props.importGlobalPipelineWorkflowV2FunctionName
-                }`
-            );
-
-            const importProvider = new cr.Provider(this, "ImportProvider", {
-                onEventHandler: importFunction,
-            });
-
-            const currentTimestamp = new Date().toISOString();
-
-            new cdk.CustomResource(this, "MirisUploadPipelineWorkflow", {
-                serviceToken: importProvider.serviceToken,
-                properties: {
-                    timestamp: currentTimestamp,
-                    pipelineId: "miris-upload-streamable",
-                    pipelineDescription:
-                        "Auto-upload USD assets to Miris Spatial Streaming and emit .mrx manifest",
-                    pipelineType: "standardFile",
-                    pipelineExecutionType: "Lambda",
-                    assetType: ".all",
-                    outputType: ".all",
-                    waitForCallback: "Enabled",
-                    lambdaName: vamsExecuteFn.functionName,
-                    taskTimeout: String(props.config.app.miris.upload.taskTimeoutSeconds + 600),
-                    taskHeartbeatTimeout: "",
-                    inputParameters: "",
-                    workflowId: "miris-upload-streamable",
-                    // NOTE: the import custom resource only regenerates the workflow's
-                    // Step Functions ASL when it detects a change in the workflow
-                    // definition (description / pipeline / lambda). It does NOT diff the
-                    // generated ASL template, so changes to the shared ASL builder
-                    // (stepfunctions_builder.build_payload) do not propagate to an
-                    // already-registered workflow on their own. Bump this description
-                    // when the generated ASL must be regenerated — e.g. the addition of
-                    // the runtime `executionInputParameters` passthrough that lets the
-                    // manual "Stream with Miris" trigger reach the upload gate.
-                    workflowDescription:
-                        "Auto-upload USD assets to Miris Spatial Streaming (manual trigger supported)",
-                    autoTriggerOnFileExtensionsUpload: props.config.app.miris.upload
-                        .autoRegisterAutoTriggerOnFileUpload
-                        ? props.config.app.miris.upload.triggerExtensions
-                        : "",
+            new VamsSchemaRegistration(this, "MirisUploadRegistration", {
+                importFunctionName: props.importGlobalPipelineWorkflowV2FunctionName,
+                artefactsBucket: props.storageResources.s3.artefactsBucket,
+                vamsSchemaDir: path.join(
+                    __dirname,
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "..",
+                    "backendPipelines",
+                    "miris",
+                    "upload",
+                    "vamsSchema"
+                ),
+                resourceOverrides: { lambdaName: vamsExecuteFn.functionName },
+                idOverrides: {
+                    pipelineId: "miris-upload",
+                    workflowId: "miris-upload",
                 },
+                triggerEnabled:
+                    props.config.app.miris.upload?.autoRegisterAutoTriggerOnFileUpload === true,
             });
-
-            NagSuppressions.addResourceSuppressions(
-                importProvider,
-                [
-                    {
-                        id: "AwsSolutions-IAM5",
-                        reason:
-                            "Wildcard permissions needed for pipelineWorkflow lambda import " +
-                            "and execution for custom resource.",
-                    },
-                ],
-                true
-            );
         }
 
         this.pipelineVamsLambdaFunctionName = vamsExecuteFn.functionName;
