@@ -36,7 +36,7 @@ VAMS includes two Miris viewer plugins that let a user stream a Miris-hosted ass
 | Plugin ID             | Extensions                        | Priority | Feature flag      | Role                                                                                                             |
 | --------------------- | --------------------------------- | -------- | ----------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `miris-stream-viewer` | `.mrx`                            | 1        | `MIRIS_STREAMING` | Streams a Miris-hosted asset referenced by a `.mrx` manifest.                                                    |
-| `miris-upload-viewer` | `.usd`, `.usda`, `.usdc`, `.usdz` | 0        | `MIRIS_UPLOAD`    | Streams a USD asset already on Miris, or offers a one-click **Stream with Miris** upload. Auto-selected for USD. |
+| `miris-upload-viewer` | `.usd`, `.usda`, `.usdc`, `.usdz` | 0        | `MIRIS_UPLOAD`    | Streams a USD asset already on Miris, or shows its upload status. Auto-selected for USD.                        |
 
 :::note
 For configuration, the upload/stream flow, architecture, and requirements, see the dedicated [Miris Spatial Streaming Integration](../developer/external-integrations/miris-spatial-streaming.md) guide. Both viewers require a viewer key configured via `app.miris.viewerKey`.

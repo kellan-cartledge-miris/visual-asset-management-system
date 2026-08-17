@@ -77,6 +77,40 @@ export const getSecureConfig = async () => {
     return apiClient.get(`secure-config`, {});
 };
 
+/**
+ * Fetch the backend VAMS version from the anonymous "/api/version" endpoint.
+ * This route requires no authorization, so it is fetched directly (bypassing
+ * apiClient's auth header injection), mirroring getAmplifyConfig's addressing.
+ * @returns {Promise<string | null>} The backend version string, or null on failure.
+ */
+export const getVamsVersion = async (): Promise<string | null> => {
+    let versionUrl: URL;
+    try {
+        if (vamsConfig.DEV_API_ENDPOINT === "") {
+            versionUrl = new URL("/api/version", window.location.origin);
+        } else {
+            const stagedBase = ensureApiStage(vamsConfig.DEV_API_ENDPOINT);
+            versionUrl = new URL("api/version", stagedBase);
+        }
+    } catch (error: any) {
+        console.log("getVamsVersion: Invalid base URL", error?.message);
+        return null;
+    }
+
+    try {
+        const response = await fetch(versionUrl);
+        if (!response.ok) {
+            console.log("getVamsVersion: HTTP error", response.status, response.statusText);
+            return null;
+        }
+        const data = await response.json();
+        return data?.version ?? null;
+    } catch (error: any) {
+        console.log("getVamsVersion: Fetch error", error?.message);
+        return null;
+    }
+};
+
 export const webRoutes = async (body: any) => {
     console.log("webRoutes");
     try {
@@ -232,97 +266,6 @@ export const deleteElement = async ({ deleteRoute, elementId, item }: any) => {
         console.log(error);
         return [false, error?.message, error?.message];
     }
-};
-
-/**
- * Returns array of boolean and response/error message for the workflow that the current user is running, or false if error.
- * @returns {Promise<boolean|{message}|any>}
- */
-export const runWorkflow = async ({
-    databaseId,
-    assetId,
-    workflowId,
-    fileKey,
-    isGlobalWorkflow = false,
-    inputParameters,
-}: {
-    databaseId: string;
-    assetId: string;
-    workflowId: string;
-    fileKey?: string;
-    isGlobalWorkflow?: boolean;
-    inputParameters?: string;
-}) => {
-    try {
-        let endpoint;
-        let eventBody: Record<string, unknown> = {};
-        endpoint = `database/${databaseId}/assets/${assetId}/workflows/${workflowId}`;
-
-        if (isGlobalWorkflow) {
-            eventBody = { workflowDatabaseId: "GLOBAL", fileKey: fileKey };
-        } else {
-            eventBody = { workflowDatabaseId: databaseId, fileKey: fileKey };
-        }
-
-        if (inputParameters !== undefined) {
-            eventBody.inputParameters = inputParameters;
-        }
-
-        const response = await apiClient.post(endpoint, {
-            body: eventBody,
-        });
-
-        if (response.message) {
-            if (
-                response.message.indexOf("error") !== -1 ||
-                response.message.indexOf("Error") !== -1
-            ) {
-                console.log(response.message);
-                return [false, response.message];
-            } else {
-                return [true, `/databases/${databaseId}/assets/${assetId}`];
-            }
-        } else {
-            return false;
-        }
-    } catch (error: any) {
-        console.log(error);
-        return [false, error?.message];
-    }
-};
-
-/**
- * Trigger the Miris auto-upload workflow on a single asset, bypassing the
- * per-database gate via inputParameters.manual=true. Returns the execution
- * record from the existing workflow-execute endpoint.
- */
-export const triggerMirisUpload = async ({
-    databaseId,
-    assetId,
-    fileKey,
-}: {
-    databaseId: string;
-    assetId: string;
-    fileKey: string;
-}) => {
-    return await runWorkflow({
-        databaseId,
-        assetId,
-        workflowId: "miris-upload-streamable",
-        // The Miris upload pipeline requires a specific USD source file as input — it
-        // rejects a folder (asset root prefix). Pass the full S3 key of the root USD
-        // file (e.g. "assetId/model.usdz"); the execute handler resolves it against
-        // the asset base key. The key form (not the leading-slash relativePath) is
-        // required to satisfy the backend ASSET_PATH validator.
-        fileKey,
-        // The Miris upload workflow is auto-registered as a GLOBAL workflow (one
-        // definition, cross-database), so it must be invoked as global — the
-        // execute handler resolves the definition by the body's workflowDatabaseId.
-        // Without this the lookup uses the asset's databaseId and 404s.
-        isGlobalWorkflow: true,
-        // The gate Lambda checks inputParameters.manual to bypass the allow-list
-        inputParameters: JSON.stringify({ manual: true }),
-    });
 };
 
 /**

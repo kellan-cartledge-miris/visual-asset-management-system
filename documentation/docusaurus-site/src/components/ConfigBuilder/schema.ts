@@ -163,6 +163,7 @@ function makeModelFields(
 }
 
 const COSMOS = "app.pipelines.useNvidiaCosmos";
+const COSMOS3 = "app.pipelines.useNvidiaCosmos3";
 const GR00T = "app.pipelines.useNvidiaGr00t";
 
 const cosmosModelFields: FieldMeta[] = [
@@ -187,6 +188,29 @@ const cosmosModelFields: FieldMeta[] = [
     ...makeModelFields(`${COSMOS}.modelsReason.reason8B`, "Cosmos Reason 8B", {
         hasAutoTrigger: true,
     }),
+];
+
+const cosmos3ModelFields: FieldMeta[] = [
+    ...makeModelFields(`${COSMOS3}.modelsOmni.nano16B`, "Cosmos 3 Nano 16B", {
+        hasAutoTrigger: true,
+    }),
+    ...makeModelFields(`${COSMOS3}.modelsOmni.super64B`, "Cosmos 3 Super 64B", {
+        hasAutoTrigger: true,
+    }),
+    ...makeModelFields(
+        `${COSMOS3}.modelsOmni.superText2Image64B`,
+        "Cosmos 3 Super Text2Image 64B",
+        {
+            hasAutoTrigger: false,
+        }
+    ),
+    ...makeModelFields(
+        `${COSMOS3}.modelsOmni.superImage2Video64B`,
+        "Cosmos 3 Super Image2Video 64B",
+        {
+            hasAutoTrigger: true,
+        }
+    ),
 ];
 
 export const FIELDS: FieldMeta[] = [
@@ -940,14 +964,6 @@ export const FIELDS: FieldMeta[] = [
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.usePreviewPcPotreeViewer.enabled"),
     },
     {
-        path: "app.pipelines.usePreviewPcPotreeViewer.sqsAutoRunOnAssetModified",
-        label: "Potree viewer — run on asset modified (SQS)",
-        input: "boolean",
-        section: "pipelines-standard",
-        advanced: true,
-        visibleWhen: (c) => !!getByPath(c, "app.pipelines.usePreviewPcPotreeViewer.enabled"),
-    },
-    {
         path: "app.pipelines.useGenAiMetadata3dLabeling.enabled",
         label: "GenAI metadata labeling",
         input: "boolean",
@@ -991,16 +1007,17 @@ export const FIELDS: FieldMeta[] = [
         help: "Generate Gaussian splat reconstructions from media. Requires VPC + GPU.",
     },
     {
-        path: "app.pipelines.useSplatToolbox.autoRegisterWithVAMS",
-        label: "Gaussian splatting — auto-register",
+        path: "app.pipelines.useSplatToolbox.useCodeBuild",
+        label: "Gaussian splatting — build via CodeBuild",
         input: "boolean",
         section: "pipelines-gpu",
         advanced: true,
+        help: "Build the Splat Toolbox container in the cloud with AWS CodeBuild instead of locally during CDK deploy.",
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.useSplatToolbox.enabled"),
     },
     {
-        path: "app.pipelines.useSplatToolbox.sqsAutoRunOnAssetModified",
-        label: "Gaussian splatting — run on asset modified (SQS)",
+        path: "app.pipelines.useSplatToolbox.autoRegisterWithVAMS",
+        label: "Gaussian splatting — auto-register",
         input: "boolean",
         section: "pipelines-gpu",
         advanced: true,
@@ -1229,6 +1246,15 @@ export const FIELDS: FieldMeta[] = [
         advanced: true,
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.useModelOps.enabled"),
     },
+    // Deadline Cloud execution type
+    {
+        path: "app.pipelines.deadlineCloudExecutionTypeEnabled",
+        label: "Deadline Cloud execution type",
+        input: "boolean",
+        section: "pipelines-gpu",
+        advanced: true,
+        help: "Workflow support for the DeadlineCloud pipeline execution type (OpenJD job submission to an operator-owned farm/queue). Not available in GovCloud.",
+    },
     // NVIDIA Cosmos shared settings + models
     {
         path: `${COSMOS}.enabled`,
@@ -1325,6 +1351,55 @@ export const FIELDS: FieldMeta[] = [
     }).map((f) => ({
         ...f,
         visibleWhen: (c: ConfigShape) => !!getByPath(c, `${GR00T}.enabled`),
+    })),
+
+    // NVIDIA Cosmos 3 shared settings + models
+    {
+        path: `${COSMOS3}.enabled`,
+        label: "NVIDIA Cosmos 3",
+        input: "boolean",
+        section: "pipelines-gpu",
+        advanced: true,
+        help: "Omnimodal world-model generation (Nano 16B, Super 64B). Requires VPC + GPU + internet.",
+    },
+    {
+        path: `${COSMOS3}.huggingFaceToken`,
+        label: "Cosmos 3 — HuggingFace token",
+        input: "text",
+        section: "pipelines-gpu",
+        advanced: true,
+        help: "Required when Cosmos 3 is enabled. Stored in Secrets Manager at deploy.",
+        visibleWhen: (c) => !!getByPath(c, `${COSMOS3}.enabled`),
+    },
+    {
+        path: `${COSMOS3}.useCodeBuild`,
+        label: "Cosmos 3 — build with CodeBuild",
+        input: "boolean",
+        section: "pipelines-gpu",
+        advanced: true,
+        help: "Build via AWS CodeBuild + ECR. Recommended for large GPU images.",
+        visibleWhen: (c) => !!getByPath(c, `${COSMOS3}.enabled`),
+    },
+    {
+        path: `${COSMOS3}.useWarmInstances`,
+        label: "Cosmos 3 — keep warm instances",
+        input: "boolean",
+        section: "pipelines-gpu",
+        advanced: true,
+        visibleWhen: (c) => !!getByPath(c, `${COSMOS3}.enabled`),
+    },
+    {
+        path: `${COSMOS3}.warmInstanceCount`,
+        label: "Cosmos 3 — warm instance count",
+        input: "number",
+        section: "pipelines-gpu",
+        advanced: true,
+        min: 0,
+        visibleWhen: (c) => !!getByPath(c, `${COSMOS3}.enabled`),
+    },
+    ...cosmos3ModelFields.map((f) => ({
+        ...f,
+        visibleWhen: (c: ConfigShape) => !!getByPath(c, `${COSMOS3}.enabled`),
     })),
 
     // ===== Add-ons (Garnet) =====
@@ -1498,16 +1573,7 @@ export const FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "addons",
         advanced: true,
-        help: "Runs the pipeline automatically when a matching file is uploaded to an enabled database. Leave off to upload only via the Stream with Miris action.",
-        visibleWhen: mirisUpload,
-    },
-    {
-        path: "app.miris.upload.enabledDatabaseIds",
-        label: "Miris — enabled database IDs",
-        input: "string-array",
-        section: "addons",
-        advanced: true,
-        help: "Databases the auto-trigger applies to. Empty means no database auto-uploads; the manual Stream with Miris action still works everywhere.",
+        help: "Runs the pipeline automatically when a matching file is uploaded. Leave off to upload only via the file manager's Automation action.",
         visibleWhen: mirisUpload,
     },
     {
@@ -1575,6 +1641,15 @@ export const FIELDS: FieldMeta[] = [
             { value: "PRIVATE", label: "Private (VPC endpoint)" },
         ],
         help: "PRIVATE requires a VPC with an execute-api endpoint and must be fronted by an ALB (not CloudFront).",
+    },
+    {
+        path: "app.api.apiGatewayRest.apiGatewayTimeoutTime",
+        label: "API integration timeout (seconds)",
+        input: "number",
+        section: "api-webui",
+        advanced: true,
+        min: 29,
+        help: "How long API Gateway waits for a handler before returning 504. Maximum 300. Values above 29 require an approved account-level increase to the API Gateway 'Integration timeout' quota (L-E5AE38E3) in the deployment Region first.",
     },
     {
         path: "app.api.apiGatewayRest.optionalExternalPrivateApigVPCEId",

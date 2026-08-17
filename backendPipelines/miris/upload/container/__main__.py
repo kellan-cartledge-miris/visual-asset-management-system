@@ -13,6 +13,7 @@ import sys
 import boto3
 
 from miris_uploader import MirisClient, _redact_response
+from upload_config import resolve_upload_config
 from usd_packager import (
     compute_dependencies,
     local_download_plan,
@@ -168,16 +169,22 @@ def main():
     sha = _sha256_of_file(upload_local)
     _log("artifact_ready", path=upload_local, size=size, sha256=sha[:16])
 
+    # Read the already-rendered per-run configuration (template values substituted by the
+    # workflow before this container started). Never fatal: every field falls back to a
+    # VAMS-derived default.
+    cfg = resolve_upload_config(stage, upload_filename, s3)
+    _log("upload_config_resolved", asset_name=cfg.asset_name, tags=cfg.tags)
+
     # Secrets Manager
     key = get_miris_integration_key(secret_arn, region_name=os.environ.get("AWS_REGION"))
     client = MirisClient(miris_base, key)
 
     # POST /v1/content
-    miris_tags = ["vams", f"vams-asset-{asset_id}"]
+    miris_tags = ["vams", f"vams-asset-{asset_id}"] + cfg.tags
     if database_id:
         miris_tags.append(f"vams-database-{database_id}")
     start = client.start_upload(
-        name=name_no_ext,
+        name=cfg.asset_name,
         content_path=upload_filename,
         total_bytes=size,
         tags=miris_tags,
@@ -227,13 +234,13 @@ def main():
         _log("generate_triggered", state=gen.get("state"))
 
     # 9. Write the .mrx manifest
-    manifest_tags = ["vams", f"vams-asset-{asset_id}", "vams-pipeline"]
+    manifest_tags = ["vams", f"vams-asset-{asset_id}", "vams-pipeline"] + cfg.tags
     if database_id:
         manifest_tags.append(f"vams-database-{database_id}")
     manifest = {
         "schemaVersion": 1,
         "mirisAssetUuid": asset_uuid,
-        "displayName": name_no_ext,
+        "displayName": cfg.asset_name,
         "tags": manifest_tags,
         "uploadedAt": datetime.datetime.utcnow()
         .replace(microsecond=0)

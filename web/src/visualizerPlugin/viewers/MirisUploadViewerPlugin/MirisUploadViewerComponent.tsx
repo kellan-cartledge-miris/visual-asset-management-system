@@ -4,11 +4,10 @@
  */
 import React, { useEffect, useState } from "react";
 import Box from "@cloudscape-design/components/box";
-import Button from "@cloudscape-design/components/button";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import Spinner from "@cloudscape-design/components/spinner";
 import { ViewerPluginProps } from "../../core/types";
-import { triggerMirisUpload, fetchAssetS3Files } from "../../../services/APIService";
+import { fetchAssetS3Files } from "../../../services/APIService";
 import { appCache } from "../../../services/appCache";
 import MirisStreamViewerComponent from "../MirisStreamViewerPlugin/MirisStreamViewerComponent";
 
@@ -62,13 +61,12 @@ function _findSupportedSource(files: any[]): any | undefined {
  *     MirisStreamViewerComponent used when the .mrx is selected directly, so a
  *     user can stream by selecting either the .mrx or its USD source)
  *   - .mrx present + streaming NOT configured -> "Already on Miris" note
- *   - no .mrx yet -> the upload CTA
+ *   - no .mrx yet -> a note pointing to the file manager's Automation action,
+ *     which launches the workflow that produces one
  */
 const MirisUploadViewerComponent: React.FC<ViewerPluginProps> = (props) => {
     const { assetId, databaseId } = props;
     const [files, setFiles] = useState<any[] | null>(null);
-    const [running, setRunning] = useState(false);
-    const [submitted, setSubmitted] = useState(false);
 
     useEffect(() => {
         let cancelled = false;
@@ -86,17 +84,6 @@ const MirisUploadViewerComponent: React.FC<ViewerPluginProps> = (props) => {
             cancelled = true;
         };
     }, [databaseId, assetId]);
-
-    const onClick = async (fileKey: string) => {
-        setRunning(true);
-        try {
-            await triggerMirisUpload({ databaseId, assetId, fileKey });
-            setSubmitted(true);
-        } catch (e: any) {
-            console.error("Failed to trigger Miris upload", e);
-            setRunning(false);
-        }
-    };
 
     const center = (content: React.ReactNode) => (
         <div
@@ -158,29 +145,15 @@ const MirisUploadViewerComponent: React.FC<ViewerPluginProps> = (props) => {
         );
     }
 
-    if (submitted) {
-        return center(
-            <SpaceBetween size="s">
-                <Box variant="h3">Upload started</Box>
-                <Box variant="p" color="text-body-secondary">
-                    This asset is being uploaded to Miris. Once processing completes, a{" "}
-                    <code>.mrx</code> manifest appears in the asset files and you can stream it.
-                </Box>
-            </SpaceBetween>
-        );
-    }
-
     return center(
         <SpaceBetween size="m">
-            <Box variant="h3">Stream this asset with Miris</Box>
+            <Box variant="h3">Not yet streamed with Miris</Box>
             <Box variant="p" color="text-body-secondary">
-                Upload this USD asset to Miris Spatial Streaming. Miris prepares it for progressive
-                3D streaming; when ready, a <code>.mrx</code> manifest is added to the asset and you
-                can stream it in the browser.
+                This USD asset has not been uploaded to Miris Spatial Streaming. Use the file
+                manager&apos;s <strong>Automation</strong> action to run the Miris upload workflow
+                on it; once processing completes, a <code>.mrx</code> manifest is added to the asset
+                and you can stream it here.
             </Box>
-            <Button variant="primary" loading={running} onClick={() => onClick(source.key)}>
-                Stream with Miris
-            </Button>
         </SpaceBetween>
     );
 };

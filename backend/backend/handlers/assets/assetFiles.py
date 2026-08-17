@@ -43,12 +43,12 @@ from common.apiRoutes import (
     API_REVERT_FILE_VERSION, API_SET_PRIMARY_FILE, API_CREATE_FOLDER,
 )
 from common.validators import validate
-from common.dynamodb import validate_pagination_info
+from common.dynamodb import validate_pagination_info, query_all_items
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
 from customLogging.logger import safeLogger
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetsV3 import (
     AssetFileItemModel, ListAssetFilesRequestModel, ListAssetFilesResponseModel,
     FileInfoRequestModel, FileInfoResponseModel, MoveFileRequestModel,
@@ -475,7 +475,10 @@ def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_k
                 Key=dest_key,
                 ExtraArgs={
                     'Metadata': metadata,
-                    'MetadataDirective': 'REPLACE'
+                    'MetadataDirective': 'REPLACE',
+                    # Grant the destination bucket owner full control so an object written
+                    # into a cross-account asset bucket is owned/readable by that account.
+                    'ACL': 'bucket-owner-full-control'
                 }
             )
         else:
@@ -483,16 +486,40 @@ def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_k
             s3_resource.meta.client.copy(
                 CopySource={'Bucket': source_bucket, 'Key': source_key},
                 Bucket=dest_bucket,
-                Key=dest_key
+                Key=dest_key,
+                # Grant the destination bucket owner full control so an object written
+                # into a cross-account asset bucket is owned/readable by that account.
+                ExtraArgs={'ACL': 'bucket-owner-full-control'}
             )
         return True
     except Exception as e:
         logger.exception(f"Error copying S3 object from {source_key} to {dest_key}: {e}")
         return False
 
+def aux_bucket_asset_file_base(database_id: str, asset_file_key: str) -> str:
+    """Auxiliary-bucket base prefix holding the derived data for one asset file.
+
+    Auxiliary objects live under the database-scoped per-file layout
+    ``{databaseId}/{assetFileKey}/``; workflow preview/viewer data lands in the
+    ``preview`` subfolder of that base (see
+    ``common.workflows.executionRecords.aux_preview_file_prefix``, the writer of that
+    layout). ``asset_file_key`` is the full asset-bucket key, so a custom asset base
+    prefix is preserved; passing a folder key scopes the result to every file beneath it.
+
+    Args:
+        database_id: The database ID owning the asset
+        asset_file_key: Full asset-bucket key of the file, or a folder key
+
+    Returns:
+        The auxiliary-bucket prefix, with a trailing slash
+    """
+    key = (asset_file_key or "").strip('/')
+    base = (database_id or "").strip('/')
+    return f"{base}/{key}/" if key else f"{base}/"
+
 def delete_assetAuxiliary_files(prefix):
     """Delete auxiliary files for an asset
-    
+
     Args:
         assetLocation: The asset location object with Key (dict or AssetLocationModel)
     """
@@ -905,7 +932,10 @@ def move_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_k
                 Key=dest_key,
                 ExtraArgs={
                     'Metadata': metadata,
-                    'MetadataDirective': 'REPLACE'
+                    'MetadataDirective': 'REPLACE',
+                    # Grant the destination bucket owner full control so an object written
+                    # into a cross-account asset bucket is owned/readable by that account.
+                    'ACL': 'bucket-owner-full-control'
                 }
             )
         else:
@@ -913,7 +943,10 @@ def move_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_k
             s3_resource.meta.client.copy(
                 CopySource={'Bucket': source_bucket, 'Key': source_key},
                 Bucket=dest_bucket,
-                Key=dest_key
+                Key=dest_key,
+                # Grant the destination bucket owner full control so an object written
+                # into a cross-account asset bucket is owned/readable by that account.
+                ExtraArgs={'ACL': 'bucket-owner-full-control'}
             )
 
         # Delete the original object
@@ -1647,14 +1680,15 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str, 
         if relativeFileKey:
             query_kwargs['KeyConditionExpression'] = Key('databaseId:assetId:assetVersionId').eq(version_composite_key) & Key('fileKey').eq(relativeFileKey)
 
-        response = asset_version_files_table.query(**query_kwargs)
-        
-        items = response.get('Items', [])
-        
+        # Page to exhaustion: a version snapshot can hold more files than fit in one
+        # 1 MB query page, and a partial file list would misreport the version. A
+        # single-file lookup (relativeFileKey set) returns one item and never pages.
+        items = query_all_items(asset_version_files_table, **query_kwargs)
+
         # If no items found, return None
         if not items:
             return None
-        
+
         # Reconstruct the file versions structure
         files = []
         for item in items:
@@ -2077,7 +2111,7 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
         deleted_keys = delete_s3_prefix_all_versions(bucket, full_key)
 
         # Delete aux files under prefix if they exist
-        delete_assetAuxiliary_files(full_key)
+        delete_assetAuxiliary_files(aux_bucket_asset_file_base(databaseId, full_key))
         
         # Convert full keys to relative paths and delete metadata
         for key in deleted_keys:
@@ -2110,7 +2144,7 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
         success = delete_s3_object_all_versions(bucket, full_key)
 
         # Delete aux files if they exist
-        delete_assetAuxiliary_files(full_key)
+        delete_assetAuxiliary_files(aux_bucket_asset_file_base(databaseId, full_key))
         
         if not success:
             raise VAMSGeneralErrorResponse(f"Failed to delete file.")
@@ -2369,7 +2403,10 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
             },
             ExtraArgs={
                 'Metadata': metadata,
-                'MetadataDirective': 'REPLACE'
+                'MetadataDirective': 'REPLACE',
+                # Grant the bucket owner full control so a version written into a
+                # cross-account asset bucket is owned/readable by that account.
+                'ACL': 'bucket-owner-full-control'
             }
         )
         
@@ -2427,7 +2464,10 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
                                 'VersionId': preview_latest_version['VersionId']
                             },
                             ExtraArgs={
-                                'MetadataDirective': 'COPY'
+                                'MetadataDirective': 'COPY',
+                                # Grant the bucket owner full control so a version written into a
+                                # cross-account asset bucket is owned/readable by that account.
+                                'ACL': 'bucket-owner-full-control'
                             }
                         )
                         logger.info(f"Successfully unarchived preview file {preview_file} from version {preview_latest_version['VersionId']}")
@@ -2557,7 +2597,10 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     )
 
     # Copy auxiliary files if they exist
-    copy_auxiliary_files(source_key, dest_key)
+    copy_auxiliary_files(
+        aux_bucket_asset_file_base(databaseId, source_key),
+        aux_bucket_asset_file_base(effective_dest_db, dest_key)
+    )
 
     # Copy metadata and attributes to the destination (merge with existing)
     source_rel = source_path.lstrip('/')
@@ -2700,7 +2743,10 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     )
     
     # Move auxiliary files if they exist
-    move_auxiliary_files(source_key, dest_key)
+    move_auxiliary_files(
+        aux_bucket_asset_file_base(databaseId, source_key),
+        aux_bucket_asset_file_base(databaseId, dest_key)
+    )
 
     # Move metadata and attributes: copy to new path (merge), then delete from old path
     source_rel = source_path.lstrip('/')
@@ -2797,7 +2843,10 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
             },
             ExtraArgs={
                 'Metadata': new_metadata,
-                'MetadataDirective': 'REPLACE'
+                'MetadataDirective': 'REPLACE',
+                # Grant the bucket owner full control so a version written into a
+                # cross-account asset bucket is owned/readable by that account.
+                'ACL': 'bucket-owner-full-control'
             }
         )
 
@@ -2809,8 +2858,8 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
         logger.exception(f"Error reverting file version: {e}")
         raise VAMSGeneralErrorResponse(f"Failed to revert file version.")
 
-    #Delete aux files for asset as they don't match anymore with the version. 
-    delete_assetAuxiliary_files(full_key)
+    #Delete aux files for asset as they don't match anymore with the version.
+    delete_assetAuxiliary_files(aux_bucket_asset_file_base(databaseId, full_key))
 
     #send email for asset file change
     send_subscription_email(databaseId, assetId)
@@ -3041,9 +3090,12 @@ def create_folder(databaseId: str, assetId: str, request_model: CreateFolderRequ
         s3_client.put_object(
             Bucket=asset_bucket,
             Key=normalized_key_path,
-            Body=''
+            Body='',
+            # Grant the bucket owner full control so a folder marker written into a
+            # cross-account asset bucket is owned/readable by that account.
+            ACL='bucket-owner-full-control'
         )
-        
+
         logger.info(f"Created folder {normalized_key_path} in bucket {asset_bucket}")
         
         return CreateFolderResponseModel(
@@ -3127,7 +3179,10 @@ def set_primary_file(databaseId: str, assetId: str, file_path: str, primary_type
             ExtraArgs={
                 'Metadata': new_metadata,
                 'MetadataDirective': 'REPLACE',
-                'ContentType': current_object.get('ContentType', 'binary/octet-stream')
+                'ContentType': current_object.get('ContentType', 'binary/octet-stream'),
+                # Grant the bucket owner full control so a version written into a
+                # cross-account asset bucket is owned/readable by that account.
+                'ACL': 'bucket-owner-full-control'
             }
         )
         
@@ -3621,7 +3676,7 @@ def handle_delete_file(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -3705,7 +3760,7 @@ def handle_unarchive_file(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -3790,7 +3845,7 @@ def handle_archive_file(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -3877,7 +3932,7 @@ def handle_copy_file(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -3962,7 +4017,7 @@ def handle_move_file(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4061,7 +4116,7 @@ def handle_file_info(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4153,7 +4208,7 @@ def handle_revert_file_version(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4237,7 +4292,7 @@ def handle_create_folder(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4265,25 +4320,26 @@ def delete_auxiliary_preview_asset_files(databaseId: str, assetId: str, file_pat
     
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
-    
+    aux_prefix = aux_bucket_asset_file_base(databaseId, full_key)
+
     # Check if auxiliary files exist under the prefix
     file_count = 0
     deleted_files = []
-    
+
     try:
         # List objects in the auxiliary bucket with the prefix
         paginator = s3_client.get_paginator('list_objects_v2')
-        for page in paginator.paginate(Bucket=asset_aux_bucket_name, Prefix=full_key):
+        for page in paginator.paginate(Bucket=asset_aux_bucket_name, Prefix=aux_prefix):
             if 'Contents' in page:
                 file_count += len(page['Contents'])
                 for item in page['Contents']:
                     deleted_files.append(item['Key'])
-        
+
         if file_count == 0:
             raise VAMSGeneralErrorResponse(f"No auxiliary files found under prefix")
-        
+
         # Delete the auxiliary files
-        delete_assetAuxiliary_files(full_key)
+        delete_assetAuxiliary_files(aux_prefix)
         
         # Send email notification for asset change
         send_subscription_email(databaseId, assetId)
@@ -4401,7 +4457,7 @@ def handle_delete_asset_preview(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4485,7 +4541,7 @@ def handle_delete_auxiliary_preview_asset_files(event, context) -> APIGatewayPro
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4571,7 +4627,7 @@ def handle_set_primary_file(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
@@ -4656,7 +4712,7 @@ def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
     
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={'message': str(v)}, event=event)
+        return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

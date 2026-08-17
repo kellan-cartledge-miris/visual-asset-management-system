@@ -350,6 +350,7 @@ export class VPCBuilderNestedStack extends NestedStack {
                 props.config.app.pipelines.useConversionCoordinateTransform?.enabled ||
                 props.config.app.pipelines.useIsaacLabTraining.enabled ||
                 props.config.app.pipelines.useNvidiaCosmos.enabled ||
+                props.config.app.pipelines.useNvidiaCosmos3?.enabled ||
                 props.config.app.pipelines.useNvidiaGr00t.enabled
             ) {
                 subnetConfigurations.push(subnetPublicConfig);
@@ -527,6 +528,35 @@ export class VPCBuilderNestedStack extends NestedStack {
                 securityGroups: [vpceSecurityGroup],
             });
 
+            // Create VPC endpoint for EventBridge.
+            new ec2.InterfaceVpcEndpoint(this, "EventBridgeEndpoint", {
+                vpc: this.vpc,
+                privateDnsEnabled: true,
+                service: ec2.InterfaceVpcEndpointAwsService.EVENTBRIDGE,
+                subnets: { subnets: this.isolatedSubnets },
+                securityGroups: [vpceSecurityGroup],
+            });
+
+            // Create VPC endpoint for AWS Deadline Cloud (management API) when the DeadlineCloud
+            // execution type is enabled. The job-callback lambda is the only in-VPC caller
+            // (deadline:GetJob), so the endpoint is created only when lambdas run in the VPC —
+            // job submission itself is a Step Functions service integration and never traverses
+            // the VPC. AWS Deadline Cloud is unavailable in GovCloud / EU Sovereign, so config
+            // validation blocks enabling the type there and this endpoint is never created in
+            // those partitions.
+            if (
+                props.config.app.useGlobalVpc.useForAllLambdas &&
+                props.config.app.pipelines.deadlineCloudExecutionTypeEnabled
+            ) {
+                new ec2.InterfaceVpcEndpoint(this, "DeadlineManagementEndpoint", {
+                    vpc: this.vpc,
+                    privateDnsEnabled: true,
+                    service: new ec2.InterfaceVpcEndpointAwsService("deadline.management"),
+                    subnets: { subnets: this.isolatedSubnets },
+                    securityGroups: [vpceSecurityGroup],
+                });
+            }
+
             //Add endpoints for Cognito when Cognito auth is enabled. The browser signs in
             //against cognito-idp (SRP/InitiateAuth) and exchanges tokens against
             //cognito-identity, so an isolated VPC needs both to authenticate without
@@ -542,46 +572,43 @@ export class VPCBuilderNestedStack extends NestedStack {
                 props.config.env.partition !== "aws-eusc" &&
                 !props.config.env.partition.startsWith("aws-iso");
             if (props.config.app.authProvider.useCognito.enabled && cognitoVpcEndpointsSupported) {
-                // Cognito User Pools (cognito-idp)
-                new ec2.InterfaceVpcEndpoint(this, "CognitoIdpEndpoint", {
-                    vpc: this.vpc,
-                    privateDnsEnabled: true,
-                    service: ec2.InterfaceVpcEndpointAwsService.COGNITO_IDP,
-                    subnets: { subnets: this.isolatedSubnets },
-                    securityGroups: [vpceSecurityGroup],
-                });
-
-                // Cognito Identity Pools (cognito-identity) — no CDK enum member, so use the
-                // generic service constructor. Omit the prefix argument so CDK derives the
-                // partition-aware default (e.g. "cn.com.amazonaws" + ".cn" suffix in China);
-                // passing "com.amazonaws" explicitly would override that and break China.
-                new ec2.InterfaceVpcEndpoint(this, "CognitoIdentityEndpoint", {
-                    vpc: this.vpc,
-                    privateDnsEnabled: true,
-                    service: new ec2.InterfaceVpcEndpointAwsService("cognito-identity"),
-                    subnets: { subnets: this.isolatedSubnets },
-                    securityGroups: [vpceSecurityGroup],
-                });
-
-                // FIPS variants for FIPS or GovCloud deployments
-                if (props.config.app.useFips) {
-                    new ec2.InterfaceVpcEndpoint(this, "CognitoIdpEndpoint_FIPS", {
-                        vpc: this.vpc,
-                        privateDnsEnabled: true,
-                        service: ec2.InterfaceVpcEndpointAwsService.COGNITO_IDP_FIPS,
-                        subnets: { subnets: this.isolatedSubnets },
-                        securityGroups: [vpceSecurityGroup],
-                    });
-
-                    new ec2.InterfaceVpcEndpoint(this, "CognitoIdentityEndpoint_FIPS", {
-                        vpc: this.vpc,
-                        privateDnsEnabled: true,
-                        // Omit the prefix so CDK derives the partition-aware default.
-                        service: new ec2.InterfaceVpcEndpointAwsService("cognito-identity-fips"),
-                        subnets: { subnets: this.isolatedSubnets },
-                        securityGroups: [vpceSecurityGroup],
-                    });
-                }
+                // // Cognito User Pools (cognito-idp)
+                // new ec2.InterfaceVpcEndpoint(this, "CognitoIdpEndpoint", {
+                //     vpc: this.vpc,
+                //     privateDnsEnabled: true,
+                //     service: ec2.InterfaceVpcEndpointAwsService.COGNITO_IDP,
+                //     subnets: { subnets: this.isolatedSubnets },
+                //     securityGroups: [vpceSecurityGroup],
+                // });
+                // // Cognito Identity Pools (cognito-identity) — no CDK enum member, so use the
+                // // generic service constructor. Omit the prefix argument so CDK derives the
+                // // partition-aware default (e.g. "cn.com.amazonaws" + ".cn" suffix in China);
+                // // passing "com.amazonaws" explicitly would override that and break China.
+                // new ec2.InterfaceVpcEndpoint(this, "CognitoIdentityEndpoint", {
+                //     vpc: this.vpc,
+                //     privateDnsEnabled: true,
+                //     service: new ec2.InterfaceVpcEndpointAwsService("cognito-identity"),
+                //     subnets: { subnets: this.isolatedSubnets },
+                //     securityGroups: [vpceSecurityGroup],
+                // });
+                // // FIPS variants for FIPS or GovCloud deployments
+                // if (props.config.app.useFips) {
+                //     new ec2.InterfaceVpcEndpoint(this, "CognitoIdpEndpoint_FIPS", {
+                //         vpc: this.vpc,
+                //         privateDnsEnabled: true,
+                //         service: ec2.InterfaceVpcEndpointAwsService.COGNITO_IDP_FIPS,
+                //         subnets: { subnets: this.isolatedSubnets },
+                //         securityGroups: [vpceSecurityGroup],
+                //     });
+                // new ec2.InterfaceVpcEndpoint(this, "CognitoIdentityEndpoint_FIPS", {
+                //     vpc: this.vpc,
+                //     privateDnsEnabled: true,
+                //     // Omit the prefix so CDK derives the partition-aware default.
+                //     service: new ec2.InterfaceVpcEndpointAwsService("cognito-identity-fips"),
+                //     subnets: { subnets: this.isolatedSubnets },
+                //     securityGroups: [vpceSecurityGroup],
+                // });
+                //}
             }
 
             //Add for all endpoints if using KMS
@@ -621,6 +648,7 @@ export class VPCBuilderNestedStack extends NestedStack {
                 props.config.app.miris.upload.enabled ||
                 props.config.app.pipelines.useIsaacLabTraining?.enabled ||
                 props.config.app.pipelines.useNvidiaCosmos.enabled ||
+                props.config.app.pipelines.useNvidiaCosmos3?.enabled ||
                 props.config.app.pipelines.useNvidiaGr00t.enabled
             ) {
                 // Create VPC endpoint for Batch
@@ -653,6 +681,7 @@ export class VPCBuilderNestedStack extends NestedStack {
                 // Create VPC endpoint for EFS (Cosmos Predict pipeline)
                 if (
                     props.config.app.pipelines.useNvidiaCosmos.enabled ||
+                    props.config.app.pipelines.useNvidiaCosmos3?.enabled ||
                     props.config.app.pipelines.useNvidiaGr00t.enabled
                 ) {
                     new ec2.InterfaceVpcEndpoint(this, "EFSEndpoint", {
@@ -701,6 +730,7 @@ export class VPCBuilderNestedStack extends NestedStack {
                 props.config.app.miris.upload.enabled ||
                 props.config.app.pipelines.useConversionCoordinateTransform?.enabled ||
                 props.config.app.pipelines.useNvidiaCosmos.enabled ||
+                props.config.app.pipelines.useNvidiaCosmos3?.enabled ||
                 props.config.app.pipelines.useNvidiaGr00t.enabled;
             const needsEcsIsolated = props.config.app.pipelines.useIsaacLabTraining?.enabled;
 

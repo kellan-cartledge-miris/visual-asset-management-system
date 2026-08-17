@@ -1,6 +1,6 @@
 # Miris Auto-Upload Pipeline
 
-The Miris Auto-Upload Pipeline streams supported USD source assets into the [Miris Spatial Streaming](https://miris.com) platform and emits a `.mrx` manifest back to the asset's file list, so the asset becomes streamable in the VAMS Miris viewer. It runs automatically when a USD file is uploaded to an enabled database, or on demand via the **Stream with Miris** action in the viewer.
+The Miris Auto-Upload Pipeline streams supported USD source assets into the [Miris Spatial Streaming](https://miris.com) platform and emits a `.mrx` manifest back to the asset's file list, so the asset becomes streamable in the VAMS Miris viewer. It auto-registers as a standard VAMS pipeline and GLOBAL workflow (`miris-upload`) with a `fileUpload` trigger, so it runs automatically when a matching USD file is uploaded, or on demand from the file manager's **Automation -> Execute Workflow** action against the asset's root USD source file.
 
 For the end-to-end integration (viewer plugins, configuration, architecture), see the [Miris Spatial Streaming Integration](../../../documentation/docusaurus-site/docs/developer/external-integrations/miris-spatial-streaming.md) guide.
 
@@ -11,17 +11,17 @@ For the end-to-end integration (viewer plugins, configuration, architecture), se
 -   **`__main__.py`** - Entrypoint; runs the 6-step Miris upload flow and writes the `.mrx` manifest
 -   **`usd_packager.py`** - USD dependency resolution and `.usdz` packaging via OpenUSD (`UsdUtils.ComputeAllDependencies`)
 -   **`miris_uploader.py`** - Miris content API client (`MirisClient`): start upload, mark complete, poll, generate
--   **`pipeline_vams.py`** - VAMS pipeline definition parsing and output handling
 -   **`utils/secrets.py`** - Retrieves the Miris Integration Key from AWS Secrets Manager
 -   **`Dockerfile`** / **`entrypoint.sh`** - x86_64 image (the `usd-core` wheel has no aarch64 build)
 
 ### Lambda Functions (`lambda/`)
 
--   **`mirisUploadGate.py`** - Enforces the per-database allow-list; bypassed when `inputParameters.manual` is set (manual UI/CLI invocations)
+-   **`mirisUploadGate.py`** - Collapses a per-file trigger fan-out to a single upload: a multi-file USD asset can fire the `fileUpload` trigger once per matching layer, and the gate claims the asset+version with a conditional S3 put so only the first execution proceeds
+-   **`mirisClaim.py`** - Claim-key derivation and release, shared by the gate and every path that releases a claim
 -   **`vamsExecuteMirisUpload.py`** - VAMS API integration; invokes the gate, then the pipeline
 -   **`openMirisUploadPipeline.py`** - Starts the inner Step Functions execution; rejects folder inputs (requires a single file)
 -   **`constructMirisUploadPipeline.py`** - Builds the AWS Batch job definition from the pipeline payload
--   **`pipelineEnd.py`** - Handles pipeline completion and callback
+-   **`pipelineEnd.py`** - Reports the workflow callback (`SendTaskSuccess` / `SendTaskFailure`) and releases the claim when the run did not succeed
 
 ### CDK Infrastructure (`../../../infra/lib/nestedStacks/pipelines/miris/upload/`)
 
@@ -33,7 +33,8 @@ For the end-to-end integration (viewer plugins, configuration, architecture), se
 
 1. **Gate check**
 
-    - The gate Lambda proceeds if the asset's database is in `enabledDatabaseIds`, or if the invocation is manual (`inputParameters.manual = true`); otherwise it skips.
+    - The gate Lambda claims the asset's `(assetId, currentVersionId)` pair with a conditional S3 put (`If-None-Match: *`) at `s3://<auxiliary-bucket>/locks/miris-upload/<assetId>/<currentVersionId>.claim`. The first execution to reach the gate wins the claim and proceeds; every other execution triggered by the same asset version (for example, several `.usd` layers uploaded together) receives `PreconditionFailed`, reports its workflow task token as skipped, and exits as a no-op — so one asset version produces exactly one Miris upload regardless of how many files triggered it.
+    - A run that does not succeed releases its claim, so the asset version stays eligible. A successful run keeps it; delete the claim object to re-upload the same asset version.
 
 2. **Download and resolve**
 
@@ -60,7 +61,6 @@ For the end-to-end integration (viewer plugins, configuration, architecture), se
 Configured under `app.miris.upload.*` in `infra/config/config.json`:
 
 -   `enabled` - Deploys the pipeline and enables the `MIRIS_UPLOAD` feature
--   `enabledDatabaseIds` - Databases whose USD uploads auto-trigger the pipeline (manual triggers bypass this list)
 -   `apiKeySecretArn` - AWS Secrets Manager ARN holding the Miris Integration Key
 -   `mirisApiBaseUrl` - Miris content API base URL (default `https://app.miris.com`)
 -   `triggerExtensions` - Auto-trigger extensions (default `.usd,.usda,.usdc,.usdz`)
@@ -79,7 +79,7 @@ Configured under `app.miris.upload.*` in `infra/config/config.json`:
 
 ## Usage
 
-1. Upload a USD asset (`.usd`, `.usda`, `.usdc`, `.usdz`) to a VAMS asset in an enabled database, or open a USD file and click **Stream with Miris** in the viewer.
+1. Upload a USD asset (`.usd`, `.usda`, `.usdc`, `.usdz`) to a VAMS asset — the auto-registered trigger fires and the pipeline starts. A multi-file asset made up of several standalone `.usd`/`.usda`/`.usdc` layers can fire the trigger once per layer; the gate collapses that fan-out so the asset is uploaded exactly once. To launch the pipeline on demand instead, select the asset's root USD source file in the file manager and choose **Automation -> Execute Workflow**, then pick the **Miris Spatial Streaming Upload** workflow and the **Stream with Miris** template. The workflow takes a single file, so a whole-asset (`/`) selection is rejected in the execute wizard.
 2. The pipeline uploads the asset to Miris and waits for processing (typically 1–2 hours).
 3. When processing completes, a `.mrx` manifest appears in the asset's file list.
 4. Open the `.mrx` or the USD source file in the Miris viewer to stream the asset.

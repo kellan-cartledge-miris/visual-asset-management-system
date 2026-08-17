@@ -100,6 +100,43 @@ const GR00T_DEFAULT = {
     },
 };
 
+const COSMOS3_DEFAULT = {
+    enabled: false,
+    huggingFaceToken: "",
+    useCodeBuild: false,
+    useWarmInstances: false,
+    warmInstanceCount: 1,
+    modelsOmni: {
+        nano16B: {
+            enabled: false,
+            autoRegisterWithVAMS: true,
+            autoTriggerOnFileExtensionsUpload: "",
+            instanceTypes: ["g6e.4xlarge", "g6e.12xlarge"],
+            maxVCpus: 192,
+        },
+        super64B: {
+            enabled: false,
+            autoRegisterWithVAMS: true,
+            autoTriggerOnFileExtensionsUpload: "",
+            instanceTypes: ["p5.48xlarge", "p5e.48xlarge", "p4de.24xlarge"],
+            maxVCpus: 192,
+        },
+        superText2Image64B: {
+            enabled: false,
+            autoRegisterWithVAMS: true,
+            instanceTypes: ["p5.48xlarge", "p5e.48xlarge"],
+            maxVCpus: 192,
+        },
+        superImage2Video64B: {
+            enabled: false,
+            autoRegisterWithVAMS: true,
+            autoTriggerOnFileExtensionsUpload: "",
+            instanceTypes: ["p5.48xlarge", "p5e.48xlarge", "p4de.24xlarge"],
+            maxVCpus: 192,
+        },
+    },
+};
+
 const COMMERCIAL: ConfigShape = {
     name: "vams",
     env: {
@@ -186,6 +223,7 @@ const COMMERCIAL: ConfigShape = {
             },
         },
         pipelines: {
+            deadlineCloudExecutionTypeEnabled: false,
             useConversion3dBasic: {
                 enabled: true,
                 autoRegisterWithVAMS: true,
@@ -210,7 +248,6 @@ const COMMERCIAL: ConfigShape = {
                 enabled: false,
                 autoRegisterWithVAMS: true,
                 autoRegisterAutoTriggerOnFileUpload: true,
-                sqsAutoRunOnAssetModified: false,
             },
             useGenAiMetadata3dLabeling: {
                 enabled: false,
@@ -220,6 +257,7 @@ const COMMERCIAL: ConfigShape = {
             },
             useSplatToolbox: {
                 enabled: false,
+                useCodeBuild: false,
                 autoRegisterWithVAMS: true,
             },
             useRapidPipeline: {
@@ -264,6 +302,7 @@ const COMMERCIAL: ConfigShape = {
                 keepWarmInstance: false,
             },
             useNvidiaCosmos: cloneConfig(COSMOS_DEFAULT),
+            useNvidiaCosmos3: cloneConfig(COSMOS3_DEFAULT),
             useNvidiaGr00t: cloneConfig(GR00T_DEFAULT),
         },
         addons: {
@@ -298,7 +337,6 @@ const COMMERCIAL: ConfigShape = {
                 triggerExtensions: ".usd,.usda,.usdc,.usdz",
                 apiKeySecretArn: "UNDEFINED",
                 mirisApiBaseUrl: "https://api.miris.com",
-                enabledDatabaseIds: [],
                 taskTimeoutSeconds: 1800,
                 maxAssetSizeBytes: 5000000000,
             },
@@ -339,6 +377,7 @@ const COMMERCIAL: ConfigShape = {
                 globalBurstLimit: 100,
                 endpointType: "REGIONAL",
                 optionalExternalPrivateApigVPCEId: "",
+                apiGatewayTimeoutTime: 29,
             },
         },
         metadataSchema: {

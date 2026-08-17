@@ -8,14 +8,17 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as kms from "aws-cdk-lib/aws-kms";
 import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as logs from "aws-cdk-lib/aws-logs";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import * as path from "path";
 import { Construct } from "constructs";
 import { Duration } from "aws-cdk-lib";
+import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../../../../config/config";
 import { LAMBDA_PYTHON_RUNTIME } from "../../../../../../config/config";
 import { storageResources } from "../../../../storage/storageBuilder-nestedStack";
 import {
+    grantReadPermissionsToAllAssetBuckets,
     kmsKeyLambdaPermissionAddToResourcePolicy,
     setupSecurityAndLoggingEnvironmentAndPermissions,
     globalLambdaEnvironmentsAndPermissions,
@@ -27,6 +30,12 @@ const LAMBDA_SRC = path.join(
     __dirname,
     "../../../../../../../backendPipelines/miris/upload/lambda"
 );
+
+/**
+ * Auxiliary-bucket prefix holding the dedup claim objects. Mirrors CLAIM_PREFIX in
+ * backendPipelines/miris/upload/lambda/mirisClaim.py.
+ */
+const MIRIS_CLAIM_PREFIX = "locks/miris-upload";
 
 function _commonProps(
     config: Config.Config,
@@ -61,11 +70,6 @@ export function buildMirisUploadGateFunction(
     const fun = new lambda.Function(scope, "mirisUploadGate", {
         code: lambda.Code.fromAsset(LAMBDA_SRC),
         handler: "mirisUploadGate.lambda_handler",
-        environment: {
-            MIRIS_UPLOAD_ENABLED_DATABASES: JSON.stringify(
-                config.app.miris.upload.enabledDatabaseIds
-            ),
-        },
         ..._commonProps(config, vpc, subnets, lambdaCommonBaseLayer),
     });
     fun.addToRolePolicy(
@@ -75,6 +79,8 @@ export function buildMirisUploadGateFunction(
             resources: ["*"],
         })
     );
+    // The gate writes nothing but claim objects, so the grant is scoped to that prefix.
+    storageResources.s3.assetAuxiliaryBucket.grantPut(fun, `${MIRIS_CLAIM_PREFIX}/*`);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
@@ -97,6 +103,7 @@ export function buildVamsExecuteMirisUploadFunction(
         handler: "vamsExecuteMirisUpload.lambda_handler",
         environment: {
             OPEN_PIPELINE_FUNCTION_NAME: openPipelineFunctionName,
+            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
         },
         ..._commonProps(config, vpc, subnets, lambdaCommonBaseLayer),
     });
@@ -109,11 +116,36 @@ export function buildVamsExecuteMirisUploadFunction(
             ],
         })
     );
+    // The handler resolves its inputs from the workflow manifest, which lives in the asset bucket
+    // (or the auxiliary bucket for an auxiliary-scoped manifest).
+    grantReadPermissionsToAllAssetBuckets(fun);
+    storageResources.s3.assetAuxiliaryBucket.grantRead(fun);
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    // Releases the claim the gate wrote when the run cannot be handed off to the pipeline.
+    storageResources.s3.assetAuxiliaryBucket.grantDelete(fun, `${MIRIS_CLAIM_PREFIX}/*`);
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["states:SendTaskFailure"],
+            resources: ["*"],
+        })
+    );
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(scope);
+    NagSuppressions.addResourceSuppressions(
+        fun,
+        [
+            {
+                id: "AwsSolutions-IAM5",
+                reason: "Step Functions task tokens are not addressable by ARN, so reporting a callback failure requires a wildcard resource. Scope is limited to the token this function itself receives from the workflow.",
+                appliesTo: ["Resource::*"],
+            },
+        ],
+        true
+    );
     return fun;
 }
 
@@ -124,7 +156,8 @@ export function buildOpenMirisUploadPipelineFunction(
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
-    stateMachineArn: string
+    stateMachineArn: string,
+    stateMachineLogGroup: logs.ILogGroup
 ): lambda.Function {
     const fun = new lambda.Function(scope, "openMirisUploadPipeline", {
         code: lambda.Code.fromAsset(LAMBDA_SRC),
@@ -132,6 +165,9 @@ export function buildOpenMirisUploadPipelineFunction(
         environment: {
             STATE_MACHINE_ARN: stateMachineArn,
             ALLOWED_INPUT_FILEEXTENSIONS: config.app.miris.upload.triggerExtensions,
+            ORCHESTRATION_BUS_NAME: storageResources.eventBridge.orchestrationBus.eventBusName,
+            STATE_MACHINE_LOG_GROUP_NAME: stateMachineLogGroup.logGroupName,
+            STATE_MACHINE_LOG_GROUP_ARN: stateMachineLogGroup.logGroupArn,
         },
         ..._commonProps(config, vpc, subnets, lambdaCommonBaseLayer),
     });
@@ -142,6 +178,9 @@ export function buildOpenMirisUploadPipelineFunction(
             resources: ["*"],
         })
     );
+    // Releases the claim the gate wrote when the input is rejected or the state machine cannot start.
+    storageResources.s3.assetAuxiliaryBucket.grantDelete(fun, `${MIRIS_CLAIM_PREFIX}/*`);
+    storageResources.eventBridge.orchestrationBus.grantPutEventsTo(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
@@ -198,6 +237,8 @@ export function buildMirisUploadPipelineEndFunction(
             resources: ["*"],
         })
     );
+    // A run that does not succeed releases its claim here, so the asset version can be retried.
+    storageResources.s3.assetAuxiliaryBucket.grantDelete(fun, `${MIRIS_CLAIM_PREFIX}/*`);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);

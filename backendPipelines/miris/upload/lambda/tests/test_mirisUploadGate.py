@@ -1,85 +1,96 @@
 #  Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
-
 import json
 import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-# Make the lambda directory importable in tests
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+# This module's boto3 clients are constructed at import time from AWS_REGION. Set it
+# defensively so this test file does not depend on the ambient shell environment.
+os.environ.setdefault("AWS_REGION", "us-east-1")
+os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
 
 
-@pytest.fixture(autouse=True)
-def env(monkeypatch):
-    monkeypatch.setenv(
-        "MIRIS_UPLOAD_ENABLED_DATABASES",
-        json.dumps(["db-allowed-1", "db-allowed-2"]),
-    )
+@pytest.fixture
+def gate():
+    import importlib
+    import mirisUploadGate
+    return importlib.reload(mirisUploadGate)
 
 
-def _event(databaseId, manual=False, task_token="tt-test"):
+# The real workflow passes `auxBucket + auxTempPrefix`, where the temp prefix is
+# `pipelines/{pipelineName}/{executionId}/` -- unique per execution. The fixture mirrors that
+# shape so a key derivation that folded the prefix in would be visible here.
+def _aux_path(execution_id="exec-aaaa1111"):
+    return f"s3://vams-aux-bucket/pipelines/miris-upload/{execution_id}/"
+
+
+def _event(**overrides):
     body = {
-        "databaseId": databaseId,
-        "assetId": "asset-1",
-        "inputS3AssetFilePath": "s3://bucket/asset-1/model.usdz",
-        "sfnExternalTaskToken": task_token,
-        "inputParameters": json.dumps({"manual": True}) if manual else "",
+        "databaseId": "db1",
+        "assetId": "a1",
+        "assetVersionId": "v7",
+        "inputOutputS3AssetAuxiliaryFilesPath": _aux_path(),
+        "sfnExternalTaskToken": "tok-1",
     }
+    body.update(overrides)
     return {"body": json.dumps(body)}
 
 
-def test_manual_invocation_bypasses_allow_list():
-    """When inputParameters.manual is true, gate proceeds regardless of database."""
-    with patch("mirisUploadGate.boto3") as mock_boto3:
-        import mirisUploadGate
-        result = mirisUploadGate.lambda_handler(
-            _event("db-NOT-in-list", manual=True), None
-        )
+def test_first_claim_proceeds(gate):
+    with patch.object(gate, "s3_client") as s3:
+        result = gate.lambda_handler(_event(), None)
+
     assert result["gate"] == "proceed"
-    mock_boto3.client.return_value.send_task_success.assert_not_called()
+    assert s3.put_object.call_args.kwargs["IfNoneMatch"] == "*"
+    assert s3.put_object.call_args.kwargs["Bucket"] == "vams-aux-bucket"
+    assert s3.put_object.call_args.kwargs["Key"] == "locks/miris-upload/a1/v7.claim"
 
 
-def test_database_in_allow_list_proceeds():
-    """Database present in MIRIS_UPLOAD_ENABLED_DATABASES proceeds."""
-    with patch("mirisUploadGate.boto3") as mock_boto3:
-        import mirisUploadGate
-        result = mirisUploadGate.lambda_handler(_event("db-allowed-1"), None)
-    assert result["gate"] == "proceed"
-    mock_boto3.client.return_value.send_task_success.assert_not_called()
+def test_claim_key_ignores_the_execution_scoped_aux_prefix(gate):
+    """The regression guard for the dedup itself.
+
+    The auxiliary path is scoped to the workflow execution, so each fanned-out execution receives a
+    different one. If any part of that prefix reached the claim key, every conditional put would
+    succeed and nothing would ever be deduplicated.
+    """
+    with patch.object(gate, "s3_client") as s3:
+        gate.lambda_handler(_event(inputOutputS3AssetAuxiliaryFilesPath=_aux_path("exec-1111")), None)
+        first = s3.put_object.call_args.kwargs
+
+        gate.lambda_handler(_event(inputOutputS3AssetAuxiliaryFilesPath=_aux_path("exec-2222")), None)
+        second = s3.put_object.call_args.kwargs
+
+    assert first["Bucket"] == second["Bucket"] == "vams-aux-bucket"
+    assert first["Key"] == second["Key"] == "locks/miris-upload/a1/v7.claim"
 
 
-def test_database_not_in_allow_list_skips_and_sends_task_success():
-    """Database NOT in allow-list short-circuits to skip + sfn send_task_success."""
-    with patch("mirisUploadGate.boto3") as mock_boto3:
-        import mirisUploadGate
-        result = mirisUploadGate.lambda_handler(_event("db-blocked"), None)
+def test_second_claim_skips_and_reports_success(gate):
+    error = gate.s3_client.exceptions.ClientError(
+        {"Error": {"Code": "PreconditionFailed"}}, "PutObject")
+    with patch.object(gate, "s3_client") as s3, patch.object(gate, "sfn_client") as sfn:
+        s3.exceptions.ClientError = type(error)
+        s3.put_object.side_effect = error
+        result = gate.lambda_handler(_event(), None)
+
     assert result["gate"] == "skip"
-    mock_boto3.client.return_value.send_task_success.assert_called_once()
-    call_kwargs = mock_boto3.client.return_value.send_task_success.call_args.kwargs
-    assert call_kwargs["taskToken"] == "tt-test"
-    output = json.loads(call_kwargs["output"])
+    sfn.send_task_success.assert_called_once()
+    output = json.loads(sfn.send_task_success.call_args.kwargs["output"])
     assert output["status"] == "skipped"
-    assert "db-blocked" in output["reason"]
 
 
-def test_empty_allow_list_skips_all_non_manual(monkeypatch):
-    """Empty allow-list = no auto-upload fires."""
-    monkeypatch.setenv("MIRIS_UPLOAD_ENABLED_DATABASES", "[]")
-    with patch("mirisUploadGate.boto3") as mock_boto3:
-        import mirisUploadGate
-        result = mirisUploadGate.lambda_handler(_event("db-anything"), None)
-    assert result["gate"] == "skip"
+def test_missing_version_falls_back_to_live(gate):
+    with patch.object(gate, "s3_client") as s3:
+        gate.lambda_handler(_event(assetVersionId=""), None)
+
+    assert s3.put_object.call_args.kwargs["Key"] == "locks/miris-upload/a1/live.claim"
 
 
-def test_missing_task_token_proceeds_anyway():
-    """If no TaskToken, we still proceed/skip but don't try to call send_task_success."""
-    with patch("mirisUploadGate.boto3") as mock_boto3:
-        import mirisUploadGate
-        result = mirisUploadGate.lambda_handler(
-            _event("db-blocked", task_token=""), None
-        )
-    assert result["gate"] == "skip"
-    mock_boto3.client.return_value.send_task_success.assert_not_called()
+def test_no_aux_path_proceeds_rather_than_blocking(gate):
+    with patch.object(gate, "s3_client") as s3:
+        result = gate.lambda_handler(
+            _event(inputOutputS3AssetAuxiliaryFilesPath=""), None)
+
+    assert result["gate"] == "proceed"
+    s3.put_object.assert_not_called()

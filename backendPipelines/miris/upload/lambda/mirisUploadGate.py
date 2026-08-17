@@ -3,16 +3,22 @@
 """
 Miris Upload Gate Lambda.
 
-The Miris upload workflow is auto-triggered by VAMS whenever a file with a
-matching extension lands in any database. This gate enforces a per-database
-allow-list before the rest of the pipeline runs, since VAMS does not have a
-native per-database trigger knob.
+A fileUpload trigger fires once per uploaded file, so a multi-file USD asset fans out to one
+execution per matching layer — each of which would package the same dependency graph and create a
+duplicate Miris asset. This gate collapses that fan-out to a single upload.
 
-Behavior:
-  - inputParameters.manual=true   => bypass allow-list (manual UI/CLI invocations)
-  - databaseId in allow-list      => proceed
-  - databaseId not in allow-list  => send_task_success with status="skipped"
-                                     and return {gate: "skip"}
+The claim is an S3 conditional put (``If-None-Match: *``) at a key derived only from the asset and
+its current version (``mirisClaim.claim_location``), so every execution fanned out from one upload
+computes the same key. Exactly one caller can create the object; every other caller receives
+``PreconditionFailed`` and exits as a no-op success, reporting against its own task token so the
+workflow task does not wait out its timeout.
+
+A claim that is not followed by a successful upload is released again by ``pipelineEnd`` (or by the
+lambda that detected the failure), so a failed run does not leave the asset version permanently
+skipped.
+
+Per-database scoping is NOT handled here: a database-scoped trigger fires only for uploads in its
+own database, which VAMS resolves natively during trigger matching.
 """
 import json
 import os
@@ -20,7 +26,11 @@ import os
 import boto3
 from customLogging.logger import safeLogger
 
+from mirisClaim import claim_location
+
 logger = safeLogger(service="MirisUploadGate")
+s3_client = boto3.client("s3", region_name=os.environ.get("AWS_REGION"))
+sfn_client = boto3.client("stepfunctions", region_name=os.environ.get("AWS_REGION"))
 
 
 def _parse_body(event):
@@ -30,45 +40,56 @@ def _parse_body(event):
     return body
 
 
-def _is_manual(input_parameters):
-    if not input_parameters:
-        return False
-    if isinstance(input_parameters, str):
-        try:
-            input_parameters = json.loads(input_parameters)
-        except json.JSONDecodeError:
-            return False
-    return bool(input_parameters.get("manual"))
+def _report_skipped(task_token, reason):
+    if not task_token:
+        return
+    try:
+        sfn_client.send_task_success(
+            taskToken=task_token,
+            output=json.dumps({"status": "skipped", "reason": reason}),
+        )
+    except Exception as e:
+        # Best-effort: returning gate=skip still short-circuits vamsExecute. If the token call
+        # genuinely failed the workflow task falls back to its timeout.
+        logger.warning(f"send_task_success failed (will fall through): {e}")
 
 
 def lambda_handler(event, context):
-    enabled_databases = json.loads(os.environ.get("MIRIS_UPLOAD_ENABLED_DATABASES", "[]"))
     logger.info("MirisUploadGate received event")
     body = _parse_body(event)
-    database_id = body.get("databaseId", "")
+    asset_id = body.get("assetId", "")
+    asset_version_id = body.get("assetVersionId", "")
     task_token = body.get("sfnExternalTaskToken", "") or ""
-    input_parameters = body.get("inputParameters", "")
 
-    if _is_manual(input_parameters):
-        logger.info("Manual invocation; bypassing allow-list")
-        return {"gate": "proceed", "databaseId": database_id, **body}
+    bucket, key = claim_location(
+        body.get("inputOutputS3AssetAuxiliaryFilesPath", ""), asset_id, asset_version_id)
 
-    if database_id in enabled_databases:
-        logger.info(f"Database {database_id} in allow-list; proceeding")
-        return {"gate": "proceed", "databaseId": database_id, **body}
+    # No auxiliary location means no place to record a claim. Proceed rather than block: a missing
+    # dedup is a duplicate upload, whereas a false skip loses the upload entirely.
+    if not bucket:
+        logger.warning("No auxiliary path available for the claim; proceeding without dedup")
+        return {"gate": "proceed"}
 
-    reason = f"Database {database_id!r} not in MIRIS_UPLOAD_ENABLED_DATABASES allow-list"
-    logger.info(f"Skipping: {reason}")
-    if task_token:
-        try:
-            sfn = boto3.client("stepfunctions")
-            sfn.send_task_success(
-                taskToken=task_token,
-                output=json.dumps({"status": "skipped", "reason": reason}),
-            )
-        except Exception as e:
-            # Best-effort: log and proceed. Returning gate=skip still lets
-            # vamsExecute short-circuit, and the outer workflow will time out
-            # if the token call truly failed.
-            logger.warning(f"send_task_success failed (will fall through): {e}")
-    return {"gate": "skip", "reason": reason}
+    try:
+        s3_client.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=json.dumps({
+                "assetId": asset_id,
+                "assetVersionId": asset_version_id,
+                "mirisAssetName": body.get("mirisAssetName", ""),
+            }).encode("utf-8"),
+            IfNoneMatch="*",
+        )
+    except s3_client.exceptions.ClientError as e:
+        code = e.response.get("Error", {}).get("Code", "")
+        if code in ("PreconditionFailed", "ConditionalRequestConflict"):
+            reason = (f"Miris upload for asset {asset_id!r} version "
+                      f"{asset_version_id or 'live'!r} is already claimed by another execution")
+            logger.info(f"Skipping: {reason}")
+            _report_skipped(task_token, reason)
+            return {"gate": "skip", "reason": reason}
+        raise
+
+    logger.info(f"Claimed s3://{bucket}/{key}")
+    return {"gate": "proceed"}
