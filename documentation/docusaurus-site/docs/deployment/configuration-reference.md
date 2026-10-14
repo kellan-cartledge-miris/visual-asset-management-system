@@ -581,16 +581,20 @@ The `@miris-inc/three` SDK uses `eval()` at runtime, so enabling Miris also requ
 
 Automatically uploads supported USD source files to the Miris Spatial Streaming platform and writes a `.mrx` manifest back to the VAMS asset. Requires `app.miris.enabled: true`.
 
-| Field                                                  | Type    | Default                    | Description                                                                                                                                     |
-| ------------------------------------------------------ | ------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `app.miris.upload.enabled`                             | boolean | `false`                    | Enables the Miris auto-upload pipeline.                                                                                                         |
-| `app.miris.upload.autoRegisterWithVAMS`                | boolean | `true`                     | Automatically registers the pipeline and workflow in the VAMS database during deployment.                                                       |
-| `app.miris.upload.autoRegisterAutoTriggerOnFileUpload` | boolean | `true`                     | Automatically triggers the pipeline when a matching file is uploaded. Requires `autoRegisterWithVAMS: true`.                                    |
-| `app.miris.upload.triggerExtensions`                   | string  | `".usd,.usda,.usdc,.usdz"` | Comma-separated list of file extensions that trigger the pipeline on upload.                                                                    |
-| `app.miris.upload.apiKeySecretArn`                     | string  | _(required when enabled)_  | AWS Secrets Manager ARN containing the Miris Integration Key used to authenticate with the Miris content API.                                   |
-| `app.miris.upload.mirisApiBaseUrl`                     | string  | `"https://api.miris.com"`  | Base URL for the Miris content API. Override only for non-production Miris environments.                                                        |
-| `app.miris.upload.taskTimeoutSeconds`                  | number  | `1800`                     | Maximum seconds the pipeline waits for Miris streamable processing to complete before failing (default: 30 minutes).                            |
-| `app.miris.upload.maxAssetSizeBytes`                   | number  | `5000000000`               | Maximum source file size in bytes accepted by the pipeline (default: 5 GB). Files larger than this limit are skipped.                           |
+:::note[Implemented by]
+Nested stack: `infra/lib/nestedStacks/pipelines/miris/upload/mirisUploadBuilder-nestedStack.ts` (`MirisUploadBuilderNestedStack`) — AWS Batch on Fargate.
+:::
+
+| Field                                                  | Type    | Default                    | Description                                                                                                           |
+| ------------------------------------------------------ | ------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `app.miris.upload.enabled`                             | boolean | `false`                    | Enables the Miris auto-upload pipeline.                                                                               |
+| `app.miris.upload.autoRegisterWithVAMS`                | boolean | `true`                     | Automatically registers the pipeline and workflow in the VAMS database during deployment.                             |
+| `app.miris.upload.autoRegisterAutoTriggerOnFileUpload` | boolean | `true`                     | Automatically triggers the pipeline when a matching file is uploaded. Requires `autoRegisterWithVAMS: true`.          |
+| `app.miris.upload.triggerExtensions`                   | string  | `".usd,.usda,.usdc,.usdz"` | Comma-separated list of file extensions that trigger the pipeline on upload.                                          |
+| `app.miris.upload.apiKeySecretArn`                     | string  | _(required when enabled)_  | AWS Secrets Manager ARN containing the Miris Integration Key used to authenticate with the Miris content API.         |
+| `app.miris.upload.mirisApiBaseUrl`                     | string  | `"https://api.miris.com"`  | Base URL for the Miris content API. Override only for non-production Miris environments.                              |
+| `app.miris.upload.taskTimeoutSeconds`                  | number  | `1800`                     | Maximum seconds the pipeline waits for Miris streamable processing to complete before failing (default: 30 minutes).  |
+| `app.miris.upload.maxAssetSizeBytes`                   | number  | `5000000000`               | Maximum source file size in bytes accepted by the pipeline (default: 5 GB). Files larger than this limit are skipped. |
 
 :::note[Two independent timeouts]
 `app.miris.upload.taskTimeoutSeconds` governs the **container's own budget**: how long the upload container waits for Miris streamable processing before failing the run. It is applied to the container and to the pipeline's inner AWS Step Functions state machine, so raising it gives the container more time.

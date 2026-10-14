@@ -23,10 +23,10 @@ Miris integration is optional and does not affect core VAMS functionality. It ca
 
 VAMS includes two Miris viewer plugins. Together they let a user stream a Miris-hosted asset by selecting either the generated `.mrx` manifest or the original USD source file.
 
-| Plugin ID             | Extensions                        | Priority | Feature flag      | Role                                                                 |
-| --------------------- | --------------------------------- | -------- | ----------------- | --------------------------------------------------------------------- |
-| `miris-stream-viewer` | `.mrx`                            | 1        | `MIRIS_STREAMING` | Streams a Miris-hosted asset referenced by a `.mrx` manifest.        |
-| `miris-upload-viewer` | `.usd`, `.usda`, `.usdc`, `.usdz` | 0        | `MIRIS_UPLOAD`    | Streams a USD asset already on Miris, or shows its upload status.   |
+| Plugin ID             | Extensions                        | Priority | Feature flag      | Role                                                              |
+| --------------------- | --------------------------------- | -------- | ----------------- | ----------------------------------------------------------------- |
+| `miris-stream-viewer` | `.mrx`                            | 1        | `MIRIS_STREAMING` | Streams a Miris-hosted asset referenced by a `.mrx` manifest.     |
+| `miris-upload-viewer` | `.usd`, `.usda`, `.usdc`, `.usdz` | 0        | `MIRIS_UPLOAD`    | Streams a USD asset already on Miris, or shows its upload status. |
 
 ### Stream viewer (`.mrx`)
 
@@ -74,17 +74,17 @@ Enable Miris by setting `app.miris.enabled` to `true` and providing a viewer key
 }
 ```
 
-| Field                             | Required   | Description                                                                                                                 |
-| --------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `miris.enabled`                   | Yes        | Enables the Miris integration and the viewer key in `/secure-config`.                                                       |
-| `miris.viewerKey`                 | Yes        | Miris viewer key used by the stream viewer for authentication. Treat as a secret; only shown once at creation in Miris.     |
-| `miris.upload.enabled`            | For upload | Deploys the auto-upload pipeline and enables the `miris-upload-viewer` (the `MIRIS_UPLOAD` feature).                        |
-| `miris.upload.apiKeySecretArn`    | For upload | AWS Secrets Manager ARN holding the Miris Integration Key used by the upload pipeline.                                      |
-| `miris.upload.triggerExtensions`  | For upload | Comma-separated extensions that auto-trigger the pipeline (default `.usd,.usda,.usdc,.usdz`).                               |
-| `miris.upload.mirisApiBaseUrl`    | For upload | Miris content API base URL (default `https://app.miris.com`).                                                               |
-| `miris.upload.taskTimeoutSeconds` | For upload | Maximum time the upload container waits for Miris processing.                                                               |
-| `miris.upload.maxAssetSizeBytes`  | For upload | Maximum source asset size accepted for upload.                                                                              |
-| `webUi.allowUnsafeEvalFeatures`   | Yes        | Must be `true`; the Miris SDK requires the `unsafe-eval` CSP directive.                                                     |
+| Field                             | Required   | Description                                                                                                             |
+| --------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `miris.enabled`                   | Yes        | Enables the Miris integration and the viewer key in `/secure-config`.                                                   |
+| `miris.viewerKey`                 | Yes        | Miris viewer key used by the stream viewer for authentication. Treat as a secret; only shown once at creation in Miris. |
+| `miris.upload.enabled`            | For upload | Deploys the auto-upload pipeline and enables the `miris-upload-viewer` (the `MIRIS_UPLOAD` feature).                    |
+| `miris.upload.apiKeySecretArn`    | For upload | AWS Secrets Manager ARN holding the Miris Integration Key used by the upload pipeline.                                  |
+| `miris.upload.triggerExtensions`  | For upload | Comma-separated extensions that auto-trigger the pipeline (default `.usd,.usda,.usdc,.usdz`).                           |
+| `miris.upload.mirisApiBaseUrl`    | For upload | Miris content API base URL (default `https://app.miris.com`).                                                           |
+| `miris.upload.taskTimeoutSeconds` | For upload | Maximum time the upload container waits for Miris processing.                                                           |
+| `miris.upload.maxAssetSizeBytes`  | For upload | Maximum source asset size accepted for upload.                                                                          |
+| `webUi.allowUnsafeEvalFeatures`   | Yes        | Must be `true`; the Miris SDK requires the `unsafe-eval` CSP directive.                                                 |
 
 Database scope for the auto-trigger is a property of the workflow that owns it, not a pipeline-level setting. The upload pipeline auto-registers a GLOBAL workflow (`miris-upload`) whose `fileUpload` trigger fires for a matching USD upload in any database. To restrict auto-uploads to specific databases, disable the global trigger and register a database-scoped copy of the workflow for each database that should auto-trigger — VAMS resolves database scope natively when it matches an uploaded file against workflow triggers.
 

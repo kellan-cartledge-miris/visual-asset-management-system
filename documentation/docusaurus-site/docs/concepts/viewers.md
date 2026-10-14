@@ -221,13 +221,13 @@ Several viewers depend on WebAssembly (WASM) modules for rendering. WASM-based v
 
 The following viewers use WASM:
 
-| Viewer                             | WASM Library                                 | Required Feature Flag |
-| ---------------------------------- | -------------------------------------------- | --------------------- |
-| Needle USD Viewer (Experimental)   | `usd-wasm`                                   | `ALLOWUNSAFEEVAL`     |
-| Cesium 3D Tileset Viewer           | `@cesium/engine` (draco/KTX2 decoding)       | None                  |
-| SuperSplat Editor (PlayCanvas)     | PlayCanvas engine (WebGL shader compilation) | `ALLOWUNSAFEEVAL`     |
-| Three.js Viewer (CAD formats only) | OpenCascade (`opencascade.js`)               | `ALLOWUNSAFEEVAL`     |
-| ThatOpen IFC BIM Viewer            | `web-ifc` (That Open Engine)                 | `ALLOWUNSAFEEVAL`     |
+| Viewer                             | WASM Library                                     | Required Feature Flag                                       |
+| ---------------------------------- | ------------------------------------------------ | ----------------------------------------------------------- |
+| Needle USD Viewer (Experimental)   | `usd-wasm`                                       | `ALLOWUNSAFEEVAL`                                           |
+| Cesium 3D Tileset Viewer           | `@cesium/engine` (draco/KTX2 decoding)           | None                                                        |
+| SuperSplat Editor (PlayCanvas)     | PlayCanvas engine (WebGL shader compilation)     | `ALLOWUNSAFEEVAL`                                           |
+| Three.js Viewer (CAD formats only) | OpenCascade (`opencascade.js`)                   | `ALLOWUNSAFEEVAL`                                           |
+| ThatOpen IFC BIM Viewer            | `web-ifc` (That Open Engine)                     | `ALLOWUNSAFEEVAL`                                           |
 | Miris Stream / Upload Viewers      | Miris Spatial Streaming SDK (`@miris-inc/three`) | `ALLOWUNSAFEEVAL` (plus `MIRIS_STREAMING` / `MIRIS_UPLOAD`) |
 
 :::warning[Content Security Policy]
