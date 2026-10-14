@@ -18,7 +18,7 @@ Assets in VAMS are organized into databases. If your administrator has already c
 
 | Field                                 | Requirements                                                             | Description                                                                                                                       |
 | ------------------------------------- | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| **Database Name**                     | 4-64 characters, alphanumeric plus `-` and `_` only. Cannot be "GLOBAL". | A unique identifier for your database. This cannot be changed after creation.                                                     |
+| **Database Name**                     | 4-63 characters, alphanumeric plus `-` and `_` only. Cannot be "GLOBAL". | A unique identifier for your database. This cannot be changed after creation.                                                     |
 | **Database Description**              | 4-256 characters.                                                        | A human-readable description of the database's purpose.                                                                           |
 | **Default Bucket and Prefix**         | Required. Select from available buckets.                                 | The Amazon S3 bucket where assets in this database will be stored. If only one bucket is available, it is selected automatically. |
 | **Restrict Metadata Outside Schemas** | Optional checkbox.                                                       | When enabled, only metadata fields defined in applied metadata schemas are allowed.                                               |
@@ -53,15 +53,17 @@ Fill in the required fields on the **Asset Details** step:
 
 3. **Is Distributable?** -- Select **Yes** or **No**.
 
-    !!! info
+    :::info
     The **Is Distributable** setting controls whether file downloads are enabled for this asset. Select **Yes** if users should be able to download files from this asset. Select **No** to restrict the asset to viewing only.
+    :::
 
 4. **Description** -- Enter a description of at least 4 characters. This helps other users understand what the asset contains.
 
 5. **Tags** (optional) -- Select one or more tags from the dropdown to categorize your asset. Tags are defined by your administrator in the **Tags Management** page.
 
-    !!! warning
+    :::warning
     If your administrator has configured required tag types, you must select at least one tag from each required type before proceeding. Required tag types are listed in the constraint text below the Tags field.
+    :::
 
 6. Select **Next** to proceed to the metadata step.
 
@@ -135,7 +137,7 @@ The **Select Files to Upload** step lets you attach files to your asset. This st
 If the selected database has file upload extension restrictions, an alert banner displays the allowed extensions. Files with disallowed extensions are flagged with validation errors and cannot be uploaded.
 
 :::note
-Preview files (filenames containing `.previewFile.`) are exempt from extension restrictions.
+Preview files (filenames containing `.previewFile.`) are exempt from the database's extension restrictions, but must still be one of `.png`, `.jpg`, `.jpeg`, `.svg`, or `.gif`. A preview file with any other extension is flagged before the upload starts, and rejects the whole upload request if it reaches the API.
 :::
 
 ### Preview Files
@@ -224,7 +226,7 @@ If you uploaded a file in a supported format (such as `.gltf`, `.obj`, `.e57`, `
 | `.csv`                                  | Columnar Data Viewer | Tabular data browsing                 |
 
 :::tip
-If a file does not have a dedicated viewer but has a preview image, VAMS falls back to the preview viewer to display the thumbnail.
+If a file has a preview image, the file page offers a **Preview** option that shows the image, including for a file that has no dedicated viewer.
 :::
 
 ---

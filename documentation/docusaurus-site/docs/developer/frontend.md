@@ -6,16 +6,18 @@ This guide covers development patterns for the VAMS React frontend, including pr
 
 | Technology                  | Version | Purpose                          |
 | --------------------------- | ------- | -------------------------------- |
-| React                       | 17.0.2  | UI framework (not React 18)      |
-| TypeScript                  | 4.4.4   | Type system                      |
-| Vite                        | 6.x     | Build tooling                    |
+| React                       | 18.x    | UI framework                     |
+| TypeScript                  | 5.x     | Type system                      |
+| Vite                        | 8.x     | Build tooling                    |
 | Cloudscape Design System    | 3.x     | AWS UI component library         |
 | AWS Amplify                 | v6      | Authentication integration       |
-| React Router                | v6      | Client-side routing (HashRouter) |
-| `@badgateway/oauth2-client` | 2.4.2   | External OAuth2 PKCE flow        |
+| React Router                | v7      | Client-side routing (HashRouter) |
+| `@badgateway/oauth2-client` | 2.x     | External OAuth2 PKCE flow        |
 
-:::info[React 17]
-This project uses React 17, not React 18. Do not use React 18 APIs such as `createRoot`, `useId`, `useSyncExternalStore`, `useTransition`, or `useDeferredValue`. The app uses `ReactDOM.render`.
+Exact dependency ranges are declared in `web/package.json`.
+
+:::info[React 18]
+The app mounts with `createRoot` from `react-dom/client`, so React 18 APIs such as `useId`, `useSyncExternalStore`, `useTransition`, and `useDeferredValue` are available.
 :::
 
 ## Project Structure
@@ -26,7 +28,7 @@ web/src/
   routes.tsx              # Centralized route table with React.lazy
   config.ts               # Static config (APP_TITLE, APP_TITLE_PREFIX, DEV_API_ENDPOINT)
   synonyms.tsx            # Customizable display names (Asset, Database, Comment)
-  index.tsx               # Entry point (ReactDOM.render)
+  index.tsx               # Entry point (createRoot)
 
   FedAuth/Auth.tsx        # Dual-mode authentication orchestrator
 
@@ -505,6 +507,8 @@ const isPreview = fileName.includes(PREVIEW_FILE_PATTERN);
 const isAllowed = previewFileFormats.includes(fileExt);
 ```
 
+For a file-level preview file the extension is everything **after** the `.previewFile.` marker, not the text after the last dot: `model.gltf.previewFile.p.png` has the extension `.p.png`. `utils/fileExtensionValidation.ts` exposes `getPreviewFileExtension()` and `isPreviewExtensionAllowed()` for this, and `validateFiles()` applies them to every preview file whether or not the database restricts extensions. Use those helpers rather than `getFileExtension()`, which reads the last dot and would accept a name the API rejects.
+
 `constants/uploadLimits.ts` re-exports `previewFileFormats` as `ALLOWED_PREVIEW_EXTENSIONS` alongside the upload limit values, so upload code can import everything from one place.
 
 :::note[Backend Mirror]
@@ -589,16 +593,13 @@ export default MyComponent;
 
 ## Content Security Policy and Inline Scripts
 
-The VAMS web app ships with a Content Security Policy generated at deploy time by `infra/lib/helper/security.ts` and embedded in the static-web nested stack's response headers. The policy is permissive enough to accommodate external viewer plugins whose inline `<script>` blocks we cannot pre-hash, while remaining restrictive elsewhere (`default-src 'none'`, `object-src 'none'`, `frame-ancestors 'self'` for same-origin framing only, HTTPS upgrades, etc.).
+The VAMS web app ships with a Content Security Policy generated at deploy time by `infra/lib/helper/security.ts` and embedded in the static-web nested stack's response headers. The policy allows the inline `<script>` blocks in `web/index.html` by SHA-256 hash and is restrictive elsewhere (`default-src 'none'`, `object-src 'none'`, `frame-ancestors 'self'` for same-origin framing only, HTTPS upgrades, etc.).
 
-### `script-src` uses `'unsafe-inline'`
+### `script-src` allows inline scripts by hash
 
-`script-src` includes `'unsafe-inline'` to allow add-on viewers (such as Physna's hosted viewer, which embeds inline `<script>` blocks inside its iframe HTML) to run without requiring VAMS to maintain a rolling per-version SHA allowlist. Maintaining hashes or a CSP nonce per external-viewer release is not sustainable because:
+`script-src` carries a SHA-256 hash for each inline `<script>` block in `web/index.html` and includes `'unsafe-inline'` in no configuration, so an injected inline script is blocked. A hash covers the exact text of its block, so editing or reformatting an inline block in `web/index.html` requires regenerating the hashes with `web/scripts/cspInlineScriptHashes.js` and updating `infra/lib/helper/cspInlineScriptHashes.ts` with its output; `infra/test/web/cspInlineScriptHashes.test.ts` fails on drift.
 
--   Viewer vendors rev their bundles frequently, which would break VAMS on every upstream publish until someone updated the allowlist.
--   Most add-on viewers inject inline scripts from a sandboxed iframe whose origin is not VAMS, and the browser will not forward a nonce across origins.
-
-Browsers ignore `'unsafe-inline'` whenever any hash or nonce source is also present, so the directive only actually takes effect in this deployment because neither is used.
+Browsers ignore `'unsafe-inline'` whenever a hash source is also present, so the keyword would permit nothing alongside the hashes, and a `scriptSrc` entry carrying it in `infra/config/csp/cspAdditionalConfig.json` is skipped with a warning at synth. An add-on viewer that frames a third-party origin, such as Physna's hosted viewer, loads under that origin's own policy and needs only the `frame-src` and `connect-src` entries described in [Add-on origins](#add-on-origins). See [Security Architecture](../architecture/security.md#content-security-policy-csp) for the full directive list.
 
 ### `app.webUi.allowUnsafeEvalFeatures`
 

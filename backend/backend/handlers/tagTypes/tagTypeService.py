@@ -48,18 +48,13 @@ claims_and_roles = {}
 
 try:
     tag_table_name = get_table_name(ResourceKeys.TAG_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving tags table name")
-    tag_table_name = None
-
-try:
     tag_type_table_name = get_table_name(ResourceKeys.TAG_TYPE_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed resolving tag types table name")
-    tag_type_table_name = None
+    logger.exception("Failed resolving resource names")
+    raise e
 
-tag_table = dynamodb.Table(tag_table_name) if tag_table_name else None
-tag_type_table = dynamodb.Table(tag_type_table_name) if tag_type_table_name else None
+tag_table = dynamodb.Table(tag_table_name)
+tag_type_table = dynamodb.Table(tag_type_table_name)
 
 #######################
 # Business Logic Functions
@@ -78,10 +73,9 @@ def _query_all_in_partition(table, scope):
     while True:
         response = table.query(**query_kwargs)
         items.extend(response.get('Items', []))
-        last_key = response.get('LastEvaluatedKey')
-        if not last_key:
+        if 'LastEvaluatedKey' not in response:
             return items
-        query_kwargs['ExclusiveStartKey'] = last_key
+        query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
 
 
 def get_tag_types(query_params: dict, claims_and_roles: dict) -> dict:
@@ -186,16 +180,14 @@ def get_tag_types(query_params: dict, claims_and_roles: dict) -> dict:
             
             # Check authorization
             tag_type.update({"object__type": "tagType"})
+            # An item is appended only when enforce() passes, so an empty token list yields an
+            # empty listing rather than the whole tag vocabulary.
             if len(claims_and_roles["tokens"]) > 0:
                 casbin_enforcer = CasbinEnforcer(claims_and_roles)
                 if casbin_enforcer.enforce(tag_type, "GET"):
                     # Remove object__type before adding to results
                     tag_type.pop("object__type", None)
                     formatted_tag_type_results.append(tag_type)
-            else:
-                # No authorization required, add all
-                tag_type.pop("object__type", None)
-                formatted_tag_type_results.append(tag_type)
         
         # Build response
         result = {"Items": formatted_tag_type_results}
@@ -206,7 +198,7 @@ def get_tag_types(query_params: dict, claims_and_roles: dict) -> dict:
         
     except Exception as e:
         logger.exception(f"Error getting tag types: {e}")
-        raise VAMSGeneralErrorResponse(f"Error retrieving tag types: {str(e)}")
+        raise VAMSGeneralErrorResponse("Error retrieving tag types")
 
 def delete_tag_type(tag_type_name: str, claims_and_roles: dict, database_id: str = None) -> TagTypeOperationResponseModel:
     """Delete a tag type
@@ -225,6 +217,21 @@ def delete_tag_type(tag_type_name: str, claims_and_roles: dict, database_id: str
     try:
         scope = normalize_scope(database_id)
 
+        # Authorize before anything below can disclose whether the tag type exists or is
+        # referenced. The checks that follow answer 404 / 400 / 403 differently, so running them
+        # first hands a caller holding the DELETE route but no tagType constraint an existence and
+        # in-use oracle over scopes it cannot read, and drives the reference scan once per probe.
+        # A tagType is authorized on tagTypeName + databaseId (CONSTRAINT_OBJECT_TYPE_FIELDS), both
+        # of which the request supplies, so this is the same decision the stored record would give.
+        if len(claims_and_roles["tokens"]) == 0:
+            raise VAMSGeneralErrorResponse("Not authorized to delete tag type", status_code=403)
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(
+            {"object__type": "tagType", "databaseId": scope, "tagTypeName": tag_type_name},
+            "DELETE",
+        ):
+            raise VAMSGeneralErrorResponse("Not authorized to delete tag type", status_code=403)
+
         # Get the tag type (composite key)
         tag_type_response = tag_type_table.get_item(Key={'databaseId': scope, 'tagTypeName': tag_type_name})
         tag_type = tag_type_response.get("Item")
@@ -234,7 +241,7 @@ def delete_tag_type(tag_type_name: str, claims_and_roles: dict, database_id: str
 
         stored_scope = normalize_scope(tag_type.get("databaseId"))
 
-        # Check if tag type is in use by any referencing tag. A GLOBAL tag type can be
+        # Check if tag type is in use by any referencing tag.
         # A tag resolves its tag type within its OWN scope, so a reference blocks the delete only
         # when the tag resolves to THIS type:
         #   database-scoped type -> only same-database tags can reference it.
@@ -276,20 +283,9 @@ def delete_tag_type(tag_type_name: str, claims_and_roles: dict, database_id: str
                         "Cannot delete tag type that is currently in use by a tag",
                         status_code=400
                     )
-            last_evaluated_key = scan_response.get('LastEvaluatedKey')
-            if not last_evaluated_key:
+            if 'LastEvaluatedKey' not in scan_response:
                 break
-
-        # Check authorization (scope-aware: auth against the type's stored scope)
-        tag_type.update({
-            "object__type": "tagType",
-            "databaseId": stored_scope,
-        })
-        if len(claims_and_roles["tokens"]) == 0:
-            raise VAMSGeneralErrorResponse("Not authorized to delete tag type", status_code=403)
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not casbin_enforcer.enforce(tag_type, "DELETE"):
-            raise VAMSGeneralErrorResponse("Not authorized to delete tag type", status_code=403)
+            last_evaluated_key = scan_response['LastEvaluatedKey']
 
         # Delete the tag type
         logger.info(f"Deleting tag type: {tag_type_name}")
@@ -314,7 +310,7 @@ def delete_tag_type(tag_type_name: str, claims_and_roles: dict, database_id: str
         logger.exception(f"Error deleting tag type: {e}")
         if hasattr(e, 'response') and e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
             raise VAMSGeneralErrorResponse("Tag type not found", status_code=404)
-        raise VAMSGeneralErrorResponse(f"Error deleting tag type: {str(e)}")
+        raise VAMSGeneralErrorResponse("Error deleting tag type")
 
 #######################
 # Request Handlers

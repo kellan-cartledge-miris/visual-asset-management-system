@@ -34,7 +34,7 @@ export const SECTIONS: Section[] = [
         id: "networking",
         label: "Networking (VPC)",
         description:
-            "VPC creation or import. Auto-enabled by ALB, provisioned OpenSearch, and container pipelines.",
+            "VPC creation or import. Required by ALB, provisioned OpenSearch, a private OpenSearch Serverless collection, and the container pipelines.",
         order: 3,
     },
     {
@@ -72,7 +72,7 @@ export const SECTIONS: Section[] = [
     },
     {
         id: "addons",
-        label: "Add-ons (Garnet Framework)",
+        label: "Add-ons",
         advanced: true,
         order: 9,
     },
@@ -313,7 +313,7 @@ export const FIELDS: FieldMeta[] = [
         label: "Use FIPS endpoints",
         input: "boolean",
         section: "security",
-        help: "Also requires the AWS_USE_FIPS_ENDPOINT=true environment variable at deploy time.",
+        help: "Adds a KMS FIPS VPC endpoint when the VPC, its VPC endpoints (addVpcEndpoints) and a KMS CMK are enabled. No hostname VAMS composes changes: the Cognito hosted UI domain has the standard domain as its FIPS entry. SDK clients in Lambdas and containers are not affected. AWS_USE_FIPS_ENDPOINT=true in the synth environment also turns this on.",
     },
     {
         path: "app.addStackCloudTrailLogs",
@@ -378,7 +378,7 @@ export const FIELDS: FieldMeta[] = [
         label: "Enable global VPC",
         input: "boolean",
         section: "networking",
-        help: "Auto-enabled when ALB, provisioned OpenSearch, or any container pipeline is on.",
+        help: "Required when ALB, provisioned OpenSearch, a private OpenSearch Serverless collection, or any container pipeline is enabled.",
     },
     {
         path: "app.useGlobalVpc.vpcCidrRange",
@@ -708,6 +708,16 @@ export const FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "auth",
         advanced: true,
+        help: "Federate the user pool to a SAML provider. Commercial partition only, and mutually exclusive with OIDC federation.",
+        visibleWhen: (c) => !!getByPath(c, "app.authProvider.useCognito.enabled"),
+    },
+    {
+        path: "app.authProvider.useCognito.useOidc",
+        label: "Cognito OIDC federation",
+        input: "boolean",
+        section: "auth",
+        advanced: true,
+        help: "Federate the user pool to an OIDC provider. Commercial partition only, mutually exclusive with SAML, and requires provider settings in infra/config/oidc-config.ts.",
         visibleWhen: (c) => !!getByPath(c, "app.authProvider.useCognito.enabled"),
     },
     {
@@ -734,6 +744,15 @@ export const FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "auth",
         help: "External OAuth 2.0 / OIDC provider. All fields below are required when enabled.",
+    },
+    {
+        path: "app.authProvider.useExternalOAuthIdp.idpDisplayName",
+        label: "External IdP display name",
+        input: "text",
+        section: "auth",
+        advanced: true,
+        help: 'Label on the login button ("Log in with <name>"). Defaults to SSO when empty.',
+        visibleWhen: (c) => !!getByPath(c, "app.authProvider.useExternalOAuthIdp.enabled"),
     },
     {
         path: "app.authProvider.useExternalOAuthIdp.idpAuthProviderUrl",
@@ -827,7 +846,7 @@ export const FIELDS: FieldMeta[] = [
         section: "auth",
         advanced: true,
         min: 1,
-        help: "TTL for S3 presigned upload/download URLs (default 86400 = 24h).",
+        help: "Maximum lifetime of S3 presigned upload/download URLs, 1 to 604800 seconds (default 86400 = 24h). A URL stops working sooner if the Lambda role credentials that signed it expire first.",
     },
     {
         path: "app.authProvider.authorizerOptions.allowedIpRanges",
@@ -836,6 +855,14 @@ export const FIELDS: FieldMeta[] = [
         section: "auth",
         advanced: true,
         help: "Restrict API access to IP ranges. Each is a [min, max] IPv4 pair. Empty allows all.",
+    },
+    {
+        path: "app.authProvider.authorizerOptions.defaultUserRoleName",
+        label: "Default user role",
+        input: "text",
+        section: "auth",
+        advanced: true,
+        help: "Role granted to an authenticated user with no role assignments, for federated logins that are not provisioned. The role must exist. Empty disables it.",
     },
 
     // ===== Pipelines — standard =====
@@ -1253,7 +1280,7 @@ export const FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "pipelines-gpu",
         advanced: true,
-        help: "Workflow support for the DeadlineCloud pipeline execution type (OpenJD job submission to an operator-owned farm/queue). Not available in GovCloud.",
+        help: "Workflow support for the DeadlineCloud pipeline execution type (OpenJD job submission to an operator-owned farm/queue). Available only in the commercial AWS partition — not available in GovCloud or EU Sovereign Cloud.",
     },
     // NVIDIA Cosmos shared settings + models
     {
@@ -1402,7 +1429,7 @@ export const FIELDS: FieldMeta[] = [
         visibleWhen: (c: ConfigShape) => !!getByPath(c, `${COSMOS3}.enabled`),
     })),
 
-    // ===== Add-ons (Garnet) =====
+    // ===== Add-ons =====
     {
         path: "app.addons.useGarnetFramework.enabled",
         label: "Garnet Framework",
@@ -1418,7 +1445,7 @@ export const FIELDS: FieldMeta[] = [
         section: "addons",
         advanced: true,
         placeholder: "https://XXX.execute-api.us-east-1.amazonaws.com",
-        help: "Required when Garnet is enabled. Must be a valid URL.",
+        help: "Required when Garnet is enabled. Must be a valid URL. Validated but not used by the add-on.",
         visibleWhen: garnet,
     },
     {
@@ -1427,7 +1454,7 @@ export const FIELDS: FieldMeta[] = [
         input: "text",
         section: "addons",
         advanced: true,
-        help: "Required when Garnet is enabled.",
+        help: 'Required when Garnet is enabled. Validated but not used by the add-on; enter a placeholder such as "not-used", not a Garnet credential.',
         visibleWhen: garnet,
     },
     {
@@ -1676,6 +1703,14 @@ export const FIELDS: FieldMeta[] = [
         section: "api-webui",
         advanced: true,
         help: "Required for certain viewer plugins. Consult your security team before enabling.",
+    },
+    {
+        path: "app.webUi.allowLocalhostAuthCallbacks",
+        label: "Allow localhost auth callbacks",
+        input: "boolean",
+        section: "api-webui",
+        advanced: true,
+        help: "Registers http://localhost:3001 as a Cognito callback and logout URL so a locally run web front can complete a federated sign-in. Read only when Cognito SAML or OIDC federation is enabled. Leave off for a deployment that serves real users.",
     },
 
     // ===== Metadata schema auto-load =====

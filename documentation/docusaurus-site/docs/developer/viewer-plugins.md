@@ -46,7 +46,7 @@ VAMS includes two Miris viewer plugins: `miris-stream-viewer` (streams `.mrx` ma
 :::
 
 :::info[Priority System]
-When multiple viewers support the same file extension, the viewer with the lowest `priority` number is preferred. For example, `.ply` files match both BabylonJS Gaussian Splat (priority 1) and PlayCanvas Gaussian Splat (priority 2).
+When multiple viewers support the same file extension, `getCompatibleViewers()` returns them sorted by `priority`, lowest number first, and the viewer selector lists them in that order. In a default deployment, for example, a `.json` file matches the Text Viewer (priority 1) and the Cesium 3D Tileset Viewer (priority 2).
 :::
 
 ## Creating a New Viewer Plugin
@@ -77,11 +77,12 @@ const MyViewerComponent: React.FC<ViewerPluginProps> = ({
     assetKey,
     multiFileKeys,
     versionId,
+    assetVersionId,
     viewerMode,
     onViewerModeChange,
     onDeletePreview,
     isPreviewFile,
-    viewerConfig,
+    customParameters,
 }) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const [loading, setLoading] = useState(true);
@@ -97,6 +98,7 @@ const MyViewerComponent: React.FC<ViewerPluginProps> = ({
                     databaseId,
                     key: assetKey,
                     versionId: versionId || "",
+                    assetVersionId,
                     downloadType: "assetFile",
                 });
                 if (response !== false && Array.isArray(response) && response[0] !== false) {
@@ -114,7 +116,7 @@ const MyViewerComponent: React.FC<ViewerPluginProps> = ({
         return () => {
             // Cleanup viewer resources on unmount
         };
-    }, [assetId, assetKey, databaseId, versionId]);
+    }, [assetId, assetKey, databaseId, versionId, assetVersionId]);
 
     if (loading) return <div>Loading...</div>;
     if (error) return <div>Error: {error}</div>;
@@ -232,7 +234,7 @@ Review existing custom install scripts in `web/customInstalls/` for patterns. Vi
 | `supportedExtensions`        | string[] | Yes      | File extensions this viewer handles (e.g., `[".obj", ".fbx"]`)     |
 | `supportsMultiFile`          | boolean  | Yes      | Whether the viewer can handle multiple files simultaneously        |
 | `canFullscreen`              | boolean  | Yes      | Whether the viewer supports fullscreen mode                        |
-| `priority`                   | number   | Yes      | Selection priority (lower = preferred when multiple viewers match) |
+| `priority`                   | number   | Yes      | Selection order (lower = listed first when multiple viewers match) |
 | `dependencies`               | string[] | Yes      | Required library names (informational)                             |
 | `loadStrategy`               | string   | Yes      | `"lazy"` (load on demand) or `"eager"` (load at startup)           |
 | `category`                   | string   | Yes      | Viewer category: `3d`, `media`, `document`, `data`, or `preview`   |
@@ -242,7 +244,7 @@ Review existing custom install scripts in `web/customInstalls/` for patterns. Vi
 | `dependencyManagerMethod`    | string   | No       | Static method to call for loading dependencies                     |
 | `dependencyCleanupMethod`    | string   | No       | Static method to call for cleanup                                  |
 | `featuresEnabledRestriction` | string[] | No       | Required feature flags (all must be enabled)                       |
-| `isPreviewViewer`            | boolean  | No       | `true` for the preview-only fallback viewer                        |
+| `isPreviewViewer`            | boolean  | No       | `true` for the preview-only viewer                                 |
 | `requiresPreprocessing`      | boolean  | No       | `true` if the viewer needs a preprocessing pipeline                |
 | `customParameters`           | object   | No       | Viewer-specific configuration passed to the component              |
 
@@ -315,12 +317,12 @@ To enable this viewer, set `app.webUi.allowUnsafeEvalFeatures` to `true` in the 
 
 ### Available Feature Flags
 
-| Flag               | Effect on Viewers                                                                      |
-| ------------------ | -------------------------------------------------------------------------------------- |
+| Flag               | Effect on Viewers                                                                                                                                    |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ALLOWUNSAFEEVAL`  | Enables the Needle USD, SuperSplat Editor, and ThatOpen IFC BIM viewers, plus the Three.js CAD formats (all require the `unsafe-eval` CSP directive) |
-| `LOCATIONSERVICES` | Can be used to gate geospatial viewers                                                 |
-| `MIRIS_STREAMING`  | Enables the Miris stream viewer (`miris-stream-viewer`) for `.mrx` manifest files       |
-| `MIRIS_UPLOAD`     | Enables the Miris upload/USD viewer (`miris-upload-viewer`) for USD files — streams via an existing `.mrx` or offers a one-click upload |
+| `LOCATIONSERVICES` | Can be used to gate geospatial viewers                                                                                                               |
+| `MIRIS_STREAMING`  | Enables the Miris stream viewer (`miris-stream-viewer`) for `.mrx` manifest files                                                                    |
+| `MIRIS_UPLOAD`     | Enables the Miris upload/USD viewer (`miris-upload-viewer`) for USD files — streams via an existing `.mrx` or offers a one-click upload              |
 
 ### Multiple Requirements
 
@@ -342,23 +344,27 @@ interface ViewerPluginProps {
     databaseId: string; // Database identifier
     assetKey?: string; // Single file S3 key
     multiFileKeys?: string[]; // Multiple file S3 keys
+    multiFiles?: FileInfo[]; // Owning asset and database of each file in multiFileKeys
     versionId?: string; // File version
-    viewerMode: string; // Display mode ("wide", "fullscreen")
+    assetVersionId?: string; // Asset version to read files from
+    viewerMode: string; // Display mode ("collapse", "wide", "fullscreen")
     onViewerModeChange: (mode: string) => void;
     onDeletePreview?: () => void; // Callback to delete preview
     isPreviewFile?: boolean; // Whether this is a preview file
-    viewerConfig?: any; // Plugin-specific customParameters
+    customParameters?: Record<string, any>; // The entry's customParameters from viewerConfig.json
 }
 ```
+
+A multi-file selection can span assets. Build each file's URL from its `multiFiles` entry's `assetId` and `databaseId`, and fall back to the top-level pair when the entry carries none.
 
 ### Custom Parameters
 
 Viewers can access custom parameters from their configuration:
 
 ```typescript
-const MyViewer: React.FC<ViewerPluginProps> = ({ viewerConfig }) => {
-    const apiKey = viewerConfig?.cesiumIonToken;
-    const enableXR = viewerConfig?.enableXR ?? true;
+const MyViewer: React.FC<ViewerPluginProps> = ({ customParameters }) => {
+    const apiKey = customParameters?.cesiumIonToken;
+    const enableXR = customParameters?.enableXR ?? true;
     // Use parameters to configure the viewer
 };
 ```

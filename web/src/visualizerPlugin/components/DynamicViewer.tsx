@@ -4,7 +4,12 @@
  */
 
 import React, { Suspense, useState, useEffect, useRef, Component } from "react";
-import { Container, Grid, Header, Spinner, Box, Alert } from "@cloudscape-design/components";
+import Alert from "@cloudscape-design/components/alert";
+import Box from "@cloudscape-design/components/box";
+import Container from "@cloudscape-design/components/container";
+import Grid from "@cloudscape-design/components/grid";
+import Header from "@cloudscape-design/components/header";
+import Spinner from "@cloudscape-design/components/spinner";
 
 /**
  * Error boundary that catches render errors from viewer plugins.
@@ -90,6 +95,11 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
     const [registryInitialized, setRegistryInitialized] = useState(false);
     const [viewerLoading, setViewerLoading] = useState(false);
     const mountedRef = useRef(true);
+    // Mirrors selectedViewerId so the compatibility effect can read the current
+    // selection without taking it as a dependency (re-running that effect on a
+    // selection change would clobber the user's pick).
+    const selectedViewerIdRef = useRef<string | null>(null);
+    selectedViewerIdRef.current = selectedViewerId;
 
     // Initialize plugin registry
     useEffect(() => {
@@ -128,35 +138,51 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
         );
         setCompatibleViewers(viewerMetadata);
 
-        // Auto-select the preferred viewer when there's a clear winner.
-        // viewerMetadata is sorted ascending by priority (lower number = preferred),
-        // so [0] is the most-preferred viewer. We auto-select it when its priority is
-        // STRICTLY lower than the next viewer's (a unique preferred viewer, e.g. the
-        // Miris viewer at priority 0 vs the Needle USD viewer at priority 1 for USD
-        // files). When the top two share the same priority (a genuine tie, e.g. the
-        // .ply splat/point-cloud viewers), we leave selection to the user so we don't
-        // arbitrarily pick among equally-ranked, potentially performance-heavy viewers.
-        if (viewerMetadata.length === 1 && !selectedViewerId) {
-            setSelectedViewerId(viewerMetadata[0].config.id);
-        } else if (viewerMetadata.length > 1 && !selectedViewerId) {
-            const hasUniquePreferred =
-                viewerMetadata[0].config.priority < viewerMetadata[1].config.priority;
-            if (hasUniquePreferred) {
-                setSelectedViewerId(viewerMetadata[0].config.id);
-            } else {
-                // Tie at the top — force user choice rather than picking arbitrarily.
-                setSelectedViewerId(null);
-                setLoading(false); // Stop loading state to show the selector
-            }
-        } else if (viewerMetadata.length === 0) {
+        if (viewerMetadata.length === 0) {
             // Customize error message based on whether multiple files are selected
             const errorMessage = isMultiFile
                 ? `No compatible multi-file viewers found for file types: ${fileExtensions.join(
                       ", "
                   )}`
                 : `No compatible viewers found for file types: ${fileExtensions.join(", ")}`;
+            setSelectedViewerId(null);
+            setLoadedViewer(null);
             setError(errorMessage);
             setLoading(false); // Stop loading when no viewers are found
+            return;
+        }
+
+        // The previous selection's error (including "no compatible viewers" for
+        // a file the user has already left) does not describe this selection.
+        setError(null);
+
+        // Auto-select the preferred viewer when there's a clear winner.
+        // viewerMetadata is sorted ascending by priority (lower number = preferred),
+        // so [0] is the most-preferred viewer. We auto-select it when it is the only
+        // viewer or its priority is STRICTLY lower than the next viewer's (a unique
+        // preferred viewer, e.g. the Miris viewer at priority 0 vs the Needle USD
+        // viewer at priority 1 for USD files). When the top two share the same
+        // priority (a genuine tie, e.g. the .ply splat/point-cloud viewers), we leave
+        // selection to the user so we don't arbitrarily pick among equally-ranked,
+        // potentially performance-heavy viewers.
+        const currentId = selectedViewerIdRef.current;
+        const selectionStillCompatible =
+            !!currentId && viewerMetadata.some((metadata) => metadata.config.id === currentId);
+        if (selectionStillCompatible) {
+            return;
+        }
+        const hasUniquePreferred =
+            viewerMetadata.length === 1 ||
+            viewerMetadata[0].config.priority < viewerMetadata[1].config.priority;
+        if (hasUniquePreferred) {
+            setSelectedViewerId(viewerMetadata[0].config.id);
+        } else {
+            // Tie at the top - don't auto-select, force user choice.
+            // The previously selected viewer cannot render these files, so its
+            // component must come down with the selection.
+            setSelectedViewerId(null);
+            setLoadedViewer(null);
+            setLoading(false); // Stop loading state to show the selector
         }
     }, [files, isPreviewMode, registryInitialized]); // Removed selectedViewerId from dependencies
 
@@ -185,6 +211,9 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
                 if (!mountedRef.current) return; // Check again after async operation
 
                 setLoadedViewer(viewer);
+                // Console logging only: a % specifier in the interpolated value can at most garble
+                // this one log line; nothing is executed, stored or returned from it.
+                // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                 console.log(`Loaded viewer: ${viewer.config.name}`, viewer);
                 console.log(`Viewer component:`, viewer.component);
             } catch (error) {

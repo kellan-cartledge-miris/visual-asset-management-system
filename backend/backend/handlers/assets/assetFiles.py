@@ -32,7 +32,10 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_FILE_ARCHIVE,
     VAMS_CHANGE_SOURCE_FILE_UNARCHIVE,
     VAMS_CHANGE_SOURCE_FILE_REVERT,
+    VAMS_CHANGE_SOURCE_FILE_METADATA_UPDATE,
     normalize_history_file_path,
+    replace_metadata_copy_args,
+    UserMetadataTooLargeError,
 )
 from common.s3PathPatterns import PREVIEW_FILE_PATTERN, ALLOWED_PREVIEW_FILE_EXTENSIONS
 from common.s3 import list_all_object_versions, is_object_version_archived, S3_VERSIONS_PAGE_SIZE
@@ -137,6 +140,11 @@ DEFAULT_LIST_MAX_ITEMS = 10000
 # caller does not specify maxItems.
 DEFAULT_ARCHIVED_MARKERS_MAX_ITEMS = 1000
 
+# Response for a new file version whose user metadata would be over the Amazon S3 2 KB limit.
+USER_METADATA_TOO_LARGE_MESSAGE = (
+    "The file's Amazon S3 user metadata would exceed the 2 KB limit, so the new version cannot be written."
+)
+
 # Change-provenance columns surfaced on file version-history entries.
 CHANGE_HISTORY_COLUMNS = (
     "changeSource", "changeUserId", "changeWorkflowId",
@@ -229,14 +237,17 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
         if not asset:
             raise VAMSGeneralErrorResponse("Asset not found in database.")
         
-        # Check permissions
-        asset["object__type"] = "asset"
-        
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforce(asset, operation):
-                raise VAMSGeneralErrorResponse("Not authorized to perform this operation on the asset")
-        
+        # An empty token list carries no authenticated identity, so authorization
+        # cannot be evaluated and the request is denied.
+        if len(claims_and_roles["tokens"]) == 0:
+            raise VAMSGeneralErrorResponse("Not authorized to perform this operation on the asset")
+
+        # Check permissions against an annotated copy, so the returned record, which callers
+        # write back, carries no object type
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce({**asset, 'object__type': 'asset'}, operation):
+            raise VAMSGeneralErrorResponse("Not authorized to perform this operation on the asset")
+
         return asset
     except Exception as e:
         if isinstance(e, VAMSGeneralErrorResponse):
@@ -337,6 +348,15 @@ def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
         logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
         return resolved_path
 
+def _is_missing_object_error(e: ClientError) -> bool:
+    """Return True when a ClientError reports the S3 object as missing.
+
+    HeadObject reports a missing key as 404 / NotFound while GetObject reports
+    NoSuchKey, so callers deciding between "not found" and "archived" accept
+    all three spellings.
+    """
+    return e.response.get('Error', {}).get('Code') in ('NoSuchKey', '404', 'NotFound')
+
 def is_file_archived(bucket: str, key: str, version_id: str = None) -> bool:
     """Determine if file is archived based on S3 delete markers.
 
@@ -378,9 +398,8 @@ def check_destination_file_exists(bucket: str, key: str, path_display: str) -> b
         s3_client.head_object(Bucket=bucket, Key=key)
         return True
     except ClientError as e:
-        error_code = e.response.get('Error', {}).get('Code')
-        # NoSuchKey or 404 means the file doesn't exist, which is what we want
-        if error_code == 'NoSuchKey' or error_code == '404':
+        # A missing object is the answer this check exists to give
+        if _is_missing_object_error(e):
             return False
         # For any other error, log details and raise a user-friendly message
         logger.exception(f"Error checking destination file {key} in bucket {bucket}: {e}")
@@ -396,7 +415,8 @@ def build_change_metadata(change_source, user_id, from_db=None, from_asset=None,
         change_source: One of the VAMS change source values.
         user_id: Acting user id; None falls back to "SYSTEM_USER".
         from_db/from_asset/from_path: Source provenance for copy/move/rename.
-        from_version: Source S3 version id for copy/move/rename/revert.
+        from_version: Source S3 version id for copy/move/rename/revert, or the
+            version a metadata-only rewrite was copied from.
 
     Returns:
         Dict of all vams-change* keys.
@@ -474,8 +494,7 @@ def copy_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_k
                 Bucket=dest_bucket,
                 Key=dest_key,
                 ExtraArgs={
-                    'Metadata': metadata,
-                    'MetadataDirective': 'REPLACE',
+                    **replace_metadata_copy_args(source_object, metadata),
                     # Grant the destination bucket owner full control so an object written
                     # into a cross-account asset bucket is owned/readable by that account.
                     'ACL': 'bucket-owner-full-control'
@@ -518,10 +537,13 @@ def aux_bucket_asset_file_base(database_id: str, asset_file_key: str) -> str:
     return f"{base}/{key}/" if key else f"{base}/"
 
 def delete_assetAuxiliary_files(prefix):
-    """Delete auxiliary files for an asset
+    """Permanently delete the auxiliary files under a prefix, with every version and delete marker
+
+    The auxiliary bucket is versioned, so a delete that names no VersionId would only hide the data.
+    Failures are logged, not raised.
 
     Args:
-        assetLocation: The asset location object with Key (dict or AssetLocationModel)
+        prefix: Auxiliary-bucket prefix (see aux_bucket_asset_file_base); a trailing '/' is added
     """
 
     if not prefix:
@@ -534,16 +556,23 @@ def delete_assetAuxiliary_files(prefix):
     logger.info(f"Deleting Temporary Auxiliary Assets Files Under Folder Prefix: {asset_aux_bucket_name}:{prefix}")
 
     try:
-        # Get all assets in assetAuxiliary bucket (unversioned, temporary files for the auxiliary assets) for deletion
-        # Use assetLocation key as root folder key for assetAuxiliaryFiles
-        assetAuxiliaryBucketFilesDeleted = []
-        paginator = s3_client.get_paginator('list_objects_v2')
+        # Batch-delete every object version and delete marker under the prefix, page by page
+        deleted_count = 0
+        paginator = s3_client.get_paginator('list_object_versions')
         for page in paginator.paginate(Bucket=asset_aux_bucket_name, Prefix=prefix):
-            if 'Contents' in page:
-                for item in page['Contents']:
-                    assetAuxiliaryBucketFilesDeleted.append(item['Key'])
-                    logger.info(f"Deleting auxiliary asset file: {item['Key']}")
-                    s3_client.delete_object(Bucket=asset_aux_bucket_name, Key=item['Key'])
+            entries = [{'Key': entry['Key'], 'VersionId': entry['VersionId']}
+                       for entry in page.get('Versions', []) + page.get('DeleteMarkers', [])]
+            for i in range(0, len(entries), 1000):  # DeleteObjects takes at most 1000 entries
+                batch = entries[i:i + 1000]
+                response = s3_client.delete_objects(
+                    Bucket=asset_aux_bucket_name,
+                    Delete={'Objects': batch, 'Quiet': True}
+                )
+                errors = response.get('Errors', [])
+                for error in errors:
+                    logger.warning(f"Error deleting auxiliary file version {error.get('Key')} ({error.get('VersionId')}): {error.get('Code')}")
+                deleted_count += len(batch) - len(errors)
+        logger.info(f"Deleted {deleted_count} auxiliary file version(s) and delete marker(s) under {prefix}")
 
     except Exception as e:
         logger.exception(f"Error deleting auxiliary files (they may not exist in the first place): {e}")
@@ -871,26 +900,25 @@ def validate_cross_asset_permissions(source_asset: Dict, dest_asset: Dict, claim
     Returns:
         True if user has permissions on both assets, False otherwise
     """
-    # Check permissions on both assets
-    source_asset["object__type"] = "asset"
-    dest_asset["object__type"] = "asset"
-    
-    if len(claims_and_roles["tokens"]) > 0:
-        casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        
-        # Need GET permission on source and POST permission on destination
-        source_allowed = casbin_enforcer.enforce(source_asset, "GET")
-        dest_allowed = casbin_enforcer.enforce(dest_asset, "POST")
-        
-        if not source_allowed:
-            raise VAMSGeneralErrorResponse("Not authorized to read from source asset")
-        
-        if not dest_allowed:
-            raise VAMSGeneralErrorResponse("Not authorized to write to destination asset")
-        
-        return True
-    
-    return False
+    # An empty token list carries no authenticated identity, so authorization
+    # cannot be evaluated and the request is denied.
+    if len(claims_and_roles["tokens"]) == 0:
+        return False
+
+    casbin_enforcer = CasbinEnforcer(claims_and_roles)
+
+    # Need GET permission on source and POST permission on destination, checked against annotated
+    # copies so neither record gains an object type
+    source_allowed = casbin_enforcer.enforce({**source_asset, 'object__type': 'asset'}, "GET")
+    dest_allowed = casbin_enforcer.enforce({**dest_asset, 'object__type': 'asset'}, "POST")
+
+    if not source_allowed:
+        raise VAMSGeneralErrorResponse("Not authorized to read from source asset")
+
+    if not dest_allowed:
+        raise VAMSGeneralErrorResponse("Not authorized to write to destination asset")
+
+    return True
 
 def move_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_key: str, change_source: str = None, change_user_id: str = None, from_db: str = None, from_asset: str = None, from_path: str = None) -> bool:
     """Move an S3 object from one location to another
@@ -931,8 +959,7 @@ def move_s3_object(source_bucket: str, source_key: str, dest_bucket: str, dest_k
                 Bucket=dest_bucket,
                 Key=dest_key,
                 ExtraArgs={
-                    'Metadata': metadata,
-                    'MetadataDirective': 'REPLACE',
+                    **replace_metadata_copy_args(source_object, metadata),
                     # Grant the destination bucket owner full control so an object written
                     # into a cross-account asset bucket is owned/readable by that account.
                     'ACL': 'bucket-owner-full-control'
@@ -1090,8 +1117,10 @@ def get_s3_object_metadata(bucket: str, key: str, include_versions: bool = False
         }
         
         # Add primaryType and current-version change provenance from S3 metadata
-        # (only for non-folder objects). changeSource/changeUserId come straight from
-        # the live object metadata already fetched here — no extra DynamoDB read.
+        # (only for non-folder objects). changeSource/changeUserId and the workflow
+        # ids come straight from the live object metadata already fetched here — no
+        # extra DynamoDB read. The workflow ids are stamped only by workflow output
+        # writes and are blank on every other change source.
         if not result['isFolder']:
             metadata = response.get('Metadata', {})
             primary_type = metadata.get(VAMS_PRIMARY_TYPE_METADATA_KEY, '')
@@ -1100,10 +1129,16 @@ def get_s3_object_metadata(bucket: str, key: str, include_versions: bool = False
             result['changeSource'] = change_source if change_source else None
             change_user_id = metadata.get(VAMS_CHANGE_USER_ID_METADATA_KEY, '')
             result['changeUserId'] = change_user_id if change_user_id else None
+            change_workflow_id = metadata.get(VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY, '')
+            result['changeWorkflowId'] = change_workflow_id if change_workflow_id else None
+            change_execution_id = metadata.get(VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY, '')
+            result['changeWorkflowExecutionId'] = change_execution_id if change_execution_id else None
         else:
             result['primaryType'] = None
             result['changeSource'] = None
             result['changeUserId'] = None
+            result['changeWorkflowId'] = None
+            result['changeWorkflowExecutionId'] = None
         
         # Include version history if requested
         if include_versions:
@@ -1154,7 +1189,7 @@ def get_s3_object_metadata(bucket: str, key: str, include_versions: bool = False
     
     except ClientError as e:
         logger.exception(f"Error getting S3 object metadata: {e}")
-        if e.response['Error']['Code'] == 'NoSuchKey' or e.response['Error']['Code'] == '404':
+        if _is_missing_object_error(e):
             # Check if the file is archived (has delete markers)
             try:
                 # Page through the full version history so archive status and
@@ -1346,6 +1381,10 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
                         item['changeSource'] = ct if ct else None
                         cu = metadata.get(VAMS_CHANGE_USER_ID_METADATA_KEY)
                         item['changeUserId'] = cu if cu else None
+                        cw = metadata.get(VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY)
+                        item['changeWorkflowId'] = cw if cw else None
+                        ce = metadata.get(VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY)
+                        item['changeWorkflowExecutionId'] = ce if ce else None
                     else:
                         item['primaryType'] = None
                 except Exception as e:
@@ -2239,7 +2278,7 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
                 
                 # If we get here, the file exists and is not archived
             except ClientError as e:
-                if e.response['Error']['Code'] == 'NoSuchKey':
+                if _is_missing_object_error(e):
                     # File doesn't exist, check if it's archived
                     if is_file_archived(bucket, full_key):
                         raise VAMSGeneralErrorResponse(f"File is already archived.")
@@ -2256,7 +2295,7 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
             if 'Contents' not in response or len(response['Contents']) == 0:
                 raise VAMSGeneralErrorResponse(f"No files found under prefix.")
     except ClientError as e:
-        if e.response['Error']['Code'] == 'NoSuchKey':
+        if _is_missing_object_error(e):
             raise VAMSGeneralErrorResponse(f"File not found.")
         raise VAMSGeneralErrorResponse(f"Error checking file.")
     
@@ -2402,8 +2441,7 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
                 'VersionId': latest_version['VersionId']
             },
             ExtraArgs={
-                'Metadata': metadata,
-                'MetadataDirective': 'REPLACE',
+                **replace_metadata_copy_args(version_head, metadata),
                 # Grant the bucket owner full control so a version written into a
                 # cross-account asset bucket is owned/readable by that account.
                 'ACL': 'bucket-owner-full-control'
@@ -2455,6 +2493,18 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
                     preview_latest_version = max(preview_versions, key=lambda v: v['LastModified'])
 
                     if preview_latest_version:
+                        # Carry the preview's own metadata forward with unarchive provenance
+                        preview_head = s3_client.head_object(
+                            Bucket=bucket,
+                            Key=preview_file,
+                            VersionId=preview_latest_version['VersionId']
+                        )
+                        preview_metadata = preview_head.get('Metadata', {}).copy()
+                        preview_metadata.update(build_change_metadata(
+                            VAMS_CHANGE_SOURCE_FILE_UNARCHIVE,
+                            acting_user
+                        ))
+
                         # Copy the latest version to create a new current version (effectively unarchiving)
                         # Use copy() which automatically handles multipart for large files
                         s3_resource.Object(bucket, preview_file).copy(
@@ -2464,7 +2514,7 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
                                 'VersionId': preview_latest_version['VersionId']
                             },
                             ExtraArgs={
-                                'MetadataDirective': 'COPY',
+                                **replace_metadata_copy_args(preview_head, preview_metadata),
                                 # Grant the bucket owner full control so a version written into a
                                 # cross-account asset bucket is owned/readable by that account.
                                 'ACL': 'bucket-owner-full-control'
@@ -2495,6 +2545,9 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
             affectedFiles=affected_files
         )
         
+    except UserMetadataTooLargeError as e:
+        logger.warning(f"Error unarchiving file: {e}")
+        raise VAMSGeneralErrorResponse(USER_METADATA_TOO_LARGE_MESSAGE)
     except ClientError as e:
         logger.exception(f"Error unarchiving file: {e}")
         raise VAMSGeneralErrorResponse(f"Error unarchiving file.")
@@ -2536,7 +2589,8 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
         dest_asset = get_asset_with_permissions(effective_dest_db, dest_asset_id or assetId, "POST", claims_and_roles)
 
         # Validate cross-asset permissions
-        validate_cross_asset_permissions(source_asset, dest_asset, claims_and_roles)
+        if not validate_cross_asset_permissions(source_asset, dest_asset, claims_and_roles):
+            raise VAMSGeneralErrorResponse("Not authorized to perform this operation on the asset")
     else:
         # Same asset, need POST permission
         dest_asset = get_asset_with_permissions(databaseId, assetId, "POST", claims_and_roles)
@@ -2553,7 +2607,7 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     try:
         s3_client.head_object(Bucket=source_bucket, Key=source_key)
     except ClientError as e:
-        if e.response['Error']['Code'] == 'NoSuchKey':
+        if _is_missing_object_error(e):
             raise VAMSGeneralErrorResponse(f"Source file not found.")
         raise VAMSGeneralErrorResponse(f"Error checking source file.")
     
@@ -2662,7 +2716,7 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     try:
         source_object = s3_client.head_object(Bucket=bucket, Key=source_key)
     except ClientError as e:
-        if e.response['Error']['Code'] == 'NoSuchKey':
+        if _is_missing_object_error(e):
             # Check if file is archived
             if is_file_archived(bucket, source_key):
                 raise VAMSGeneralErrorResponse("Cannot move or rename archived file. Unarchive it first.")
@@ -2818,7 +2872,7 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
             raise VAMSGeneralErrorResponse("Version not found for file")
         
     except ClientError as e:
-        if e.response['Error']['Code'] == 'NoSuchKey':
+        if _is_missing_object_error(e):
             raise VAMSGeneralErrorResponse(f"File not found.")
         raise VAMSGeneralErrorResponse(f"Error checking file.")
     
@@ -2842,8 +2896,7 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
                 'VersionId': version_id
             },
             ExtraArgs={
-                'Metadata': new_metadata,
-                'MetadataDirective': 'REPLACE',
+                **replace_metadata_copy_args(source_head, new_metadata),
                 # Grant the bucket owner full control so a version written into a
                 # cross-account asset bucket is owned/readable by that account.
                 'ACL': 'bucket-owner-full-control'
@@ -2854,6 +2907,9 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
         copy_response = s3_client.head_object(Bucket=bucket, Key=full_key)
         new_version_id = copy_response.get('VersionId', 'null')
 
+    except UserMetadataTooLargeError as e:
+        logger.warning(f"Error reverting file version: {e}")
+        raise VAMSGeneralErrorResponse(USER_METADATA_TOO_LARGE_MESSAGE)
     except Exception as e:
         logger.exception(f"Error reverting file version: {e}")
         raise VAMSGeneralErrorResponse(f"Failed to revert file version.")
@@ -2895,21 +2951,28 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
     
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
+
+    # Get the relative path for comparison with fileKey in version records.
+    # fileKey is stored as the path relative to the asset prefix (e.g., "model.glb"
+    # or "subfolder/model.glb"), while file_path may include the assetId prefix and
+    # may or may not carry a leading slash. Strip the base_key prefix from the
+    # resolved key to get the same relative path format.
+    relative_path_for_lookup = full_key
+    if base_key and relative_path_for_lookup.startswith(base_key):
+        relative_path_for_lookup = relative_path_for_lookup[len(base_key):]
+    relative_path_for_lookup = relative_path_for_lookup.lstrip('/')
     
     # Get object metadata
     metadata = get_s3_object_metadata(bucket, full_key, include_versions)
     
     # Check for Asset Version Mismatch
     # Get current asset version ID if available and versions are requested and not a folder
-    if include_versions and 'versions' in metadata and metadata.get("isFolder", False) and asset.get('currentVersionId'):
+    if include_versions and 'versions' in metadata and not metadata.get("isFolder", False) and asset.get('currentVersionId'):
         current_version_id = asset.get('currentVersionId', '0')
         
         if current_version_id:
-            # Get the relative path without leading slash for comparison
-            relative_path = file_path.lstrip('/')
-            
             # Get file version for the current asset version
-            asset_file_versions = get_asset_file_versions(databaseId, assetId, current_version_id, relative_path)
+            asset_file_versions = get_asset_file_versions(databaseId, assetId, current_version_id, relative_path_for_lookup)
             
             # Find the matching version record
             matching_version = None
@@ -2936,14 +2999,6 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
             # Build composite key for the databaseIdAssetIdIndex GSI
             db_asset_composite_key = f"{databaseId}:{assetId}"
 
-            # Get the relative path for comparison with fileKey in version records.
-            # fileKey is stored as the path relative to the asset prefix (e.g., "model.glb"
-            # or "subfolder/model.glb"), while file_path may include the assetId prefix.
-            # Strip the base_key prefix to get the same relative path format.
-            relative_path_for_lookup = full_key
-            if base_key and relative_path_for_lookup.startswith(base_key):
-                relative_path_for_lookup = relative_path_for_lookup[len(base_key):]
-            relative_path_for_lookup = relative_path_for_lookup.lstrip('/')
             #logger.info(f"Enriching file versions: file_path='{file_path}', full_key='{full_key}', base_key='{base_key}', relative_path_for_lookup='{relative_path_for_lookup}'")
 
             # Change-history records for this asset, keyed by (filePath, versionId),
@@ -3137,7 +3192,7 @@ def set_primary_file(databaseId: str, assetId: str, file_path: str, primary_type
     try:
         current_object = s3_client.head_object(Bucket=bucket, Key=full_key)
     except ClientError as e:
-        if e.response['Error']['Code'] == 'NoSuchKey':
+        if _is_missing_object_error(e):
             # Check if file is archived
             if is_file_archived(bucket, full_key):
                 raise VAMSGeneralErrorResponse(f"Cannot set primary type on archived file")
@@ -3170,6 +3225,15 @@ def set_primary_file(databaseId: str, assetId: str, file_path: str, primary_type
                 final_primary_type = primary_type
             operation_message = f"Set primary type '{final_primary_type}' for file: {file_path}"
         
+        # Record the new version as a metadata-only change by the acting user, copied from the
+        # current version whose content it keeps
+        acting_user = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
+        new_metadata.update(build_change_metadata(
+            VAMS_CHANGE_SOURCE_FILE_METADATA_UPDATE,
+            acting_user,
+            from_version=current_object.get('VersionId')
+        ))
+
         # Copy the object with updated metadata (this creates a new version with the updated metadata)
         # Use s3_resource.meta.client.copy() which supports multi-part uploads for files >5GB
         s3_resource.meta.client.copy(
@@ -3177,9 +3241,7 @@ def set_primary_file(databaseId: str, assetId: str, file_path: str, primary_type
             Bucket=bucket,
             Key=full_key,
             ExtraArgs={
-                'Metadata': new_metadata,
-                'MetadataDirective': 'REPLACE',
-                'ContentType': current_object.get('ContentType', 'binary/octet-stream'),
+                **replace_metadata_copy_args(current_object, new_metadata),
                 # Grant the bucket owner full control so a version written into a
                 # cross-account asset bucket is owned/readable by that account.
                 'ACL': 'bucket-owner-full-control'
@@ -3197,6 +3259,9 @@ def set_primary_file(databaseId: str, assetId: str, file_path: str, primary_type
             primaryType=final_primary_type
         )
         
+    except UserMetadataTooLargeError as e:
+        logger.warning(f"Error setting primary type metadata: {e}")
+        raise VAMSGeneralErrorResponse(USER_METADATA_TOO_LARGE_MESSAGE)
     except Exception as e:
         logger.exception(f"Error setting primary type metadata: {e}")
         raise VAMSGeneralErrorResponse(f"Failed to set primary type metadata.")
@@ -3612,10 +3677,13 @@ def handle_delete_file(event, context) -> APIGatewayProxyResponseV2:
         claims_and_roles = request_to_claims(event)
         
         # Check API authorization
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforceAPI(event):
-                return authorization_error()
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+        if not method_allowed_on_api:
+            return authorization_error()
         
         # Get path parameters
         path_params = event.get('pathParameters', {})
@@ -3699,10 +3767,13 @@ def handle_unarchive_file(event, context) -> APIGatewayProxyResponseV2:
         claims_and_roles = request_to_claims(event)
         
         # Check API authorization
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforceAPI(event):
-                return authorization_error()
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+        if not method_allowed_on_api:
+            return authorization_error()
         
         # Get path parameters
         path_params = event.get('pathParameters', {})
@@ -3783,10 +3854,13 @@ def handle_archive_file(event, context) -> APIGatewayProxyResponseV2:
         claims_and_roles = request_to_claims(event)
         
         # Check API authorization
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforceAPI(event):
-                return authorization_error()
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+        if not method_allowed_on_api:
+            return authorization_error()
         
         # Get path parameters
         path_params = event.get('pathParameters', {})
@@ -3868,10 +3942,13 @@ def handle_copy_file(event, context) -> APIGatewayProxyResponseV2:
         claims_and_roles = request_to_claims(event)
         
         # Check API authorization
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforceAPI(event):
-                return authorization_error()
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+        if not method_allowed_on_api:
+            return authorization_error()
         
         # Get path parameters
         path_params = event.get('pathParameters', {})
@@ -3955,10 +4032,13 @@ def handle_move_file(event, context) -> APIGatewayProxyResponseV2:
         claims_and_roles = request_to_claims(event)
         
         # Check API authorization
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforceAPI(event):
-                return authorization_error()
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+        if not method_allowed_on_api:
+            return authorization_error()
         
         # Get path parameters
         path_params = event.get('pathParameters', {})
@@ -4040,10 +4120,13 @@ def handle_file_info(event, context) -> APIGatewayProxyResponseV2:
         claims_and_roles = request_to_claims(event)
         
         # Check API authorization
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforceAPI(event):
-                return authorization_error()
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+        if not method_allowed_on_api:
+            return authorization_error()
         
         # Get path parameters
         path_params = event.get('pathParameters', {})
@@ -4139,10 +4222,13 @@ def handle_revert_file_version(event, context) -> APIGatewayProxyResponseV2:
         claims_and_roles = request_to_claims(event)
         
         # Check API authorization
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforceAPI(event):
-                return authorization_error()
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+        if not method_allowed_on_api:
+            return authorization_error()
         
         # Get path parameters
         path_params = event.get('pathParameters', {})
@@ -4231,10 +4317,13 @@ def handle_create_folder(event, context) -> APIGatewayProxyResponseV2:
         claims_and_roles = request_to_claims(event)
         
         # Check API authorization
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforceAPI(event):
-                return authorization_error()
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+        if not method_allowed_on_api:
+            return authorization_error()
         
         # Get path parameters
         path_params = event.get('pathParameters', {})
@@ -4418,10 +4507,13 @@ def handle_delete_asset_preview(event, context) -> APIGatewayProxyResponseV2:
         claims_and_roles = request_to_claims(event)
         
         # Check API authorization
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforceAPI(event):
-                return authorization_error()
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+        if not method_allowed_on_api:
+            return authorization_error()
         
         # Get path parameters
         path_params = event.get('pathParameters', {})
@@ -4480,10 +4572,13 @@ def handle_delete_auxiliary_preview_asset_files(event, context) -> APIGatewayPro
         claims_and_roles = request_to_claims(event)
         
         # Check API authorization
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforceAPI(event):
-                return authorization_error()
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+        if not method_allowed_on_api:
+            return authorization_error()
         
         # Get path parameters
         path_params = event.get('pathParameters', {})
@@ -4564,10 +4659,13 @@ def handle_set_primary_file(event, context) -> APIGatewayProxyResponseV2:
         claims_and_roles = request_to_claims(event)
         
         # Check API authorization
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforceAPI(event):
-                return authorization_error()
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+        if not method_allowed_on_api:
+            return authorization_error()
         
         # Get path parameters
         path_params = event.get('pathParameters', {})
@@ -4650,10 +4748,13 @@ def handle_list_files(event, context) -> APIGatewayProxyResponseV2:
         claims_and_roles = request_to_claims(event)
         
         # Check API authorization
+        method_allowed_on_api = False
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforceAPI(event):
-                return authorization_error()
+            if casbin_enforcer.enforceAPI(event):
+                method_allowed_on_api = True
+        if not method_allowed_on_api:
+            return authorization_error()
         
         # Get path parameters
         path_params = event.get('pathParameters', {})

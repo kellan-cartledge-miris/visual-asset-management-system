@@ -116,7 +116,9 @@ def _parse_geo_options(
                 geo_search["geoJson"] = json.load(f)
         except FileNotFoundError:
             raise InvalidSearchParametersError(f"GeoJSON file not found: {geo_geojson}")
-        except json.JSONDecodeError as e:
+        except (json.JSONDecodeError, RecursionError) as e:
+            # A deeply nested file exhausts the parser's stack, which surfaces as RecursionError
+            # rather than as a decode error and would otherwise leave a traceback.
             raise InvalidSearchParametersError(f"Invalid GeoJSON: {e}")
 
     return geo_search
@@ -414,7 +416,7 @@ def search():
     queries and better performance.
     
     Examples:
-        vamscli search assets -q "model" --filters 'str_databaseid:"my-db"'
+        vamscli search assets -q "model" --filters 'str_databaseid.keyword:"my-db"'
         vamscli search files --filters 'str_fileext:"gltf"'
         vamscli search simple -q "training" --entity-types asset
         vamscli search mapping
@@ -461,24 +463,33 @@ def assets(ctx: click.Context, query: Optional[str], metadata_query: Optional[st
     
     Filter Examples:
         Query String Format:
-            --filters 'str_databaseid:"my-db"'
-            --filters 'str_databaseid:"my-db" AND str_assettype:"3d-model"'
+            --filters 'str_databaseid.keyword:"my-db"'
+            --filters 'str_databaseid.keyword:"my-db" AND str_assettype:"3d-model"'
             --filters 'list_tags:("training" OR "simulation")'
-            --filters 'str_assetname:model* AND str_databaseid:"db-123"'
+            --filters 'str_assetname:model* AND str_databaseid.keyword:"db-123"'
         
         JSON Format:
-            --filters '[{"query_string": {"query": "str_databaseid:\\"my-db\\""}}]'
-            --filters '[{"term": {"str_assettype": "3d-model"}}, {"range": {"num_version": {"gte": 1}}}]'
+            --filters '[{"query_string": {"query": "str_databaseid.keyword:\\"my-db\\""}}]'
+            --filters '[{"query_string": {"query": "str_assettype.keyword:\\"3d-model\\""}}, {"query_string": {"query": "bool_isdistributable:true"}}]'
     
     Metadata Search Examples:
-        --metadata-query "MD_str_product:Training"              # Exact field:value match
+        Metadata is stored in one flat object per record, named MD_, with the keys carried
+        verbatim: {"product": "Training"} is indexed as "MD_": {"product": "Training"}. File
+        attributes use AB_ the same way, on the file index only. A key may be written bare,
+        with the MD_/AB_ entity prefix, or with a type prefix -- all three address the same
+        field. Do not write MD_.product; the dot belongs to the internal query path and a
+        query using it matches nothing.
+
+        --metadata-query "product:Training"                     # Exact field:value match
+        --metadata-query "MD_product:Training"                  # Same field, entity prefix
+        --metadata-query "MD_str_product:Training"              # Same field, type prefix
         --metadata-query "MD_str_product:Train*"                # Wildcard search
         --metadata-query "MD_str_product:A AND MD_num_version:1" # Multiple conditions
         --metadata-query "product" --metadata-mode key          # Search field names only
         --metadata-query "Training" --metadata-mode value       # Search values only
     
     General Examples:
-        vamscli search assets -q "training model" --filters 'str_databaseid:"my-db"'
+        vamscli search assets -q "training model" --filters 'str_databaseid.keyword:"my-db"'
         vamscli search assets --filters 'str_assettype:"3d-model" AND list_tags:"training"'
         vamscli search assets -q "model" --metadata-query "MD_str_category:Training"
         vamscli search assets -q "model" --output-format csv > results.csv
@@ -629,18 +640,18 @@ def files(ctx: click.Context, query: Optional[str], metadata_query: Optional[str
     
     Filter Examples:
         Query String Format:
-            --filters 'str_databaseid:"my-db"'
+            --filters 'str_databaseid.keyword:"my-db"'
             --filters 'str_fileext:"gltf"'
-            --filters 'str_fileext:"gltf" AND str_databaseid:"my-db"'
+            --filters 'str_fileext:"gltf" AND str_databaseid.keyword:"my-db"'
             --filters 'list_tags:("ui" OR "interface")'
             --filters 'str_key:*texture* AND str_fileext:"png"'
         
         JSON Format:
             --filters '[{"query_string": {"query": "str_fileext:\\"gltf\\""}}]'
-            --filters '[{"term": {"str_fileext": "png"}}, {"range": {"num_filesize": {"lte": 1048576}}}]'
+            --filters '[{"query_string": {"query": "str_fileext.keyword:\\"png\\""}}, {"query_string": {"query": "num_filesize:[0 TO 1048576]"}}]'
     
     Examples:
-        vamscli search files -q "texture" --filters 'str_databaseid:"my-db"'
+        vamscli search files -q "texture" --filters 'str_databaseid.keyword:"my-db"'
         vamscli search files --filters 'str_fileext:"gltf"'
         vamscli search files -q "texture" --output-format csv > files.csv
         vamscli search files -q "texture" --json-output
@@ -770,7 +781,7 @@ def files(ctx: click.Context, query: Optional[str], metadata_query: Optional[str
 @click.option('--geo-relation', type=click.Choice(['intersects', 'within', 'contains', 'disjoint']),
               default='intersects', help='Spatial relation for the geo filter (default: intersects)')
 @click.option('--from', 'from_offset', type=int, default=0, help='Pagination offset (default: 0)')
-@click.option('--size', type=int, default=100, help='Results per page (default: 100, max: 1000)')
+@click.option('--size', type=int, default=100, help='Results per page (default: 100, max: 2000)')
 @click.option('--output-format', type=click.Choice(['table', 'json', 'csv']), default='table',
               help='Output format (default: table)')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')

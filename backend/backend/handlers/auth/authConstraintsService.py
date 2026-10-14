@@ -3,11 +3,12 @@
 
 """Auth Constraints service handler for VAMS API."""
 
+import base64
 import boto3
 import json
 import uuid
 from datetime import datetime
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Attr, Key
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
@@ -40,6 +41,7 @@ from models.roleConstraints import (
     GetConstraintsRequestModel, CreateConstraintRequestModel,
     ConstraintResponseModel, ConstraintOperationResponseModel,
     GetConstraintPermissionObjectsResponseModel,
+    MAX_CONSTRAINT_LIST_PAGE_SIZE, MAX_LIST_MAX_ITEMS,
 )
 
 # Configure AWS clients with retry configuration
@@ -58,22 +60,64 @@ claims_and_roles = {}
 
 try:
     constraints_table_name = get_table_name(ResourceKeys.CONSTRAINTS_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving constraints table name")
-    constraints_table_name = None
-
-try:
     roles_table_name = get_table_name(ResourceKeys.ROLES_STORAGE_TABLE)
 except Exception as e:
-    logger.exception("Failed resolving roles table name")
-    roles_table_name = None
+    logger.exception("Failed loading resource names")
+    raise e
 
-constraints_table = dynamodb.Table(constraints_table_name) if constraints_table_name else None
-roles_table = dynamodb.Table(roles_table_name) if roles_table_name else None
+constraints_table = dynamodb.Table(constraints_table_name)
+roles_table = dynamodb.Table(roles_table_name)
 
 #######################
 # Helper Functions for New Table Format
 #######################
+
+def _constraint_id_filter(base_constraint_id):
+    """Build the scan filter that addresses exactly one constraint
+
+    Matches the constraint's own items - the base constraintId and its
+    `#group#`/`#user#` denormalized items - and nothing belonging to another
+    constraint whose ID merely starts with the same characters.
+
+    Args:
+        base_constraint_id: The base constraint ID (without #group# or #user# suffix)
+
+    Returns:
+        A boto3 condition expression scoped to that constraint's items
+    """
+    return (
+        Attr('constraintId').eq(base_constraint_id)
+        | Attr('constraintId').begins_with(f"{base_constraint_id}#")
+    )
+
+
+def _scan_first_match(filter_expression, consistent_read=False):
+    """Return the first constraints-table item a filtered scan matches, or None
+
+    DynamoDB applies the filter after each page is read, so a page can hold no match
+    while a later page does; the scan continues until a page yields an item or no
+    LastEvaluatedKey is returned.
+
+    Args:
+        filter_expression: The boto3 condition expression selecting the items
+        consistent_read: Read with strong consistency, so items removed by a completed
+            write are not returned
+
+    Returns:
+        The first matching item, or None when no item in the table matches
+    """
+    scan_kwargs = {'FilterExpression': filter_expression}
+    if consistent_read:
+        scan_kwargs['ConsistentRead'] = True
+    while True:
+        response = constraints_table.scan(**scan_kwargs)
+        items = response.get('Items', [])
+        if items:
+            return items[0]
+        if 'LastEvaluatedKey' not in response:
+            return None
+        scan_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+
 
 def _transform_to_denormalized_format(constraint_data):
     """Transform constraint data to denormalized table format
@@ -200,18 +244,15 @@ def validate_constraint_role_exists(group_id):
         group_id: The role/group ID to validate
         
     Returns:
-        True if role exists, False otherwise
+        True only when the lookup succeeds and the role exists; False when the role
+        is absent or the lookup could not be completed
     """
-    if not roles_table:
-        logger.warning(f"Roles table not configured, skipping role validation for {group_id}")
-        return True
-    
     try:
         role_response = roles_table.get_item(Key={'roleName': group_id})
         return 'Item' in role_response
     except Exception as e:
-        logger.warning(f"Could not validate groupId '{group_id}': {e}")
-        return True  # Allow if validation fails
+        logger.exception(f"Could not validate groupId '{group_id}': {e}")
+        return False
 
 
 def get_constraint_details(constraint_id):
@@ -225,22 +266,15 @@ def get_constraint_details(constraint_id):
         The constraint details or None if not found
     """
     try:
-        from boto3.dynamodb.conditions import Attr
+        # Scan for the constraint's own items: the base constraintId and the
+        # denormalized IDs carrying a #group#/#user# suffix
+        logger.info(f"Scanning for constraint with ID: {constraint_id}")
+
+        item = _scan_first_match(_constraint_id_filter(constraint_id))
         
-        # Scan for items that start with the base constraintId
-        # This will match both exact IDs and denormalized IDs with suffixes
-        logger.info(f"Scanning for constraint with ID starting with: {constraint_id}")
-        
-        response = constraints_table.scan(
-            FilterExpression=Attr('constraintId').begins_with(constraint_id)
-        )
-        
-        items = response.get('Items', [])
-        logger.info(f"Scan found {len(items)} items for constraint {constraint_id}")
-        
-        if items:
+        if item is not None:
             logger.debug(f"Retrieved constraint {constraint_id}")
-            return _transform_from_new_format(items[0])
+            return _transform_from_new_format(item)
         
         logger.warning(f"No items found for constraint {constraint_id}")
         return None
@@ -249,52 +283,113 @@ def get_constraint_details(constraint_id):
         raise VAMSGeneralErrorResponse("Error retrieving constraint")
 
 
+def _decode_constraint_offset(starting_token):
+    """Decode a listing startingToken into the row offset the page starts at
+
+    Args:
+        starting_token: The opaque base64 NextToken handed back by a previous page
+
+    Returns:
+        The zero-based offset into the deduplicated constraint list
+
+    Raises:
+        VAMSGeneralErrorResponse: The token is not one this listing emitted
+    """
+    if not starting_token:
+        return 0
+
+    # base64.b64decode discards characters outside the alphabet, so a value like
+    # "[object Object]" decodes without raising and only fails at int()
+    try:
+        offset = int(base64.b64decode(starting_token).decode('utf-8'))
+    except (ValueError, base64.binascii.Error, UnicodeDecodeError, TypeError) as e:
+        logger.exception(f"Invalid startingToken format: {e}")
+        raise VAMSGeneralErrorResponse("Invalid pagination token")
+
+    if offset < 0:
+        logger.warning("Rejected a startingToken that decoded to a negative offset")
+        raise VAMSGeneralErrorResponse("Invalid pagination token")
+
+    return offset
+
+
 def get_all_constraints(query_params):
     """Get all constraints with pagination from denormalized table
     Deduplicates by base constraintId to return unique constraints
-    
+
+    A constraint's `#group#`/`#user#` items each carry their own partition key, so they are
+    spread through scan order rather than sitting together: the deduplication has to see the
+    whole table before it can say how many distinct constraints there are, and the page is an
+    offset slice of that deduplicated, ordered list. pageSize therefore counts constraints.
+    The ordering is what makes the offset stable, since scan order is not contractual and every
+    page re-reads the table.
+
+    A layout that pages at the cursor instead would store one base item per constraint and keep
+    the `#group#`/`#user#` items as GSI projections only, so the base items could be paged
+    directly; moving to it requires migrating the stored items.
+
     Args:
         query_params: Query parameters for pagination
-        
+
     Returns:
         Dictionary with Items and optional NextToken
     """
     try:
-        # Use resource-level scan for automatic deserialization
-        scan_kwargs = {
-            'Limit': int(query_params['pageSize'])
-        }
-        
-        if query_params.get('startingToken'):
-            scan_kwargs['ExclusiveStartKey'] = query_params['startingToken']
-        
-        # Perform scan and collect items
-        response = constraints_table.scan(**scan_kwargs)
-        items = response.get('Items', [])
-        
-        # Deduplicate by base constraintId (remove #group# or #user# suffixes)
+        # The page served is the smallest of the slice asked for, the ceiling allowed, and the
+        # payload bound for whole-constraint items
+        page_size = min(
+            int(query_params.get('pageSize') or MAX_CONSTRAINT_LIST_PAGE_SIZE),
+            int(query_params.get('maxItems') or MAX_LIST_MAX_ITEMS),
+            MAX_CONSTRAINT_LIST_PAGE_SIZE,
+        )
+        start = _decode_constraint_offset(query_params.get('startingToken'))
+
+        # Deduplicate by base constraintId (remove #group# or #user# suffixes) across the whole
+        # table, so a constraint whose items straddle a scan page is counted once
         unique_constraints = {}
-        for item in items:
-            full_constraint_id = item.get('constraintId', '')
-            base_constraint_id = full_constraint_id.split('#group#')[0].split('#user#')[0]
-            
-            # Only keep the first occurrence of each base constraintId
-            if base_constraint_id not in unique_constraints:
-                unique_constraints[base_constraint_id] = item
-        
+        row_count = 0
+        scan_kwargs = {}
+        while True:
+            response = constraints_table.scan(**scan_kwargs)
+            items = response.get('Items', [])
+            row_count += len(items)
+            for item in items:
+                full_constraint_id = item.get('constraintId', '')
+                base_constraint_id = full_constraint_id.split('#group#')[0].split('#user#')[0]
+
+                # Only keep the first occurrence of each base constraintId
+                if base_constraint_id not in unique_constraints:
+                    unique_constraints[base_constraint_id] = item
+
+            if 'LastEvaluatedKey' not in response:
+                break
+            scan_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+
+        ordered_ids = sorted(unique_constraints)
+        page = [unique_constraints[base_id] for base_id in ordered_ids[start:start + page_size]]
+
         # Transform items from new format to API format
-        formatted_items = [_transform_from_new_format(item) for item in unique_constraints.values()]
-        
+        formatted_items = [_transform_from_new_format(item) for item in page]
+
         result = {'Items': formatted_items}
-        
-        # Handle pagination token
-        if 'LastEvaluatedKey' in response:
-            result['NextToken'] = response['LastEvaluatedKey']
-        
-        logger.debug(f"Retrieved {len(formatted_items)} unique constraints from {len(items)} denormalized items")
+
+        # Handle pagination token - base64 of the next offset so it survives query-string
+        # round tripping as an opaque string
+        next_offset = start + page_size
+        if next_offset < len(ordered_ids):
+            result['NextToken'] = base64.b64encode(
+                str(next_offset).encode('utf-8')
+            ).decode('utf-8')
+
+        logger.debug(
+            f"Retrieved {len(formatted_items)} of {len(ordered_ids)} unique constraints "
+            f"from {row_count} denormalized items"
+        )
         return result
     except Exception as e:
         logger.exception(f"Error getting all constraints: {e}")
+        if isinstance(e, VAMSGeneralErrorResponse):
+            raise e
         raise VAMSGeneralErrorResponse("Error retrieving constraints")
 
 
@@ -337,11 +432,16 @@ def create_or_update_constraint(constraint_data, claims_and_roles):
             constraint_data['dateCreated'] = now
             constraint_data['createdBy'] = username
         
-        # Delete existing denormalized items for this constraint (if updating)
-        try:
-            _delete_denormalized_items(constraint_id)
-        except Exception as delete_error:
-            logger.warning(f"Error deleting old denormalized items: {delete_error}")
+        # Delete existing denormalized items for this constraint (if updating). A row left behind
+        # would keep granting, so the new items are written only once the old ones are gone.
+        existing_items = _delete_denormalized_items(constraint_id)
+        if existing_items is None:
+            raise VAMSGeneralErrorResponse("Error creating/updating constraint - existing items could not be removed")
+        
+        # An update keeps the creation metadata of the rows it replaces
+        if existing_items:
+            constraint_data['dateCreated'] = existing_items[0].get('dateCreated', constraint_data['dateCreated'])
+            constraint_data['createdBy'] = existing_items[0].get('createdBy', constraint_data['createdBy'])
         
         # Transform to denormalized format (returns array of items)
         denormalized_items = _transform_to_denormalized_format(constraint_data)
@@ -354,7 +454,7 @@ def create_or_update_constraint(constraint_data, claims_and_roles):
         logger.info(f"Successfully wrote {len(denormalized_items)} denormalized items for constraint {constraint_id}")
         
         # Determine if this was a create or update operation
-        operation = "update" if 'dateCreated' in constraint_data and constraint_data['dateCreated'] != now else "create"
+        operation = "update" if existing_items else "create"
         
         # Return success response
         return ConstraintOperationResponseModel(
@@ -376,15 +476,20 @@ def _delete_denormalized_items(base_constraint_id):
     
     Args:
         base_constraint_id: The base constraint ID (without #group# or #user# suffix)
+    
+    Returns:
+        The items found and deleted for the constraint (an empty list when none existed),
+        or None when the scan or the batch delete failed
     """
     try:
-        from boto3.dynamodb.conditions import Attr
-        
-        logger.info(f"Scanning for items to delete with ID starting with: {base_constraint_id}")
-        
-        # Scan for all items that start with the base constraintId
+        logger.info(f"Scanning for items to delete for constraint: {base_constraint_id}")
+
+        # Scan for the constraint's own items only - the base constraintId and its
+        # #group#/#user# denormalized items - reading with strong consistency so a row
+        # written moments earlier is not missed
         response = constraints_table.scan(
-            FilterExpression=Attr('constraintId').begins_with(base_constraint_id)
+            FilterExpression=_constraint_id_filter(base_constraint_id),
+            ConsistentRead=True
         )
         
         items_to_delete = response.get('Items', [])
@@ -393,7 +498,8 @@ def _delete_denormalized_items(base_constraint_id):
         # Handle pagination if there are many items
         while 'LastEvaluatedKey' in response:
             response = constraints_table.scan(
-                FilterExpression=Attr('constraintId').begins_with(base_constraint_id),
+                FilterExpression=_constraint_id_filter(base_constraint_id),
+                ConsistentRead=True,
                 ExclusiveStartKey=response['LastEvaluatedKey']
             )
             items_to_delete.extend(response.get('Items', []))
@@ -407,9 +513,11 @@ def _delete_denormalized_items(base_constraint_id):
             logger.info(f"Successfully deleted {len(items_to_delete)} denormalized items for constraint {base_constraint_id}")
         else:
             logger.warning(f"No items found to delete for constraint {base_constraint_id}")
+        return items_to_delete
     except Exception as e:
         logger.exception(f"Error deleting denormalized items: {e}")
         # Don't raise - allow delete to continue even if cleanup fails
+        return None
 
 
 def delete_constraint(constraint_id, claims_and_roles):
@@ -434,14 +542,13 @@ def delete_constraint(constraint_id, claims_and_roles):
         # This handles eventual consistency issues and is more efficient
         _delete_denormalized_items(constraint_id)
         
-        # Check if any items were actually deleted by doing a quick scan
-        from boto3.dynamodb.conditions import Attr
-        check_response = constraints_table.scan(
-            FilterExpression=Attr('constraintId').begins_with(constraint_id),
-            Limit=1
+        # Check that none of the constraint's items remain anywhere in the table, reading
+        # with strong consistency so items the batch delete removed are not returned
+        remaining_item = _scan_first_match(
+            _constraint_id_filter(constraint_id), consistent_read=True
         )
         
-        if len(check_response.get('Items', [])) > 0:
+        if remaining_item is not None:
             # Items still exist, deletion may have failed
             logger.warning(f"Items still exist after deletion attempt for constraint {constraint_id}")
             raise VAMSGeneralErrorResponse("Error deleting constraint - items may still exist")

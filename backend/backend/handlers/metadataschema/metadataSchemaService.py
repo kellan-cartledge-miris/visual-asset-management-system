@@ -351,22 +351,30 @@ def create_metadata_schema(schema_data, claims_and_roles):
         Created schema operation response
     """
     try:
-        # Verify database exists
-        verify_database_exists(schema_data['databaseId'])
-        
-        # Check authorization
+        # Authorize before the database lookup below can disclose whether the database exists.
+        # verify_database_exists answers 400 for an absent database while the gate answers 403, so
+        # running it first hands a caller holding the POST route but no matching metadataSchema
+        # constraint a database-existence oracle over names the Casbin-filtered database listing
+        # would not have shown it, and drives a table read per probe. A metadataSchema is authorized
+        # on databaseId + metadataSchemaName + metadataSchemaEntityType
+        # (CONSTRAINT_OBJECT_TYPE_FIELDS), all of which the request supplies, so nothing has to be
+        # read to reach the same decision.
         auth_object = {
             "databaseId": schema_data['databaseId'],
             "metadataSchemaEntityType": schema_data['metadataSchemaEntityType'],
             "metadataSchemaName": schema_data['schemaName'],
             "object__type": "metadataSchema"
         }
-        
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforce(auth_object, "POST"):
-                return authorization_error()
-        
+
+        if len(claims_and_roles["tokens"]) == 0:
+            return authorization_error()
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(auth_object, "POST"):
+            return authorization_error()
+
+        # Verify database exists
+        verify_database_exists(schema_data['databaseId'])
+
         # Generate unique ID
         metadata_schema_id = str(uuid.uuid4())
         
@@ -433,7 +441,7 @@ def update_metadata_schema(metadataSchemaId, update_data, claims_and_roles):
         # Get the existing schema
         schema = get_metadata_schema_details(metadataSchemaId)
         if not schema:
-            raise VAMSGeneralErrorResponse("Metadata schema not found")
+            raise VAMSGeneralErrorResponse("Metadata schema not found", status_code=404)
         
         # Check authorization
         auth_object = {
@@ -443,40 +451,70 @@ def update_metadata_schema(metadataSchemaId, update_data, claims_and_roles):
             "object__type": "metadataSchema"
         }
         
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforce(auth_object, "POST"):  # Uses POST permission for updates
-                return authorization_error()
+        if len(claims_and_roles["tokens"]) == 0:
+            return authorization_error()
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(auth_object, "POST"):  # Uses POST permission for updates
+            return authorization_error()
         
         # Update the fields
         logger.info(f"Updating metadata schema {metadataSchemaId}")
         
-        # Update only the editable fields
-        if 'schemaName' in update_data:
-            schema['schemaName'] = update_data['schemaName']
+        # Update only the editable fields. schemaName, fields and enabled are required on every
+        # stored schema, so a null leaves them unchanged; a null or empty fileKeyTypeRestriction
+        # removes the restriction.
+        updates = {}
+        removed = []
+        if update_data.get('schemaName') is not None:
+            updates['schemaName'] = update_data['schemaName']
         
         if 'fileKeyTypeRestriction' in update_data:
-            if update_data['fileKeyTypeRestriction']:
-                schema['fileKeyTypeRestriction'] = update_data['fileKeyTypeRestriction']
+            file_key_type_restriction = update_data['fileKeyTypeRestriction']
+            if file_key_type_restriction and file_key_type_restriction.strip():
+                # Only fileMetadata and fileAttribute schemas carry a restriction, as on create
+                if schema['metadataSchemaEntityType'] not in [MetadataSchemaEntityType.FILE_METADATA.value, MetadataSchemaEntityType.FILE_ATTRIBUTE.value]:
+                    raise VAMSGeneralErrorResponse("fileKeyTypeRestriction can only be set for fileMetadata or fileAttribute entity types")
+                updates['fileKeyTypeRestriction'] = file_key_type_restriction
             else:
-                # Remove the field if set to None or empty
-                schema.pop('fileKeyTypeRestriction', None)
+                # Remove the field if set to None, empty or whitespace only
+                removed.append('fileKeyTypeRestriction')
         
-        if 'fields' in update_data:
+        if update_data.get('fields') is not None:
             # Convert fields to JSON string for storage
-            schema['fields'] = json.dumps(update_data['fields'])
+            updates['fields'] = json.dumps(update_data['fields'])
         
-        if 'enabled' in update_data:
-            schema['enabled'] = update_data['enabled']
+        if update_data.get('enabled') is not None:
+            updates['enabled'] = update_data['enabled']
         
         # Update metadata
         now = datetime.utcnow().isoformat()
         username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
-        schema['dateModified'] = now
-        schema['modifiedBy'] = username
+        updates['dateModified'] = now
+        updates['modifiedBy'] = username
         
-        # Save the updated schema
-        metadata_schema_table.put_item(Item=schema)
+        # Write only the changed attributes, and only to a schema that still exists, so a
+        # concurrent delete is not undone and a concurrent update of other fields is kept
+        keys_map = {f"#f{index}": attribute for index, attribute in enumerate(updates)}
+        values_map = {f":v{index}": value for index, value in enumerate(updates.values())}
+        update_expression = "SET " + ", ".join(f"#f{index} = :v{index}" for index in range(len(updates)))
+        if removed:
+            keys_map.update({f"#r{index}": attribute for index, attribute in enumerate(removed)})
+            update_expression += " REMOVE " + ", ".join(f"#r{index}" for index in range(len(removed)))
+        try:
+            metadata_schema_table.update_item(
+                Key={
+                    'metadataSchemaId': metadataSchemaId,
+                    'databaseId:metadataEntityType': schema.get('databaseId:metadataEntityType')
+                },
+                UpdateExpression=update_expression,
+                ConditionExpression='attribute_exists(metadataSchemaId)',
+                ExpressionAttributeNames=keys_map,
+                ExpressionAttributeValues=values_map,
+            )
+        except ClientError as e:
+            if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+                raise VAMSGeneralErrorResponse("Metadata schema not found", status_code=404)
+            raise
         
         # Return success response
         return MetadataSchemaOperationResponseModel(
@@ -506,7 +544,7 @@ def delete_metadata_schema(metadataSchemaId, claims_and_roles):
         # Get the existing schema
         schema = get_metadata_schema_details(metadataSchemaId)
         if not schema:
-            raise VAMSGeneralErrorResponse("Metadata schema not found")
+            raise VAMSGeneralErrorResponse("Metadata schema not found", status_code=404)
         
         # Check authorization
         auth_object = {
@@ -516,10 +554,11 @@ def delete_metadata_schema(metadataSchemaId, claims_and_roles):
             "object__type": "metadataSchema"
         }
         
-        if len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforce(auth_object, "DELETE"):
-                return authorization_error()
+        if len(claims_and_roles["tokens"]) == 0:
+            return authorization_error()
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(auth_object, "DELETE"):
+            return authorization_error()
         
         # Delete the schema
         logger.info(f"Deleting metadata schema {metadataSchemaId}")
@@ -606,10 +645,11 @@ def handle_get_request(event):
                     "metadataSchemaEntityType": schema.get('metadataSchemaEntityType', '')
                 }
                 
-                if len(claims_and_roles["tokens"]) > 0:
-                    casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                    if not casbin_enforcer.enforce(auth_schema, "GET"):
-                        return authorization_error()
+                if len(claims_and_roles["tokens"]) == 0:
+                    return authorization_error()
+                casbin_enforcer = CasbinEnforcer(claims_and_roles)
+                if not casbin_enforcer.enforce(auth_schema, "GET"):
+                    return authorization_error()
                 
                 # Convert to response model
                 try:
@@ -716,7 +756,11 @@ def handle_post_request(event):
             request_model.dict(exclude_unset=True),
             claims_and_roles
         )
-        
+
+        # An authorization denial is already a complete response
+        if not isinstance(result, MetadataSchemaOperationResponseModel):
+            return result
+
         # Return success response
         return success(body=result.dict())
         
@@ -725,7 +769,7 @@ def handle_post_request(event):
         return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)}, event=event)
+        return general_error(body={'message': str(v)}, status_code=v.status_code, event=event)
     except Exception as e:
         logger.exception(f"Error handling POST request: {e}")
         return internal_error(event=event)
@@ -767,7 +811,11 @@ def handle_put_request(event):
             update_model.dict(exclude_unset=True),
             claims_and_roles
         )
-        
+
+        # An authorization denial is already a complete response
+        if not isinstance(result, MetadataSchemaOperationResponseModel):
+            return result
+
         # Return success response
         return success(body=result.dict())
         
@@ -776,7 +824,7 @@ def handle_put_request(event):
         return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)}, event=event)
+        return general_error(body={'message': str(v)}, status_code=v.status_code, event=event)
     except Exception as e:
         logger.exception(f"Error handling PUT request: {e}")
         return internal_error(event=event)
@@ -842,7 +890,11 @@ def handle_delete_request(event):
             path_parameters['metadataSchemaId'],
             claims_and_roles
         )
-        
+
+        # An authorization denial is already a complete response
+        if not isinstance(result, MetadataSchemaOperationResponseModel):
+            return result
+
         # Return success response
         return success(body=result.dict())
         
@@ -851,7 +903,7 @@ def handle_delete_request(event):
         return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)}, event=event)
+        return general_error(body={'message': str(v)}, status_code=v.status_code, event=event)
     except Exception as e:
         logger.exception(f"Error handling DELETE request: {e}")
         return internal_error(event=event)
@@ -893,7 +945,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
-        return general_error(body={'message': str(v)}, event=event)
+        return general_error(body={'message': str(v)}, status_code=v.status_code, event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
         return internal_error(event=event)

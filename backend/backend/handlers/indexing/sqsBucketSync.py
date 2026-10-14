@@ -36,27 +36,29 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_DIRECT,
     normalize_history_file_path,
 )
-from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS
+from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, key_has_reserved_segment
 from common.s3 import is_object_version_archived
 from common.assetHistory import (
     CHANGE_SOURCE_UNARCHIVE_DIRECT,
     build_asset_snapshot,
     write_asset_history_record,
 )
+from common.batchItemFailures import all_batch_item_failures, with_batch_item_failures
 
 # Initialize AWS clients
-dynamodb = boto3.resource('dynamodb')
-sns_client = boto3.client('sns')
-s3_client = boto3.client('s3')
-s3_resource = boto3.resource('s3')
-lambda_client = boto3.client('lambda')
+retry_config = BotoConfig(retries={'max_attempts': 5, 'mode': 'adaptive'})
+dynamodb = boto3.resource('dynamodb', config=retry_config)
+sns_client = boto3.client('sns', config=retry_config)
+s3_client = boto3.client('s3', config=retry_config)
+s3_resource = boto3.resource('s3', config=retry_config)
+lambda_client = boto3.client('lambda', config=retry_config)
 # Bounded timeouts on the EventBridge client so an unreachable endpoint (e.g. an isolated-subnet
 # deployment missing the events VPC endpoint) fails fast rather than blocking the ingestion hot
 # path for the full default connect timeout on every batch. The publish is best-effort.
 events_client = boto3.client(
     'events',
     config=BotoConfig(connect_timeout=3, read_timeout=5, retries={'max_attempts': 2}))
-dynamodb_client = boto3.client('dynamodb')
+dynamodb_client = boto3.client('dynamodb', config=retry_config)
 logger = safeLogger(service_name="sqsBucketSync")
 
 # Environment variables
@@ -81,6 +83,12 @@ except Exception as e:
 
 if not database_id:
     raise Exception('databaseId not configured')
+
+# This function's own name, used to recognize the ObjectCreated event that THIS handler's
+# metadata stamp produces (see is_vams_metadata_stamp_echo). The Lambda runtime always sets it;
+# an empty value simply disables the recognition, which degrades to the pre-existing behaviour of
+# treating the echo as a content change rather than to anything unsafe.
+self_function_name = os.environ.get('AWS_LAMBDA_FUNCTION_NAME', '')
 
 # Initialize metadata tables
 asset_file_metadata_table = dynamodb.Table(asset_file_metadata_table_name) if asset_file_metadata_table_name else None
@@ -591,23 +599,46 @@ def lookup_archived_database(database_id: str) -> Optional[Dict]:
 
 def lookup_databases(bucket_id: str) -> List[Dict]:
     """
-    Look up databases by bucket ID
-    
+    Look up LIVE databases by bucket ID
+
+    A soft-deleted database keeps its row with `#deleted` appended to its databaseId, and the scan
+    matches it just as readily as a live one. The caller uses `matching_databases[0]` when the
+    configured default is not among the results, so an ingested object could be written into a deleted
+    database — where it is invisible to every list and unreachable through the API, with the sync logged
+    as successful. Filtering here rather than at the call site keeps every caller safe, and matches how
+    the rest of this module already treats the suffix (see the archived-asset lookups below).
+
     Args:
         bucket_id: The bucket ID
-        
+
     Returns:
-        list: List of database data
+        list: List of live database data
     """
     try:
-        # Scan the database table for matching bucket ID
+        # Scan the database table for matching bucket ID, paging to exhaustion.
+        #
+        # A FilterExpression is applied AFTER each 1 MB page is read, so a single call is not a lookup:
+        # empty (or partial) Items alongside a LastEvaluatedKey is the normal shape for "the match is on
+        # a later page". Stopping at the first page is a false negative that grows with the table, and
+        # the caller does not treat a miss as an error — it mints a NEW databaseId with a hash suffix
+        # (see create_new_database below) and ingests the object there. So the object lands in a
+        # database nobody expects, and the sync is logged as successful.
         table = dynamodb.Table(db_table_name)
-        response = table.scan(
-            FilterExpression=Key('defaultBucketId').eq(bucket_id)
-        )
-        
-        databases = response.get('Items', [])
-        
+        databases = []
+        scan_kwargs = {'FilterExpression': Key('defaultBucketId').eq(bucket_id)}
+        while True:
+            response = table.scan(**scan_kwargs)
+            databases.extend(
+                db for db in response.get('Items', [])
+                if not str(db.get('databaseId', '')).endswith('#deleted')
+            )
+            # Presence, not truthiness: DynamoDB omits the key when the scan is exhausted and never
+            # returns a falsy one, so `in` is the accurate test — and the one that terminates against an
+            # under-stubbed reader, where `.get(...)` returns a truthy MagicMock on every iteration.
+            if 'LastEvaluatedKey' not in response:
+                break
+            scan_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+
         # Cache each database individually by databaseId
         for db in databases:
             if 'databaseId' in db:
@@ -809,7 +840,8 @@ def restore_archived_asset(bucket_id: str, asset_id: str, archived_asset: Dict) 
     happens once; losers treat the asset as already restored.
 
     Returns:
-        The live database ID on success (or when already restored), None on error.
+        The live database ID on success (or when already restored), None on error
+        or when the asset's database has been deleted.
     """
     archived_db_id = archived_asset.get('databaseId', '')
     if not archived_db_id.endswith('#deleted'):
@@ -819,6 +851,11 @@ def restore_archived_asset(bucket_id: str, asset_id: str, archived_asset: Dict) 
 
     try:
         table = dynamodb.Table(asset_table_name)
+
+        # Only into a database that still exists; a deleted database's archived assets stay archived
+        if not verify_database_exists(live_db_id):
+            logger.warning(f"Not restoring archived asset {asset_id}: database {live_db_id} has been deleted")
+            return None
 
         restored = {k: v for k, v in archived_asset.items()
                     if k not in ('status', 'archivedAt', 'archivedBy', 'archivedReason')}
@@ -933,6 +970,71 @@ def decode_s3_event_key(raw_key: str) -> str:
         return raw_key
     decoded = urllib.parse.unquote_plus(raw_key)
     return decoded if decoded != raw_key else raw_key
+
+
+# The notification names of this handler's metadata stamp: boto3's managed copy() issues a single
+# CopyObject below its 8 MiB multipart threshold and a multipart copy at or above it.
+_METADATA_STAMP_EVENT_NAMES = ('ObjectCreated:Copy', 'ObjectCreated:CompleteMultipartUpload')
+
+
+def is_vams_metadata_stamp_echo(record: Dict) -> bool:
+    """Return True when this record is the echo of THIS handler's own metadata stamp.
+
+    ``update_s3_metadata`` stamps ``databaseid`` / ``assetid`` / ``vams-changesource`` onto an object
+    by copying it onto itself. That copy is an object write, so Amazon S3 raises a *second*
+    notification — ``ObjectCreated:Copy``, or ``ObjectCreated:CompleteMultipartUpload`` for an object
+    at or above the 8 MiB managed-copy multipart threshold — for a file that only ever changed once,
+    and every consumer downstream of this handler treated it as a new file. Measured consequences:
+
+    *   the file indexers re-indexed the file a second time;
+    *   ``asset.file.uploaded`` was published a second time, so a ``fileUpload`` workflow trigger
+        fired TWICE for one written file;
+    *   ``update_asset_type`` re-listed the asset's prefix and ``write_file_version_history``
+        re-wrote its row, on identical content.
+
+    The history row itself does not duplicate — the second pass reads the same ``VersionId`` (no
+    further copy is made), so the ``put_item`` overwrites the same PK+SK. The cost there is a
+    redundant ``head_object`` plus write, not a phantom version. Measured on the deployment; do not
+    upgrade this to "a duplicate version row" without re-measuring.
+
+    Note this only arises for an object that arrives WITHOUT the stamp — a direct S3 write, a folder
+    marker, or a pipeline output landing on an asset path. A VAMS upload is already stamped by
+    ``uploadFile``, so ``update_s3_metadata`` takes its "metadata already matches" branch, makes no
+    copy, and raises no echo. Verified both ways live: a CLI upload produced one notification, a
+    direct ``s3 cp`` of the same content produced two.
+
+    The doubling on that path is what pushes a burst into AWS Lambda's
+    recursive-loop detector: at 16 hops the invocation is DROPPED before the handler runs, so its
+    SQS messages are never deleted and cycle until the queue's retention expires, with ``Errors``
+    and ``Throttles`` both zero and no log line written.
+
+    Two conditions, and both are required:
+
+    *   ``eventName`` is ``ObjectCreated:Copy`` or ``ObjectCreated:CompleteMultipartUpload``. The
+        stamp copy is the only way this handler writes, and it completes as a multipart upload at or
+        above 8 MiB.
+    *   the copy was performed by **this function**. ``userIdentity.principalId`` on an S3 event is
+        ``AWS:<roleId>:<roleSessionName>``, and for a Lambda the session name is the function name.
+
+    Requiring both is what keeps this from swallowing real work. A file COPY or MOVE performed by
+    the VAMS file-operations handlers, or by any other principal, is a genuine content change at the
+    destination key and still forwards — it fails the second condition, as does a large direct write,
+    which completes as ``CompleteMultipartUpload`` under the writer's principal. A plain
+    ``ObjectCreated:Put`` always forwards, whatever its metadata already says, which matters because
+    ``uploadFile`` stamps the same three keys at upload time: recognizing the echo by "the metadata
+    already matches" would have discarded every VAMS upload.
+    """
+    if not self_function_name:
+        return False
+    event_name = str(record.get('eventName') or '')
+    # S3 delivers this without the "s3:" prefix on the notification record, but an event routed
+    # through EventBridge or hand-built by a test may carry it; accept either spelling.
+    if not any(name in event_name for name in _METADATA_STAMP_EVENT_NAMES):
+        return False
+    principal_id = str((record.get('userIdentity') or {}).get('principalId') or '')
+    # Exact component match on the session name, not a substring of the whole id: a substring test
+    # would also match a different function whose name merely contains this one's.
+    return self_function_name in principal_id.split(':')
 
 
 def update_s3_metadata(bucket_name: str, object_key: str, database_id: str, asset_id: str) -> bool:
@@ -1225,7 +1327,7 @@ def verify_database_exists(database_id):
     """Check if a database exists"""
     table = dynamodb.Table(db_table_name)
     try:
-        response = table.get_item(Key={'databaseId': database_id})
+        response = table.get_item(Key={'databaseId': database_id}, ConsistentRead=True)
         if 'Item' not in response:
             return False
         return True
@@ -1359,11 +1461,15 @@ def publish_to_file_indexer_sns(event):
     
     Args:
         event: The S3 event to publish
+
+    Returns:
+        bool: True when the event reached the topic or no topic is configured; False when the
+        publish failed, which leaves its records undelivered to every file indexer.
     """
     try:
         if not file_indexer_sns_topic_arn:
             logger.warning("FILE_INDEXER_SNS_TOPIC_ARN not configured, skipping SNS publish")
-            return
+            return True
         
         # Prepare payload for indexing
         event.update({
@@ -1379,9 +1485,25 @@ def publish_to_file_indexer_sns(event):
         )
         
         logger.info(f"Successfully published to file indexer SNS topic: {response['MessageId']}")
+        return True
     except Exception as e:
         logger.exception(f"Error publishing to file indexer SNS topic: {e}")
-        # We don't re-raise the exception here to avoid stopping the process
+        return False
+
+# PutEvents result codes for a transient refusal of an entry; an entry refused with one of these is
+# re-sent once. EventBridge reports a refused entry in a normal response (FailedEntryCount plus the
+# entry's ErrorCode and ErrorMessage) rather than as an error, so botocore's retry layer never
+# re-sends it.
+RETRYABLE_PUT_EVENTS_ERROR_CODES = frozenset({"ThrottlingException", "InternalFailure"})
+
+def _refused_put_events_entry(response):
+    """Return the first result entry a PutEvents response reports as refused, or None when every
+    entry was accepted. Result entries match the request entries one for one; a refused entry
+    carries ErrorCode and ErrorMessage in place of an EventId."""
+    for entry in (response or {}).get("Entries") or []:
+        if entry.get("ErrorCode"):
+            return entry
+    return None
 
 def publish_to_orchestration_bus(successful_records):
     """Publish an asset.file.uploaded event to the VAMS orchestration EventBridge bus (Phase 2
@@ -1394,7 +1516,8 @@ def publish_to_orchestration_bus(successful_records):
     the dispatcher, which knows the candidate workflow (see the loop-guard note in the body).
 
     Best-effort: a publish failure is logged, not raised (auto-trigger is non-critical to the primary
-    ingestion path)."""
+    ingestion path). An entry PutEvents refuses with a retryable code is re-sent once; a refusal that
+    remains is logged as an error naming the objects whose fileUpload triggers do not fire."""
     try:
         if not orchestration_bus_name or not orchestration_event_source_prefix:
             return
@@ -1411,15 +1534,28 @@ def publish_to_orchestration_bus(successful_records):
             "ASSET_BUCKET_NAME": asset_bucket_name,
             "ASSET_BUCKET_PREFIX": asset_bucket_prefix,
         }
+        entry = {
+            "EventBusName": orchestration_bus_name,
+            "Source": f"{orchestration_event_source_prefix}.trigger.fileUpload",
+            "DetailType": "asset.file.uploaded",
+            "Detail": json.dumps(detail, default=str),
+        }
         try:
-            events_client.put_events(Entries=[{
-                "EventBusName": orchestration_bus_name,
-                "Source": f"{orchestration_event_source_prefix}.trigger.fileUpload",
-                "DetailType": "asset.file.uploaded",
-                "Detail": json.dumps(detail, default=str),
-            }])
+            refused = _refused_put_events_entry(events_client.put_events(Entries=[entry]))
+            if refused and refused.get("ErrorCode") in RETRYABLE_PUT_EVENTS_ERROR_CODES:
+                logger.warning(
+                    f"EventBridge refused asset.file.uploaded on bus {orchestration_bus_name} "
+                    f"({refused.get('ErrorCode')}: {refused.get('ErrorMessage')}); re-sending once")
+                refused = _refused_put_events_entry(events_client.put_events(Entries=[entry]))
         except Exception as e:
             logger.exception(f"EventBridge put_events failed for asset.file.uploaded on bus {orchestration_bus_name}: {e}")
+            return
+        if refused:
+            object_keys = [r["s3"].get("object", {}).get("key") for r in publishable_records]
+            logger.error(
+                f"EventBridge put_events refused asset.file.uploaded on bus {orchestration_bus_name} "
+                f"({refused.get('ErrorCode')}: {refused.get('ErrorMessage')}); the fileUpload triggers for "
+                f"{len(publishable_records)} record(s) will not fire: {object_keys}")
             return
         logger.info(f"Published asset.file.uploaded event ({len(publishable_records)} record(s)) to the orchestration bus")
     except Exception as e:
@@ -1574,16 +1710,41 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
             logger.info(f"Could not extract asset ID from {object_key}, skipping processing but forwarding to indexers")
             return False, True, f"Could not extract asset ID from {object_key}"
 
-        # 1.c Check if asset ID is a special folder to skip
-        if asset_id in RESERVED_S3_PREFIX_FOLDERS:
-            logger.info(f"Asset ID {asset_id} is a special folder, skipping")
-            return False, False, f"Asset ID {asset_id} is a special folder"
+        # 1.c Check if the key is VAMS system data and must be skipped.
+        #
+        # Tested over EVERY path segment of the whole key, matching fileIndexer and
+        # workflowTriggerDispatch. The previous form tested only the extracted asset id -- the first
+        # segment after the configured prefix -- which missed a reserved folder nested below an asset
+        # id, and could not run at all for a key that does not start with the configured prefix
+        # (extraction returns None above). Treating pipeline output as an asset file is not merely
+        # wasted work: update_s3_metadata below re-stamps it by copying the object onto itself, and
+        # that copy re-enters the same s3:ObjectCreated notification that triggered this handler.
+        if key_has_reserved_segment(object_key, prefix, RESERVED_S3_PREFIX_FOLDERS):
+            logger.info(f"Key {object_key} contains a reserved VAMS folder segment, skipping")
+            return False, False, f"Key {object_key} contains a reserved VAMS folder segment"
 
         # 1.d Validate asset ID
         if not validate_asset_id(asset_id):
             logger.info(f"Asset ID {asset_id} is not valid, skipping processing but forwarding to indexers")
             return False, True, f"Asset ID {asset_id} is not valid"
-        
+
+        # 1.e Determine WHAT HAPPENED before doing anything: an ObjectCreated event this handler
+        # caused itself, by stamping metadata in step 4 below, describes no change a consumer needs
+        # to see. Everything after this point — asset lookup/creation, the metadata stamp, the asset
+        # type recomputation, the version-history row — has already run for the write that preceded
+        # the stamp, and every one of them would run a second time on identical content.
+        #
+        # Returns processed-successfully so the SQS message is deleted, and should_index False so
+        # neither the indexers nor the fileUpload trigger see it. This is the ONE case where a
+        # withheld record is not "out of scope": it is the same file the previous record already
+        # carried, which is why withholding it loses nothing.
+        if is_vams_metadata_stamp_echo(record):
+            logger.info(
+                f"Key {object_key} event is this handler's own metadata stamp "
+                f"({record.get('eventName')}); no change to process or forward"
+            )
+            return True, False, f"Skipped own metadata stamp echo for {object_key}"
+
         # 2.a. Lookup asset in assets dynamoDB table
         # Use cache to prevent excessive lookups (TTL: 60 seconds)
         asset_data = lookup_asset(bucket_id, asset_id)
@@ -1915,9 +2076,13 @@ def lambda_handler_created(event, context):
         context: The Lambda context
 
     Returns:
-        None
+        dict: for an SQS batch, `batchItemFailures` naming the messages whose records did not
+        reach the file indexer topic (every message when the invocation failed unexpectedly);
+        an empty list when all of them did.
     """
     logger.info(f"File creation event received: {json.dumps(event)}")
+
+    failures = []
 
     try:
         # Parse the event to handle different sources
@@ -1940,21 +2105,28 @@ def lambda_handler_created(event, context):
 
                 if filtered_event:
                     logger.info(f"Publishing {len(successful_records)} records to file indexer SNS")
-                    publish_to_file_indexer_sns(filtered_event)
-
-                    # Publish to the orchestration EventBridge bus for the fileUpload trigger
-                    # dispatcher. Pass the flat S3 records so a clean detail is published
-                    # (workflow-sourced outputs are excluded).
-                    publish_to_orchestration_bus(successful_records)
+                    if publish_to_file_indexer_sns(filtered_event):
+                        # Publish to the orchestration EventBridge bus for the fileUpload trigger
+                        # dispatcher. Pass the flat S3 records so a clean detail is published.
+                        publish_to_orchestration_bus(successful_records)
+                    else:
+                        # The indexers never saw these records, so their messages are redriven.
+                        # The trigger is published by the delivery that reaches the topic, so a
+                        # file fires its fileUpload trigger once rather than once per delivery.
+                        failures = all_batch_item_failures(filtered_event)
                 else:
-                    logger.info("All records filtered out, skipping file indexer SNS publish")
+                    logger.error("Indexable records could not be matched to their messages; reporting the batch for redrive")
+                    failures = all_batch_item_failures(event)
             else:
                 logger.info("No records to publish, skipping file indexer SNS publish")
         else:
             logger.warning("No records found in parsed event, nothing to process")
     except Exception as e:
         logger.exception(f"Unhandled error in lambda_handler_created: {e}")
-        # We don't run the indexing lambda on unhandled exceptions to avoid potential data corruption
+        # Which records reached the indexers is unknown, so every message is redriven.
+        failures = all_batch_item_failures(event)
+
+    return with_batch_item_failures({}, event, failures)
 
 def lambda_handler_deleted(event, context):
     """
@@ -1975,9 +2147,13 @@ def lambda_handler_deleted(event, context):
         context: The Lambda context
 
     Returns:
-        None
+        dict: for an SQS batch, `batchItemFailures` naming the messages whose records did not
+        reach the file indexer topic (every message when the invocation failed unexpectedly);
+        an empty list when all of them did.
     """
     logger.info(f"File deletion event received: {json.dumps(event)}")
+
+    failures = []
 
     try:
         # Parse the event to handle different sources
@@ -1994,9 +2170,14 @@ def lambda_handler_deleted(event, context):
                     logger.warning("Record does not contain S3 information, skipping")
                     continue
 
-                # Extract bucket name and object key
+                # Extract bucket name and object key. S3 event notifications deliver
+                # the key URL-encoded per AWS spec (spaces → '+', specials → '%XX');
+                # decode it here so metadata paths and S3 version lookups operate on
+                # the actual object key. The record forwarded to the indexers keeps
+                # the key exactly as received — fileIndexer applies its own decoding.
                 bucket_name = record['s3']['bucket']['name']
-                object_key = record['s3']['object']['key']
+                raw_object_key = record['s3']['object']['key']
+                object_key = decode_s3_event_key(raw_object_key)
 
                 # Skip init files entirely (both processing and indexing)
                 if object_key.endswith('init') or object_key.endswith('init/'):
@@ -2036,9 +2217,10 @@ def lambda_handler_deleted(event, context):
                         indexable_records.append(record)
                         continue
 
-                    # Skip special folders (never indexed)
-                    if asset_id in RESERVED_S3_PREFIX_FOLDERS:
-                        logger.info(f"Asset ID {asset_id} is a special folder, skipping")
+                    # Skip VAMS system data (never indexed). Segment-wise over the whole key for the
+                    # same reasons as the created path above.
+                    if key_has_reserved_segment(object_key, prefix, RESERVED_S3_PREFIX_FOLDERS):
+                        logger.info(f"Key {object_key} contains a reserved VAMS folder segment, skipping")
                         continue
 
                     # Validate asset ID
@@ -2057,16 +2239,28 @@ def lambda_handler_deleted(event, context):
                     if asset_data:
                         database_id_for_asset = asset_data.get('databaseId')
 
-                        # Extract relative file path for metadata deletion
-                        relative_file_path = extract_relative_file_path(object_key, prefix, asset_id)
+                        # Key spellings to clean up: the decoded key is the real object
+                        # key for an encoded event, while a key delivered without any
+                        # encoding applied is real as delivered (a literal '+' in a
+                        # filename decodes to a space). Both are handled when they differ.
+                        key_spellings = [object_key]
+                        if raw_object_key != object_key:
+                            key_spellings.append(raw_object_key)
 
-                        # Only delete metadata/attributes when the file is
-                        # permanently gone (no versions or delete markers remain).
+                        # Only delete metadata/attributes when the file is permanently
+                        # gone (no versions or delete markers remain under any spelling).
                         # A delete-marker event from an archive flow is reversible —
                         # unarchive restores the file and must find its metadata intact.
-                        if is_object_permanently_deleted(bucket_name, object_key):
-                            logger.info(f"Deleting metadata/attributes for permanently deleted file: {relative_file_path}")
-                            delete_file_metadata_on_s3_delete(database_id_for_asset, asset_id, relative_file_path)
+                        # Remaining versions under either spelling, or an error reading
+                        # version state, preserve the metadata.
+                        permanently_deleted = all(
+                            is_object_permanently_deleted(bucket_name, key) for key in key_spellings
+                        )
+                        if permanently_deleted:
+                            for key in key_spellings:
+                                relative_file_path = extract_relative_file_path(key, prefix, asset_id)
+                                logger.info(f"Deleting metadata/attributes for permanently deleted file: {relative_file_path}")
+                                delete_file_metadata_on_s3_delete(database_id_for_asset, asset_id, relative_file_path)
                         else:
                             logger.info(f"File {object_key} still has versions (archived); preserving metadata/attributes")
                     else:
@@ -2090,12 +2284,19 @@ def lambda_handler_deleted(event, context):
 
                 if filtered_event:
                     logger.info(f"Publishing {len(indexable_records)} deletion records to file indexer SNS")
-                    publish_to_file_indexer_sns(filtered_event)
+                    if not publish_to_file_indexer_sns(filtered_event):
+                        # The indexers never saw these deletes, so their messages are redriven.
+                        failures = all_batch_item_failures(filtered_event)
                 else:
-                    logger.info("All deletion records filtered out, skipping file indexer SNS publish")
+                    logger.error("Indexable deletion records could not be matched to their messages; reporting the batch for redrive")
+                    failures = all_batch_item_failures(event)
             else:
                 logger.info("No deletion records to publish, skipping file indexer SNS publish")
         else:
             logger.warning("No records found in parsed deletion event, nothing to process")
     except Exception as e:
         logger.exception(f"Error in lambda_handler_deleted: {e}")
+        # Which records reached the indexers is unknown, so every message is redriven.
+        failures = all_batch_item_failures(event)
+
+    return with_batch_item_failures({}, event, failures)

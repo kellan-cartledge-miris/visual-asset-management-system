@@ -94,7 +94,7 @@ The database is configured with `restrictFileUploadsToExtensions`, which limits 
     ```
 
 :::note
-Asset preview uploads (`--asset-preview`) and preview auxiliary files (those containing `.previewFile.` in the name) skip extension validation. A database with no restriction configured accepts all file types.
+Asset preview uploads (`--asset-preview`) and preview auxiliary files (those containing `.previewFile.` in the name) skip the database's restriction list, but are validated against the allowed preview image extensions (`.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`) instead. For a `.previewFile.` name the extension is everything after the marker, so `model.gltf.previewFile.p.png` is read as `.p.png` and refused. A database with no restriction configured accepts all other file types.
 :::
 
 ### Preview File Rejected
@@ -184,7 +184,7 @@ A file operation fails because the path cannot be found within the asset.
 
 **Cause:**
 
-The file path is incorrect, the path is case-sensitive, or the file is archived.
+The file path is incorrect, the path is case-sensitive, the file is archived, or the shell rewrote the path before the CLI received it.
 
 **Resolution:**
 
@@ -206,7 +206,13 @@ The file path is incorrect, the path is case-sensitive, or the file is archived.
     vamscli file info -d my-database -a my-asset -p "/model.gltf" --include-versions
     ```
 
-File paths within an asset are absolute and begin with `/`.
+4. On Windows, re-run the command with `MSYS_NO_PATHCONV=1` if you are using Git Bash, MSYS2, or Cygwin:
+
+    ```bash
+    MSYS_NO_PATHCONV=1 vamscli file info -d my-database -a my-asset -p "/model.gltf"
+    ```
+
+File paths within an asset are absolute and begin with `/`. Those shells rewrite an argument that begins with `/` into a Windows path before the CLI receives it, and quoting does not prevent it, so `-p "/model.gltf"` arrives as a local filesystem path that the asset does not contain. `--source` and `--dest` on `file move` and `file copy` are rewritten the same way, which can direct the operation at an unintended path. See [Asset-relative paths on Windows](../commands/files.md) on the File Commands page.
 
 ### File Move or Copy Fails
 
@@ -275,7 +281,7 @@ vamscli file info -d my-database -a my-asset -p "/file.gltf" --include-versions
 vamscli file revert -d my-database -a my-asset -p "/file.gltf" -v version-id-123
 ```
 
-An archived asset can be restored in full with `vamscli assets unarchive`, which also removes the delete markers on its files and preview.
+An archived asset is restored with `vamscli assets unarchive`. By default only the asset record is restored; add `--unarchive-files` to also remove the delete markers that the asset archive created on its files, and the delete marker on its preview. Files archived individually before the asset archive stay archived; restore them with `vamscli file unarchive`.
 
 ---
 
@@ -455,7 +461,7 @@ A previously generated shareable link no longer works.
 
 **Cause:**
 
-Presigned download URLs are time-limited and expire 24 hours after they are generated.
+Presigned download URLs are time-limited. A URL expires when `app.authProvider.presignedUrlTimeoutSeconds` elapses after it is generated (24 hours by default), or earlier, when the Lambda role credentials that signed it expire.
 
 **Resolution:**
 
@@ -568,10 +574,10 @@ vamscli sync file push ./models -d my-database -a my-asset --allow-modify --size
 
 ## Diagnostics
 
-When a command fails for an unclear reason, re-run it with the global `--debug` flag for detailed error information:
+When a command fails for an unclear reason, re-run it with the global `--verbose` flag for detailed error information, API requests and responses, and per-request timing:
 
 ```bash
-vamscli --debug assets download /local/path -d my-database -a my-asset
+vamscli --verbose assets download /local/path -d my-database -a my-asset
 ```
 
 Validate complex `--json-input` payloads separately before passing them to a command:

@@ -43,7 +43,8 @@
         ]
     },
     "engines": {
-        "node": ">=22.0"
+        "node": ">=22.0",
+        "npm": ">=11.10.0"
     },
     "overrides": {
         "serialize-javascript": ">=7.0.3",
@@ -52,6 +53,7 @@
         "http-proxy-middleware": "^2.0.10",
         "gray-matter": {
             "js-yaml": "^3.15.0"
-        }
+        },
+        "qs": ">=6.16.0"
     }
 }

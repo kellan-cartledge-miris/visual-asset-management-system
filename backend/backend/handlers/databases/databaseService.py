@@ -4,6 +4,8 @@
 import json
 import base64
 import boto3
+from botocore.config import Config
+from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Attr, Key
 from boto3.dynamodb.types import TypeDeserializer
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -11,7 +13,7 @@ from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.apiRoutes import API_DATABASE, API_DATABASE_BY_ID, API_BUCKETS
 from common.validators import validate
-from common.dynamodb import validate_pagination_info
+from common.dynamodb import validate_pagination_info, to_update_expr
 from handlers.auth import request_to_claims
 from common.auth.apiEvent import normalize_event
 from handlers.authz import CasbinEnforcer
@@ -20,8 +22,9 @@ from models.common import APIGatewayProxyResponseV2, commonHeaders, internal_err
 from models.databases import GetDatabaseResponseModel, GetDatabasesRequestModel, GetDatabasesResponseModel, DeleteDatabaseResponseModel, UpdateDatabaseRequestModel, UpdateDatabaseResponseModel, BucketModel, GetBucketsRequestModel, GetBucketsResponseModel
 
 # Configure AWS clients
-dynamodb = boto3.resource('dynamodb')
-dbClient = boto3.client('dynamodb')
+retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+dynamodb = boto3.resource('dynamodb', config=retry_config)
+dbClient = boto3.client('dynamodb', config=retry_config)
 deserializer = TypeDeserializer()
 logger = safeLogger(service_name="DatabaseService")
 
@@ -37,6 +40,18 @@ except Exception as e:
     logger.exception("Failed resolving resource names")
     raise e
 
+# The database attributes the update API writes. A field is written only when the request supplies a
+# non-None value for it.
+UPDATABLE_DATABASE_FIELDS = (
+    'description',
+    'defaultBucketId',
+    'restrictMetadataOutsideSchemas',
+    'restrictFileUploadsToExtensions',
+)
+
+# The DynamoDB page size the listing scans with when the caller asks for none. validate_pagination_info
+# seeds an absent pageSize from its max-items default, so the listing's own page size is supplied to it.
+BUCKETS_DEFAULT_PAGE_SIZE = 3000
 
 #######################
 # Utility Functions
@@ -250,12 +265,15 @@ def update_database(database_id, update_data, claims_and_roles=None):
         if not database:
             raise VAMSGeneralErrorResponse("Database not found")
         
-        # Check authorization
+        # Check authorization. The empty-token and absent-claims cases deny explicitly rather than
+        # skipping the check: without an authenticated identity there is nothing to evaluate, and
+        # falling through would reach the update_item below unauthorized (backend/CLAUDE.md Rule 4).
         database.update({"object__type": "database"})
-        if claims_and_roles and len(claims_and_roles["tokens"]) > 0:
-            casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            if not casbin_enforcer.enforce(database, "PUT"):
-                raise VAMSGeneralErrorResponse("Access denied")
+        if not claims_and_roles or len(claims_and_roles["tokens"]) == 0:
+            raise VAMSGeneralErrorResponse("Access denied")
+        casbin_enforcer = CasbinEnforcer(claims_and_roles)
+        if not casbin_enforcer.enforce(database, "PUT"):
+            raise VAMSGeneralErrorResponse("Access denied")
         
         # If defaultBucketId is being updated, verify it exists
         if 'defaultBucketId' in update_data and update_data['defaultBucketId'] is not None:
@@ -266,24 +284,32 @@ def update_database(database_id, update_data, claims_and_roles=None):
             if not bucket_response.get('Items') or len(bucket_response['Items']) == 0:
                 raise VAMSGeneralErrorResponse("Bucket ID not found")
         
-        # Update the fields
+        updates = {
+            field: update_data[field]
+            for field in UPDATABLE_DATABASE_FIELDS
+            if update_data.get(field) is not None
+        }
+        if not updates:
+            raise VAMSGeneralErrorResponse("At least one field must be provided for update")
+
+        # Write only the supplied fields, so a concurrent writer's attributes (the recount's assetCount)
+        # are not reverted and the object__type marker set for the Casbin check is never stored. The
+        # condition keeps a database deleted mid-edit from being recreated.
         logger.info(f"Updating database {database_id}")
-        
-        # Update only the provided fields
-        if 'description' in update_data and update_data['description'] is not None:
-            database['description'] = update_data['description']
-        
-        if 'defaultBucketId' in update_data and update_data['defaultBucketId'] is not None:
-            database['defaultBucketId'] = update_data['defaultBucketId']
-        
-        if 'restrictMetadataOutsideSchemas' in update_data and update_data['restrictMetadataOutsideSchemas'] is not None:
-            database['restrictMetadataOutsideSchemas'] = update_data['restrictMetadataOutsideSchemas']
-        
-        if 'restrictFileUploadsToExtensions' in update_data and update_data['restrictFileUploadsToExtensions'] is not None:
-            database['restrictFileUploadsToExtensions'] = update_data['restrictFileUploadsToExtensions']
-        
-        # Save the updated database
-        table.put_item(Item=database)
+        keys_map, values_map, expr = to_update_expr(updates)
+        try:
+            table.update_item(
+                Key={'databaseId': database_id},
+                UpdateExpression=expr,
+                ExpressionAttributeNames=keys_map,
+                ExpressionAttributeValues=values_map,
+                ConditionExpression='attribute_exists(databaseId)'
+            )
+        except ClientError as e:
+            if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+                logger.warning(f"Database {database_id} no longer exists, database record not updated")
+                raise VAMSGeneralErrorResponse("Database not found")
+            raise
         
         # Create response
         from datetime import datetime
@@ -311,7 +337,40 @@ def delete_database(database_id, claims_and_roles=None):
                 statusCode=404
             )
 
-        # Check for active workflows, pipelines, and assets before accessing the table
+        table = dynamodb.Table(db_database)
+
+        db_response = table.get_item(
+            Key={
+                'databaseId': database_id
+            }
+        )
+        database = db_response.get("Item", {})
+
+        if not database:
+            return DeleteDatabaseResponseModel(
+                message="Record not found",
+                statusCode=404
+            )
+
+        # Authorize before the content checks, so a caller denied on the database learns
+        # nothing about what it contains
+        allowed = False
+        database.update({
+            "object__type": "database"
+        })
+        
+        if claims_and_roles and len(claims_and_roles["tokens"]) > 0:
+            casbin_enforcer = CasbinEnforcer(claims_and_roles)
+            if casbin_enforcer.enforce(database, "DELETE"):
+                allowed = True
+
+        if not allowed:
+            return DeleteDatabaseResponseModel(
+                message="Action not allowed",
+                statusCode=403
+            )
+
+        # Check for active workflows, pipelines, and assets
         if check_workflows(database_id):
             return DeleteDatabaseResponseModel(
                 message="Database contains active workflows",
@@ -330,48 +389,17 @@ def delete_database(database_id, claims_and_roles=None):
                 statusCode=400
             )
 
-        # Only create the table reference if we've passed all the checks
-        table = dynamodb.Table(db_database)
-
-        db_response = table.get_item(
-            Key={
-                'databaseId': database_id
-            }
+        logger.info(f"Deleting database: {database_id}")
+        # The Casbin type marker is not part of the stored record
+        database.pop("object__type", None)
+        database['databaseId'] = database_id + "#deleted"
+        table.put_item(Item=database)
+        table.delete_item(Key={'databaseId': database_id})
+        
+        return DeleteDatabaseResponseModel(
+            message="Database deleted",
+            statusCode=200
         )
-        database = db_response.get("Item", {})
-
-        if database:
-            allowed = False
-            # Add Casbin Enforcer to check if the current user has permissions to DELETE the database
-            database.update({
-                "object__type": "database"
-            })
-            
-            if claims_and_roles and len(claims_and_roles["tokens"]) > 0:
-                casbin_enforcer = CasbinEnforcer(claims_and_roles)
-                if casbin_enforcer.enforce(database, "DELETE"):
-                    allowed = True
-
-            if allowed:
-                logger.info(f"Deleting database: {database_id}")
-                database['databaseId'] = database_id + "#deleted"
-                table.put_item(Item=database)
-                table.delete_item(Key={'databaseId': database_id})
-                
-                return DeleteDatabaseResponseModel(
-                    message="Database deleted",
-                    statusCode=200
-                )
-            else:
-                return DeleteDatabaseResponseModel(
-                    message="Action not allowed",
-                    statusCode=403
-                )
-        else:
-            return DeleteDatabaseResponseModel(
-                message="Record not found",
-                statusCode=404
-            )
     except Exception as e:
         logger.exception(f"Error deleting database: {e}")
         raise VAMSGeneralErrorResponse(f"Error deleting database.")
@@ -503,13 +531,26 @@ def delete_database_handler(event, path_parameters, claims_and_roles):
         logger.exception(f"Error in delete_database_handler: {e}")
         return internal_error(event=event)
 
-def get_buckets(event, query_params, claims_and_roles=None):
-    """Get all S3 bucket configurations with pagination"""
+
+def get_buckets(query_params, claims_and_roles=None):
+    """Get all S3 bucket configurations with pagination.
+
+    Authorization is Tier 1 only. `bucket` is not one of the constraint objectTypes, so no
+    per-bucket constraint can be authored and this listing applies no entity-level filter: a role
+    that holds the api route receives every registered bucket. The route grant is therefore the
+    whole gate, and the shipped permission templates and the seeded default role constraints grant
+    it to administrator roles alone. A deployment rewrites the seeded default role constraints, but
+    it does not reconcile constraints authored within it, so a role built from an earlier template
+    keeps its grant until that constraint is re-authored or the template re-imported.
+
+    `claims_and_roles` is accepted for call-shape parity with the other listings in this module;
+    there is no entity-level check for it to run.
+    """
     try:
         # Parse query parameters
         request_model = GetBucketsRequestModel(
             maxItems=int(query_params.get('maxItems', 10000)),
-            pageSize=int(query_params.get('pageSize', 3000)),
+            pageSize=int(query_params.get('pageSize', BUCKETS_DEFAULT_PAGE_SIZE)),
             startingToken=query_params.get('startingToken')
         )
         
@@ -534,15 +575,7 @@ def get_buckets(event, query_params, claims_and_roles=None):
         items = []
         for item in response.get('Items', []):
             deserialized_document = {k: deserializer.deserialize(v) for k, v in item.items()}
-            
-            # # Add object type for authorization
-            # deserialized_document.update({
-            #     "object__type": "bucket"
-            # })
-            
-            # if claims_and_roles and len(claims_and_roles["tokens"]) > 0:
-            #     casbin_enforcer = CasbinEnforcer(claims_and_roles)
-            #     if casbin_enforcer.enforce(deserialized_document, "GET"):
+
             # Convert to model
             bucket_model = BucketModel(
                 bucketId=deserialized_document.get('bucketId'),
@@ -561,6 +594,10 @@ def get_buckets(event, query_params, claims_and_roles=None):
             result.NextToken = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
         
         return result
+    except VAMSGeneralErrorResponse:
+        # A malformed pagination token carries its own caller-facing message; the catch-all below
+        # would replace it with a generic one.
+        raise
     except Exception as e:
         logger.exception(f"Error getting buckets: {e}")
         raise VAMSGeneralErrorResponse(f"Error getting buckets.")
@@ -569,8 +606,10 @@ def get_buckets_handler(event, query_parameters, claims_and_roles):
     """Handler for GET /buckets"""
     try:
         # Validate pagination parameters
+        query_parameters = query_parameters if query_parameters is not None else {}
+        query_parameters.setdefault('pageSize', BUCKETS_DEFAULT_PAGE_SIZE)
         validate_pagination_info(query_parameters)
-        
+
         # Get buckets
         buckets = get_buckets(query_parameters, claims_and_roles)
         return success(body=buckets.dict())

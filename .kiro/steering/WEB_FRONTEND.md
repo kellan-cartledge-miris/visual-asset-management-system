@@ -1,6 +1,6 @@
 # VAMS Web Frontend Steering (Kiro)
 
-This is the Kiro front-end steering document for the VAMS (Visual Asset Management System) web application (`web/`). It mirrors the canonical `web/CLAUDE.md` content for the Kiro coding agent. When front-end standards change, update both this file and `web/CLAUDE.md`.
+This is the Kiro front-end steering document for the VAMS (Visual Asset Management System) web application (`web/`). It mirrors the canonical `web/CLAUDE.md` content for the Kiro coding agent, and its viewer plugin sections are also the Kiro counterpart for `web/src/visualizerPlugin/CLAUDE.md`. When front-end standards change, update both this file and the matching `CLAUDE.md`.
 
 ---
 
@@ -56,23 +56,32 @@ web/
     features/orchestration/ # Pipeline/workflow/execution management (Tailwind + Radix)
       api/                  # Services + TanStack Query hooks + qk key factory
                             #   pipelines.ts workflows.ts executions.ts assets.ts databases.ts
-                            #   client.ts queries.ts
+                            #   client.ts queries.ts triggerCache.ts
       permissions/useAllowedRoutes.ts  # Tier-1 permission gating
       components/           # Cloudscape-free primitives (DataTable, StatusBadge, ContextMenu,
-                            #   Stepper, Breadcrumb, SearchableSelect, ConfigEditor, ...)
+                            #   Stepper, Breadcrumb, SearchableSelect, ConfigEditor, Dialog (+DialogFooter),
+                            #   Callout, VirtualList (fixed-row-height windowed list), ...)
                             #   ToastProvider.tsx — notifications for the whole module
       pipelines/            # PipelinesPage.tsx, PipelineForm.tsx (wizard; execution-type fields
                             #   live under executionConfig.sqs / executionConfig.eventBridge),
                             #   TemplateEditor.tsx TemplateForm.tsx TagSchemaBuilder.tsx
                             #   TemplateOverridesEditor.tsx pipelineValidation.ts
+                            #   templateBodyValidation.ts (tag placeholder quoting + the json
+                            #   body shape check mirrored from the backend)
       workflows/            # WorkflowsPage.tsx WorkflowBuilder.tsx PipelineOrderList.tsx
-                            #   TriggersEditor.tsx WorkflowSystemConfigFields.tsx DagPreview.tsx
+                            #   TriggersEditor.tsx (live) TriggerDraftsEditor.tsx (create) over
+                            #   TriggerList.tsx TriggerForm.tsx triggerDraft.ts triggerStyles.ts
+                            #   WorkflowSystemConfigFields.tsx DagPreview.tsx
                             #   WorkflowValidationPanel.tsx workflowValidation.ts
       executions/           # ExecutionsBoard.tsx ExecutionDetailPage.tsx ExecutionLogViewer.tsx
                             #   ExecutionQuickView.tsx ExecutionRowActions.tsx
                             #   ExecuteWorkflowButton.tsx ExecuteWorkflowModal.tsx logSearch.ts
-      wizard/               # ExecuteWizard.tsx + WizardPipelineStage/WizardInputStage/
-                            #   WizardReviewStage, InputFileSelector, MetadataSourceSelector,
+                            #   SubProcessesSection.tsx StageTimeline.tsx (details Sub-processes + stages)
+      wizard/               # ExecuteWizard.tsx (ExecuteWizardBody) + WizardRail, RequirementsStrip,
+                            #   WorkflowPicker, WizardPipelineStage/WizardInputStage/WizardReviewStage,
+                            #   railSteps.ts reviewBlockers.ts InputFileSelector, MetadataSourceSelector,
+                            #   SelectedInputFilesList + BulkFilePicker + selectedInputFiles.ts (the
+                            #   multi-file selection: windowed list, bulk/paste picker, dedupe, 1000 cap),
                             #   RestrictionSummary, resolveRestrictions.ts resolveTemplate.ts
       types.ts reservedTagKeys.ts
 
@@ -110,10 +119,13 @@ web/
           hooks/
       common/               # ErrorBoundary, LoadingSpinner, StatusMessage
       createupdate/         # CreateDatabase.tsx, UpdateAsset.tsx + form definitions
-      filemanager/          # File tree and file operations
+      filemanager/          # File tree and file operations; EnhancedFileManager lazy-loads the
+                            #   orchestration execution quick view for a file's "View execution" link
         components/         # FileDetailsPanel, AutomationActions (lazy-loads the execute modal),
                             #   tree views, preview thumbnails, splitters
-        utils/              # automationSelection.ts maps a selection to workflow input files
+        utils/              # automationSelection.ts maps a selection to workflow input files;
+                            #   executionLinks.ts maps workflow-execution provenance to the execution
+                            #   detail route and the Tier-1 route the link is gated on
       form/
       list/
       loading/              # Loading screens and spinners
@@ -208,6 +220,7 @@ web/
       sessionManager.ts     # Idle/expiry session handling
       fileExtensionValidation.ts
       fileHandleCompat.ts
+      maplibreWorker.ts     # setWorkerUrl() for maplibre-gl's bundled worker; import for side effect before a map mounts
 
     styles/                 # Global styles
       theme.css             # CSS custom properties for dark/light theming
@@ -252,7 +265,7 @@ The existing app uses AWS Cloudscape Design System. The orchestration module (`s
 
 -   **Existing pages** (Assets, Databases, Search, etc.) continue to use Cloudscape.
 -   **`features/orchestration/**`\*\* (Pipelines, Workflows, Executions pages + wizard) uses Tailwind + Radix.
--   **Never leak Tailwind's preflight** into Cloudscape pages (preflight is disabled; Tailwind is scoped to the `src/features/orchestration/**` content glob).
+-   **Never leak Tailwind's preflight** into Cloudscape pages (preflight is disabled; Tailwind's content glob covers `src/features/orchestration/**` plus the nine orchestration route shells in `src/pages/`, each named individually rather than as `src/pages/**`). A new orchestration shell must be added to that list in `web/tailwind.config.js` or its Tailwind classes are not emitted; a Cloudscape page must **not** be added, because scanning it is what makes the collision below possible.
 -   **Tailwind's UTILITY CSS is global, even though its content glob is not.** The glob decides which files Tailwind _scans_ for class names; every utility it emits lands in one stylesheet loaded on every page, so a Cloudscape page using a class named like a Tailwind utility picks up Tailwind's rule. **Never name a plain layout div after a Tailwind utility** — `container`, `hidden`, `block`, `flex`, `grid`, `fixed` (examples verified in the built CSS; the emitted set depends on what the orchestration module uses). Outside the orchestration module, use a VAMS-defined class or no class at all.
 
 Do NOT introduce Material UI, Ant Design, Chakra, or any other UI library outside this boundary.
@@ -304,7 +317,12 @@ When adding a new API endpoint, add the function to the appropriate service file
 
 ### Rule 4: npm Only
 
+**Package manager:** npm 11.10.0+. Node 22.x ships with npm 10.9.x, which does **not** honor `min-release-age` (introduced in npm 11.10.0). Always pin npm before installing:
+
 ```bash
+# Pin npm to the required version first
+npm install -g npm@11.19.1
+
 # CORRECT
 npm install
 npm run start
@@ -344,6 +362,84 @@ import MyNewPage from "./pages/MyNewPage";
 -   All source files are TypeScript (`.ts`/`.tsx`) -- new files MUST also be TypeScript
 -   Only `src/__mocks__/*.js` files remain as `.js` (Jest CommonJS requirement)
 -   Use `any` sparingly but pragmatically (the codebase uses it extensively)
+
+### Rule 9: Regenerate the CSP Hashes After Touching an Inline Script in `index.html`
+
+`index.html` contains inline `<script>` blocks (the `__publicField` polyfill, the `SharedArrayBuffer`
+probe, and the pre-render theme application). The CDK Content-Security-Policy allows them by
+**SHA-256 hash**, not by `'unsafe-inline'`, so an injected inline script is still blocked.
+
+A CSP hash covers the **exact text content** of the element -- every byte between the opening and
+closing tag, indentation included. Adding a line, renaming a variable, or letting Prettier reindent
+the block invalidates its hash. The browser then silently refuses to run that script and the app
+breaks at runtime, with nothing failing at build time.
+
+**Any edit to an inline `<script>` block in `web/index.html` -- including a reformat -- requires
+regenerating the hashes and updating the CDK constant in the same change:**
+
+```bash
+# 1. Build, so the hashes are taken from the HTML that is actually served
+cd web && npm run build
+
+# 2. Emit the TypeScript constant
+node scripts/cspInlineScriptHashes.js --ts
+
+# 3. Paste the output over INDEX_HTML_INLINE_SCRIPT_HASHES in
+#    infra/lib/helper/cspInlineScriptHashes.ts
+
+# 4. Confirm the drift guard passes
+cd ../infra && npx jest test/web/cspInlineScriptHashes.test.ts
+```
+
+Run the generator with no `--ts` for a human-readable listing of each block and its hash.
+
+| File                                           | Role                                                                     |
+| ---------------------------------------------- | ------------------------------------------------------------------------ |
+| `web/index.html`                               | The inline scripts being hashed                                          |
+| `web/scripts/cspInlineScriptHashes.js`         | Generator -- hashes every inline block (skips any with `src`)            |
+| `infra/lib/helper/cspInlineScriptHashes.ts`    | The generated constant. **Generated -- do not hand-edit**                |
+| `infra/lib/helper/security.ts`                 | `generateContentSecurityPolicy()` spreads the constant into `script-src` |
+| `infra/test/web/cspInlineScriptHashes.test.ts` | Recomputes from `index.html` and fails on drift                          |
+
+**A hash and `'unsafe-inline'` are mutually exclusive.** A CSP may allow inline script by hash **or**
+by the `'unsafe-inline'` keyword, never both -- when a hash source is present browsers ignore
+`'unsafe-inline'` entirely. The two are not additive, so `'unsafe-inline'` cannot be left in as a
+safety net.
+
+Because of that, `generateContentSecurityPolicy()` adds `'unsafe-inline'` in **no** configuration,
+the Physna add-on included. The add-on's viewer frames Physna's own HTTPS origin rather than a
+`blob:` document, so that page loads under Physna's own CSP and its inline scripts are outside this
+policy's reach; the keyword would also be ignored on a VAMS page, because the hash sources are
+present. The add-on contributes `frame-src` and `connect-src` origins and no `script-src` source.
+
+If a **new** viewer plugin needs inline script, hash that document's own inline blocks rather than
+moving `'unsafe-inline'` into `script-src` -- a hash source makes the keyword inert, so adding it
+would relax nothing while removing the protection the hashes give every other page.
+
+Adding a `<script src="...">` (external) needs no hash; it is matched by host-source instead. It may
+still need its origin added to `script-src`/`connect-src`.
+
+### Rule 10: A maplibre Map Needs the Worker Setup Module and react-map-gl >= 8.1.2
+
+`maplibre-gl` 6 is ESM-only and ships its web worker as a separate module (`dist/maplibre-gl-worker.mjs`,
+which imports `maplibre-gl-shared.mjs`). By default it resolves that worker as a sibling of the main
+module's `import.meta.url`, a file the Vite bundle never emits, so the worker request fails and no map
+renders. `src/common/utils/maplibreWorker.ts` registers a bundled copy through `setWorkerUrl()` using
+Vite's `?worker&url` import (plain `?url` copies the worker without its shared chunk and breaks on its
+first import). **Every module that imports `react-map-gl/maplibre` or a runtime value from `maplibre-gl`
+imports that setup module for its side effect** before the map mounts.
+
+maplibre-gl 6 also removed the public `map.transform` property; `react-map-gl` versions before 8.1.2 read
+`transform.center` on every camera update and crash each map into the page error boundary. Keep
+`react-map-gl` at 8.1.2 or later while `maplibre-gl` is on 6.x.
+
+Both rules are held in place by `src/common/utils/maplibreWorker.test.ts`, which scans the source tree
+for map consumers and checks the installed versions.
+
+Under Jest neither import resolves: `maplibre-gl` has no `require` export condition and `?worker&url` is
+Vite-only, so `jest.config.js` maps both to `src/__mocks__/emptyModule.js`, as it already does for the
+Monaco worker imports. A suite that reaches a map component through a page import therefore loads a
+no-op setup module rather than failing to resolve.
 
 ---
 
@@ -499,9 +595,12 @@ const header = await getDualAuthorizationHeader();
 ```typescript
 // User is stored in localStorage as JSON
 const user = JSON.parse(localStorage.getItem("user"));
-// Email is stored separately
-const email = localStorage.getItem("email");
 ```
+
+There is no separate `email` key. Nothing writes one and nothing reads one — the signed-in user's
+identity comes from the `user` entry above. Storing it a second time under its own key put a user
+identifier in `localStorage` for no consumer, and wrote the literal string `"undefined"` when there
+was no signed-in user.
 
 ---
 
@@ -705,24 +804,24 @@ The 3D/media viewer system uses a plugin-based architecture:
 | `potree-viewer`                    | Potree Viewer                  | 3d       | .e57, .las, .laz, .ply                                                                                                                   | enabled                                             |
 | `image-viewer`                     | Image Viewer                   | media    | .png, .jpg, .jpeg, .svg, .gif                                                                                                            | enabled                                             |
 | `html-viewer`                      | HTML Viewer                    | document | .html                                                                                                                                    | enabled                                             |
-| `video-viewer`                     | Video Player                   | media    | .mp4, .webm, .mov, .avi, .mkv, .flv, .wmv, .m4v                                                                                          | enabled                                             |
+| `video-viewer`                     | Video Player                   | media    | .mp4, .webm, .mov, .mkv, .m4v                                                                                                            | enabled                                             |
 | `audio-viewer`                     | Audio Player                   | media    | .mp3, .wav, .ogg, .aac, .flac, .m4a                                                                                                      | enabled                                             |
-| `columnar-viewer`                  | Columnar Data Viewer           | data     | .rds, .fcs, .csv                                                                                                                         | enabled                                             |
+| `columnar-viewer`                  | Columnar Data Viewer           | data     | .fcs, .csv                                                                                                                               | enabled                                             |
 | `pdf-viewer`                       | PDF Viewer                     | document | .pdf                                                                                                                                     | enabled                                             |
 | `cesium-viewer`                    | Cesium 3D Tileset              | 3d       | .json                                                                                                                                    | enabled                                             |
-| `text-viewer`                      | Text Viewer                    | document | .txt, .json, .xml, .yaml, .md, .py, .js, .ts, .parquet (plaintext only), etc.                                                            | enabled                                             |
+| `text-viewer`                      | Text Viewer                    | document | .txt, .json, .xml, .html, .yaml, .md, .py, .js, .ts, .sql, etc.                                                                          | enabled                                             |
 | `gaussian-splat-viewer-babylonjs`  | BabylonJS Gaussian Splat       | 3d       | .ply, .spz                                                                                                                               | enabled                                             |
 | `supersplat-viewer`                | SuperSplat Editor (PlayCanvas) | 3d       | .lcc, .ply, .sog, .splat                                                                                                                 | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
 | `gaussian-splat-viewer-playcanvas` | PlayCanvas Gaussian Splat      | 3d       | .ply, .sog                                                                                                                               | enabled                                             |
 | `vntana-viewer`                    | VNTANA 3D Viewer               | 3d       | .glb                                                                                                                                     | **disabled** (licensed)                             |
 | `veerum-viewer`                    | VEERUM 3D Viewer               | 3d       | .e57, .las, .laz, .ply, .json                                                                                                            | **disabled** (licensed)                             |
-| `needletools-usd-viewer`           | Needle USD Viewer              | 3d       | .usd, .usda, .usdc, .usdz                                                                                                                | enabled                                             |
-| `threejs-viewer`                   | Three.js Viewer                | 3d       | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .brep                                                         | enabled                                             |
+| `needletools-usd-viewer`           | Needle USD Viewer              | 3d       | .usd, .usda, .usdc, .usdz                                                                                                                | enabled (requires ALLOWUNSAFEEVAL)                  |
+| `threejs-viewer`                   | Three.js Viewer                | 3d       | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .igs, .brep                                                   | enabled                                             |
 | `physna-viewer`                    | Physna Viewer                  | 3d       | .3ds, .asm, .catpart, .catproduct, .glb, .iam, .iges, .igs, .ipt, .jt, .obj, .par, .prt, .sldasm, .sldprt, .stl, .step, .stp, .x_b, .x_t | enabled (requires PHYSNA_ADDON)                     |
 | `thatopenwebifc-viewer`            | ThatOpen IFC BIM Viewer        | 3d       | .ifc, .ifczip                                                                                                                            | enabled (requires ALLOWUNSAFEEVAL)                  |
 | `preview-viewer`                   | Preview Viewer                 | preview  | \* (wildcard)                                                                                                                            | enabled                                             |
 
-> Note: `supersplat-viewer` is a **iframe-embedded** viewer — it self-hosts a from-source SuperSplat build under `public/viewers/supersplat/` and loads files via a presigned URL `?load=` parameter.
+> Note: `supersplat-viewer` is a **iframe-embedded** viewer — it self-hosts a from-source SuperSplat build under `public/viewers/supersplat/` and loads files via a presigned URL `?load=` parameter (see 8.5 before copying that pattern). The build is WebGPU-only (no WebGL2 fallback). Under the production CSP its `<base>` element, inline script, and embedded `pc-icon` data-URI font are blocked without breaking the editor.
 
 ### 8.3 Adding a New Viewer Plugin
 
@@ -747,20 +846,22 @@ import React, { useEffect, useRef } from "react";
 import { ViewerPluginProps } from "../../core/types";
 
 const MyViewerComponent: React.FC<ViewerPluginProps> = ({
-    asset,
-    files,
+    assetId,
     databaseId,
-    onFullscreen,
-    viewerConfig,
+    assetKey,
+    versionId,
+    assetVersionId,
+    viewerMode,
+    customParameters,
 }) => {
     const containerRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
-        // Initialize viewer
+        // Initialize viewer for assetKey at assetVersionId when set, else at versionId
         return () => {
             // Cleanup on unmount
         };
-    }, []);
+    }, [assetId, databaseId, assetKey, versionId, assetVersionId]);
 
     return <div ref={containerRef} style={{ width: "100%", height: "100%" }} />;
 };
@@ -768,12 +869,14 @@ const MyViewerComponent: React.FC<ViewerPluginProps> = ({
 export default MyViewerComponent;
 ```
 
+`ViewerPluginProps` (`src/visualizerPlugin/core/types.ts`) is the whole contract a viewer receives. A single file arrives as `assetKey` and `versionId`; a multi-file selection arrives as `multiFileKeys`, with each file's owning asset and database in `multiFiles` (build each file's URL from its own entry, falling back to the top-level `assetId` and `databaseId`). `assetVersionId`, when set, is the asset version to read files from. `viewerMode` is the host's display mode (`"collapse"` when the file page or the file-viewer modal opens, then `"wide"` or `"fullscreen"`); the host's footer controls request a change through `onViewerModeChange`, and the host decides the resulting mode. `customParameters` is the entry's `customParameters` object from `viewerConfig.json`. When `ViewerPluginProps` changes, update the interface listings in `src/visualizerPlugin/README.md` and `documentation/docusaurus-site/docs/developer/viewer-plugins.md`.
+
 **Step 3:** Add to `manifest.ts`:
 
 ```typescript
 export const VIEWER_COMPONENTS = {
     // ... existing entries
-    "./viewers/MyViewerPlugin/MyViewerComponent": "./MyViewerPlugin/MyViewerComponent",
+    "./viewers/MyViewerPlugin/MyViewerComponent": "MyViewerPlugin/MyViewerComponent",
 };
 ```
 
@@ -811,13 +914,57 @@ export const VIEWER_COMPONENTS = {
 | `supportedExtensions`        | string[]          | File extensions this viewer handles                  |
 | `supportsMultiFile`          | boolean           | Can handle multiple files at once                    |
 | `canFullscreen`              | boolean           | Supports fullscreen mode                             |
-| `priority`                   | number            | Lower = preferred when multiple viewers match        |
+| `priority`                   | number            | Lower = listed first when multiple viewers match     |
 | `loadStrategy`               | "lazy" \| "eager" | When to load the component                           |
 | `category`                   | string            | Viewer category (3d, media, document, data, preview) |
 | `featuresEnabledRestriction` | string[]?         | Required feature flags                               |
 | `isPreviewViewer`            | boolean?          | True for the preview-only viewer                     |
 | `enabled`                    | boolean           | Whether the plugin is active                         |
 | `customParameters`           | object?           | Viewer-specific configuration                        |
+
+### 8.5 A Framed Viewer Must Not Receive a Signed URL in the Query String
+
+A presigned Amazon S3 URL is a bearer credential: anyone holding it can read the object until it
+expires. Putting one in an iframe's **query string** writes it into CloudFront or ALB access logs, which
+are not treated as containing credentials and stay in the web app access-logs bucket until its
+lifecycle rule removes them (`WebAppAccessLogsBucket` in `staticWebBuilder-nestedStack.ts`): the bucket
+is versioned, so a log object expires after 30 days and its noncurrent version is deleted 30 days later.
+
+`supersplat-viewer` currently does this (`SuperSplatViewerComponent.tsx` builds
+`?load=<presigned>&filename=…`) — one object, expiring, but logged. **Do not copy the pattern into a new
+viewer.** Use the **URL fragment** instead: browsers do not transmit a fragment, so nothing reaches the
+server or its logs.
+
+For a vendored build that reads `location.search` and cannot be changed at the call site, inject a shim
+into its `index.html` from that viewer's `customInstalls/` script which moves the fragment into the query
+string with `history.replaceState` before the bundle runs. Write the shim as a file beside `index.html`
+and load it with a classic `<script src>` placed ahead of the bundle's: the CSP's `script-src` admits an
+inline script only by the hashes of `web/index.html`'s own blocks (`cspInlineScriptHashes.ts`), so an
+inline shim in a viewer page never runs. Patch the HTML entry rather than the minified bundle: the bundle
+is regenerated from a pinned upstream tag on every `npm install`, so a regex against its internals breaks
+on the next version bump while injected elements do not.
+
+The shimmed page also needs `<meta name="referrer" content="no-referrer">` at the top of its `<head>`,
+ahead of the shim and of every `<script>` and `<link>`. `replaceState` issues no request, but it
+changes the document URL, and the browser builds the `Referer` of every later request the page makes
+from that URL. The CloudFront distribution sends `Referrer-Policy: strict-origin-when-cross-origin`
+(`cloudfront-s3-website-construct.ts`) and the ALB sends none, so the browser default applies, which is
+the same policy. Both put the full URL, query string included, in the `Referer` of a same-origin request,
+and a vendored viewer keeps fetching its own files after it starts (SuperSplat loads `static/locales/`
+and `static/lib/webp/webp.wasm` from `/viewers/supersplat/`). Without the `<meta>`, each of those requests
+carries the presigned URL into the web access logs: CloudFront standard logs record the `Referer`, and on
+the ALB path so do the web bucket's S3 server access logs. A `<meta>` referrer policy replaces the
+response header's for the requests the document makes after the element is parsed, which is why it goes
+at the top, and it is the only control that covers both distributions, because the ALB cannot add a
+`Referrer-Policy` header. The iframe's `referrerPolicy` attribute, which `HTMLViewerComponent.tsx` sets,
+is not a substitute: it governs only the request that loads the framed page, not the requests that page
+makes. A viewer that reads `location.hash` itself needs none of this, because a `Referer` never carries
+the fragment.
+
+Note the encoding interaction if you move an existing viewer: SuperSplat decodes `load` **twice**, so its
+value is deliberately double-encoded (see the comment in `SuperSplatViewerComponent.tsx`). Moving the
+same string to a fragment must preserve that double encoding byte-for-byte, or the presigned signature
+breaks and S3 returns 400.
 
 ---
 
@@ -966,7 +1113,7 @@ When adding new styles, use CSS custom properties from `theme.css` or Cloudscape
 
 -   Test files are colocated with source: `MyComponent.test.tsx` next to `MyComponent.tsx`
 -   OR in `__tests__/` directories
--   Coverage is sparse (~10 test files total) -- adding tests is welcome
+-   `npx jest --listTests | wc -l` (from `web/`) prints the current test-file count -- adding tests is welcome
 
 ### 11.3 Test Template
 
@@ -1020,7 +1167,7 @@ describe("MyComponent", () => {
 
 ### 11.4 Jest Configuration Notes
 
--   Axios requires special mapping: `"^axios$": "axios/dist/axios.js"`
+-   Axios requires special mapping: `"^axios$": "axios/dist/browser/axios.cjs"` (the browser CommonJS build; `dist/axios.js` is not in axios's `exports` map, so Jest cannot resolve it)
 -   Cloudscape components need custom transformers (configured in `jest.config.js`)
 -   `transformIgnorePatterns` must stay a SINGLE pattern: a file matching ANY ignore pattern is excluded from transformation, so every ESM package that needs transforming (Cloudscape, d3-\*, internmap, react-leaflet, axios) must be exempted in one combined negative lookahead
 -   Jest 30 removed deprecated matcher aliases (`toBeCalled`, `toBeCalledWith`, ...) — use the `toHaveBeenCalled*` forms
@@ -1195,7 +1342,7 @@ Match the comment density and style already present in the file. Describe **what
 | `react-router-dom`              | ^6.0.0               | Client-side routing         |
 | `styled-components`             | ^5.3.3               | CSS-in-JS (legacy usage)    |
 | `three`                         | (via customInstalls) | 3D rendering engine         |
-| `maplibre-gl`                   | ^5.8.0               | Map rendering               |
+| `maplibre-gl`                   | ^6.9.0               | Map rendering               |
 | `react-pdf`                     | ^10.1.0              | PDF viewing                 |
 | `papaparse`                     | ^5.4.1               | CSV parsing                 |
 | `dompurify`                     | ^3.4.11              | HTML sanitization           |
@@ -1340,12 +1487,6 @@ Development targets: Latest Chrome, Firefox, Safari.
 
 ### 18.6 React Version
 
-This project uses **React 17**, not React 18. Do NOT use:
+This project uses **React 18.3**. The entry point (`index.tsx`) mounts with `createRoot` from `react-dom/client`.
 
--   `createRoot` (React 18)
--   `useId` (React 18)
--   `useSyncExternalStore` (React 18)
--   `useTransition` / `useDeferredValue` (React 18)
--   Automatic batching assumptions (React 18)
-
-The app uses `ReactDOM.render` (React 17 style).
+React 18 APIs (`useId`, `useSyncExternalStore`, `useTransition`, `useDeferredValue`, automatic batching) are allowed in the orchestration module (`features/orchestration/`) but should be used sparingly elsewhere to stay consistent with the existing codebase conventions.

@@ -112,14 +112,15 @@ export const getVamsVersion = async (): Promise<string | null> => {
 };
 
 export const webRoutes = async (body: any) => {
-    console.log("webRoutes");
     try {
         const response = await apiClient.post("auth/routes", {
             body: {
                 routes: body.routes,
             },
         });
-        console.log("response", response);
+        // The response body carries the caller's `email` alongside their permitted routes, so it is
+        // not logged. Route gating runs on every authenticated session, which put the signed-in
+        // user's address and their full permission profile in the console of every session.
         return response;
     } catch (error: any) {
         console.log(error);
@@ -167,7 +168,10 @@ export const fetchConstraintPermissionObjects = async () => {
 /**
  * Fetch the API routes (and methods) the current user is authorized to call.
  * Cached by the auth flow (see FedAuth/Auth.tsx) and periodically renewed.
- * @returns {Promise<[boolean, any]>}
+ * On failure a third element carries the HTTP status when the request reached the
+ * backend, so a caller can tell an absent endpoint (404) from a call that failed and
+ * gate accordingly instead of treating both as "unknown".
+ * @returns {Promise<[boolean, any, number|undefined]>}
  */
 export const fetchAllowedApiRoutes = async () => {
     try {
@@ -178,7 +182,7 @@ export const fetchAllowedApiRoutes = async () => {
         return [true, response];
     } catch (error: any) {
         console.log(error);
-        return [false, error?.message];
+        return [false, error?.message, error?.status];
     }
 };
 
@@ -997,12 +1001,14 @@ export const deleteCognitoUser = async ({ userId }: any) => {
  * Resets a Cognito user's password
  * @param {Object} params - Parameters object
  * @param {string} params.userId - User ID
+ * @param {boolean} params.confirmReset - Confirmation of the reset; the endpoint rejects the
+ *     request unless this is true
  * @returns {Promise<[boolean, string]>}
  */
-export const resetCognitoUserPassword = async ({ userId }: any) => {
+export const resetCognitoUserPassword = async ({ userId, confirmReset }: any) => {
     try {
         const response = await apiClient.post(`user/cognito/${userId}/resetPassword`, {
-            body: { userId },
+            body: { userId, confirmReset: confirmReset === true },
         });
 
         if (response.message) {
@@ -1889,19 +1895,19 @@ export const createAssetLinkMetadata = async ({
             return [false, "Missing required parameters"];
         }
 
+        // The collection route takes a bulk body; this wraps the single item in it.
         const response = await apiClient.post(`asset-links/${assetLinkId}/metadata`, {
             body: {
-                metadataKey,
-                metadataValue,
-                metadataValueType,
+                metadata: [{ metadataKey, metadataValue, metadataValueType }],
             },
         });
 
         if (response.message) {
             if (
-                response.message.indexOf &&
-                (response.message.indexOf("error") !== -1 ||
-                    response.message.indexOf("Error") !== -1)
+                response.success === false ||
+                (response.message.indexOf &&
+                    (response.message.indexOf("error") !== -1 ||
+                        response.message.indexOf("Error") !== -1))
             ) {
                 console.log("Create asset link metadata error:", response.message);
                 return [false, response.message];
@@ -1937,18 +1943,20 @@ export const updateAssetLinkMetadata = async ({
             return [false, "Missing required parameters"];
         }
 
-        const response = await apiClient.put(`asset-links/${assetLinkId}/metadata/${metadataKey}`, {
+        // The metadata key travels in the bulk body, not the path: the collection route
+        // carries all four verbs and there is no per-key sub-path.
+        const response = await apiClient.put(`asset-links/${assetLinkId}/metadata`, {
             body: {
-                metadataValue,
-                metadataValueType,
+                metadata: [{ metadataKey, metadataValue, metadataValueType }],
             },
         });
 
         if (response.message) {
             if (
-                response.message.indexOf &&
-                (response.message.indexOf("error") !== -1 ||
-                    response.message.indexOf("Error") !== -1)
+                response.success === false ||
+                (response.message.indexOf &&
+                    (response.message.indexOf("error") !== -1 ||
+                        response.message.indexOf("Error") !== -1))
             ) {
                 console.log("Update asset link metadata error:", response.message);
                 return [false, response.message];
@@ -1977,16 +1985,19 @@ export const deleteAssetLinkMetadata = async ({ assetLinkId, metadataKey }: any)
             return [false, "Missing required parameters"];
         }
 
-        const response = await apiClient.del(
-            `asset-links/${assetLinkId}/metadata/${metadataKey}`,
-            {}
-        );
+        // Keys to delete travel in the body, not the path, on the same collection route.
+        const response = await apiClient.del(`asset-links/${assetLinkId}/metadata`, {
+            body: {
+                metadataKeys: [metadataKey],
+            },
+        });
 
         if (response.message) {
             if (
-                response.message.indexOf &&
-                (response.message.indexOf("error") !== -1 ||
-                    response.message.indexOf("Error") !== -1)
+                response.success === false ||
+                (response.message.indexOf &&
+                    (response.message.indexOf("error") !== -1 ||
+                        response.message.indexOf("Error") !== -1))
             ) {
                 console.log("Delete asset link metadata error:", response.message);
                 return [false, response.message];
@@ -2175,6 +2186,7 @@ export const fetchAssetS3FilesPage = async ({
     startingToken = null,
     pageSize = null,
     assetVersionId = null,
+    prefix = null,
 }: any) => {
     try {
         if (!databaseId || !assetId) {
@@ -2204,11 +2216,19 @@ export const fetchAssetS3FilesPage = async ({
             queryParams.assetVersionId = assetVersionId;
         }
 
+        // Server-side folder scope: only keys under this asset-relative prefix are listed.
+        if (prefix) {
+            queryParams.prefix = prefix;
+        }
+
         const response = await apiClient.get(`database/${databaseId}/assets/${assetId}/listFiles`, {
             queryStringParameters: queryParams,
         });
 
         console.log(
+            // Console logging only: a % specifier in the interpolated value can at most garble this
+            // one log line; nothing is executed, stored or returned from it.
+            // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             `fetchAssetS3FilesPage (basic=${basic}, page=${startingToken ? "next" : "first"}):`,
             response?.items?.length || 0,
             "items"
@@ -2758,9 +2778,24 @@ export const deleteDatabaseMetadata = async ({ databaseId, metadataKeys }: any) 
     }
 };
 
-export const fetchApiKeys = async () => {
+/**
+ * Fetches API keys across all users (paged)
+ * @param {Object} params - Parameters object
+ * @param {number} params.pageSize - Keys per page
+ * @param {string} params.startingToken - Continuation token from a prior page
+ * @returns {Promise<any>}
+ */
+export const fetchApiKeys = async ({ pageSize, startingToken }: any = {}) => {
     try {
-        const response = await apiClient.get("auth/api-keys");
+        const queryStringParameters: any = {};
+        if (pageSize) {
+            queryStringParameters.pageSize = `${pageSize}`;
+        }
+        if (startingToken) {
+            queryStringParameters.startingToken = startingToken;
+        }
+
+        const response = await apiClient.get("auth/api-keys", { queryStringParameters });
         if (response !== false && response !== undefined) {
             if (
                 response.message &&
@@ -2848,9 +2883,24 @@ export const deleteApiKey = async ({ apiKeyId }: any) => {
 // These call the /auth/user/api-keys routes: scoped server-side to the
 // requesting user's own keys, with mandatory expiration.
 
-export const fetchUserApiKeys = async () => {
+/**
+ * Fetches the calling user's own API keys (paged)
+ * @param {Object} params - Parameters object
+ * @param {number} params.pageSize - Keys per page
+ * @param {string} params.startingToken - Continuation token from a prior page
+ * @returns {Promise<any>}
+ */
+export const fetchUserApiKeys = async ({ pageSize, startingToken }: any = {}) => {
     try {
-        const response = await apiClient.get("auth/user/api-keys");
+        const queryStringParameters: any = {};
+        if (pageSize) {
+            queryStringParameters.pageSize = `${pageSize}`;
+        }
+        if (startingToken) {
+            queryStringParameters.startingToken = startingToken;
+        }
+
+        const response = await apiClient.get("auth/user/api-keys", { queryStringParameters });
         if (response !== false && response !== undefined) {
             if (
                 response.message &&

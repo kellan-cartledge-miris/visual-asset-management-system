@@ -47,32 +47,40 @@ vamscli search assets [OPTIONS]
 
 ### Filter syntax
 
-The `--filters` option accepts two formats. A query string is converted to an OpenSearch `query_string` clause; a JSON array is passed through as OpenSearch filter clauses.
+The `--filters` option accepts two formats. A query string is converted to an OpenSearch `query_string` clause. A JSON array is sent as it is, and each item must be a `query_string` clause; the API rejects any other clause type, such as `term` or `range`, with a 400 error.
+
+Identifier fields such as `str_databaseid` are analyzed text: the index splits an id on hyphens and ignores case, so a quoted id on the field itself also matches similar ids (`smoke-db` matches `smoke-db-2` and `Smoke-DB`). Filter an identifier on its `.keyword` subfield, which matches the exact, case-sensitive value.
 
 **Query string format (recommended):**
 
 ```bash
---filters 'str_databaseid:"my-db"'
---filters 'str_databaseid:"my-db" AND str_assettype:"3d-model"'
+--filters 'str_databaseid.keyword:"my-db"'
+--filters 'str_databaseid.keyword:"my-db" AND str_assettype:"3d-model"'
 --filters 'list_tags:("training" OR "simulation")'
 --filters 'str_assetname:model*'
---filters '(str_assettype:"3d-model" OR str_assettype:"texture") AND str_databaseid:"my-db"'
+--filters '(str_assettype:"3d-model" OR str_assettype:"texture") AND str_databaseid.keyword:"my-db"'
 ```
 
-**JSON array format (for advanced OpenSearch clauses):**
+**JSON array format (one `query_string` clause per item; the items are combined with AND):**
 
 ```bash
---filters '[{"term": {"str_assettype": "3d-model"}}]'
---filters '[{"range": {"num_version": {"gte": 1, "lte": 5}}}]'
---filters '[{"term": {"str_assettype": "3d-model"}}, {"range": {"num_version": {"gte": 1}}}]'
+--filters '[{"query_string": {"query": "str_assettype.keyword:\"3d-model\""}}]'
+--filters '[{"query_string": {"query": "bool_has_asset_children:true"}}]'
+--filters '[{"query_string": {"query": "str_assettype.keyword:\"3d-model\""}}, {"query_string": {"query": "bool_isdistributable:true"}}]'
 ```
 
 ### Metadata search
 
 `--metadata-query` searches indexed metadata fields. The query supports `AND`/`OR` operators within the metadata group, and the group as a whole is combined with `--query` and `--filters` using `AND` logic. `--metadata-mode` controls whether the query matches metadata field names (`key`), field values (`value`), or both (`both`, the default).
 
+The key may be given bare, with the `MD_` / `AB_` entity prefix, or with a type prefix; all three address the same field. See [Search field reference](#search-field-reference).
+
 ```bash
-# Exact field:value match
+# Exact field:value match, key given bare
+vamscli search assets --metadata-query "product:Training"
+
+# The same field, addressed with the entity prefix and with a type prefix
+vamscli search assets --metadata-query "MD_product:Training"
 vamscli search assets --metadata-query "MD_str_product:Training"
 
 # Wildcard in the metadata value
@@ -126,7 +134,7 @@ vamscli search assets -q "tower" --metadata-query "MD_str_status:active" --geo-p
 
 ```bash
 vamscli search assets -q "training model"
-vamscli search assets --filters 'str_databaseid:"my-db" AND str_assettype:"3d-model"'
+vamscli search assets --filters 'str_databaseid.keyword:"my-db" AND str_assettype:"3d-model"'
 vamscli search assets -q "model" --sort-field "str_assetname" --sort-desc
 vamscli search assets -q "model" --from 20 --size 50
 vamscli search assets -q "model" --explain-results --json-output
@@ -149,13 +157,13 @@ The options table is identical to [`search assets`](#search-assets), with two di
 
 ```bash
 vamscli search files --filters 'str_fileext:"gltf"'
-vamscli search files --filters 'str_fileext:"png" AND str_databaseid:"my-database"'
+vamscli search files --filters 'str_fileext:"png" AND str_databaseid.keyword:"my-database"'
 vamscli search files --filters 'str_key:*texture* AND str_fileext:"png"'
 vamscli search files --filters 'list_tags:("ui" OR "interface")'
 
-# File size (bytes) requires the JSON array format
-vamscli search files --filters '[{"range": {"num_filesize": {"lte": 1048576}}}]'
-vamscli search files --filters '[{"range": {"num_filesize": {"gte": 1048576, "lte": 10485760}}}]'
+# File size range in bytes, as JSON array items
+vamscli search files --filters '[{"query_string": {"query": "num_filesize:[0 TO 1048576]"}}]'
+vamscli search files --filters '[{"query_string": {"query": "num_filesize:[1048576 TO 10485760]"}}]'
 
 # Metadata and geospatial
 vamscli search files --metadata-query "MD_str_format:GLTF2.0"
@@ -195,7 +203,7 @@ vamscli search simple [OPTIONS]
 | `--geo-geojson`      | PATH    | No       | Path to a GeoJSON file (Geometry, Feature, or FeatureCollection)           |
 | `--geo-relation`     | CHOICE  | No       | Spatial relation: `intersects` (default), `within`, `contains`, `disjoint` |
 | `--from`             | INTEGER | No       | Pagination start offset (default: 0)                                       |
-| `--size`             | INTEGER | No       | Results per page (default: 100, max: 1000)                                 |
+| `--size`             | INTEGER | No       | Results per page (default: 100, max: 2000)                                 |
 | `--output-format`    | CHOICE  | No       | `table` (default), `json`, or `csv`                                        |
 | `--json-output`      | Flag    | No       | Output the raw API response as JSON                                        |
 
@@ -256,14 +264,21 @@ Field names follow type-prefixed conventions. Use `search mapping` to enumerate 
 | Prefix            | Type      | Example fields                                                                                                 |
 | ----------------- | --------- | -------------------------------------------------------------------------------------------------------------- |
 | `str_*`           | String    | `str_assetname`, `str_description`, `str_databaseid`, `str_assettype`, `str_assetid`, `str_key`, `str_fileext` |
-| `num_*`           | Numeric   | `num_version`, `num_filesize`                                                                                  |
+| `num_*`           | Numeric   | `num_filesize` (file index)                                                                                    |
 | `date_*`          | Date      | `date_lastmodified`                                                                                            |
 | `bool_*`          | Boolean   | `bool_isdistributable`, `bool_archived`                                                                        |
 | `list_*`          | List      | `list_tags`                                                                                                    |
-| `MD_*`            | Metadata  | `MD_str_<name>`, `MD_num_<name>`, `MD_date_<name>`, `MD_bool_<name>`                                           |
+| `MD_`             | Metadata  | One `flat_object` holding every metadata key, on both indexes                                                  |
+| `AB_`             | Attribute | One `flat_object` holding every file attribute, file index only                                                |
 | `geo_MD_location` | geo_shape | Derived from `location` or `latitude` / `longitude` / `altitude` metadata                                      |
 
-Metadata stored as `{"product": "Training"}` is indexed as `MD_str_product`. Asset-only fields such as `str_description` and `bool_isdistributable` live in the asset index; file-only fields such as `str_key`, `str_fileext`, and `num_filesize` live in the file index.
+Metadata is the one exception to the type-prefix convention. All of a record's metadata is stored in a single field named `MD_`, with the keys carried verbatim, so metadata `{"product": "Training"}` is stored as `"MD_": {"product": "Training"}` and `search mapping` lists `MD_` rather than a field per key. File attributes work the same way in `AB_`.
+
+`--metadata-query` accepts the key in any of three spellings, all resolving to the same field: the bare key (`product:Training`), the key with its entity prefix (`MD_product:Training`, or `AB_colour:red` for a file attribute), or with a type prefix (`MD_str_product:Training`). Do not write `MD_.product` — the dot belongs to the internal query path, not to a submitted key, and a query using it matches nothing.
+
+Asset-only fields such as `str_description` and `bool_isdistributable` live in the asset index; file-only fields such as `str_key`, `str_fileext`, and `num_filesize` live in the file index.
+
+Every document carries `str_rectype`, which is `asset` or `file`. It appears as a column in the table and CSV output, and distinguishes the two record types in a `search simple` result that covers both indexes.
 
 ## Related Pages
 

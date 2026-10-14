@@ -44,16 +44,16 @@ interface BucketOption {
     isDefault?: boolean;
 }
 
-// when a string is all lower case, return null, otherwise return the string "All lower case letters only"
+// null when the name holds only letters, digits, - and _; otherwise the character-set message
 function validateDatabaseNameLowercase(name: string) {
-    return name.match(/^[-_a-zA-Z0-9]{3,63}$/) !== null
+    return name.match(/^[-_a-zA-Z0-9]*$/) !== null
         ? null
         : "No special characters or spaces except - and _";
 }
 
-// when a string is between 4 and 64 characters, return null, otherwise return the string "Between 3 and 64 characters"
+// null when the name is 4-63 characters long; otherwise the length message
 function validateDatabaseNameLength(name: string) {
-    return name.length >= 4 && name.length <= 64 ? null : "Between 3 and 64 characters";
+    return name.length >= 4 && name.length <= 63 ? null : "Between 4 and 63 characters";
 }
 
 // databaseId cannot be named "GLOBAL" (case insenstive)
@@ -76,7 +76,10 @@ function validateDatabaseName(name: string) {
 function validateDatabaseDescriptionLength(description: string) {
     const min = 4,
         max = 256;
-    return description.length >= min && description.length <= max
+    // The API removes surrounding whitespace before applying its own length constraint, so
+    // the trimmed length is what decides whether a value is accepted.
+    const trimmed = description.trim();
+    return trimmed.length >= min && trimmed.length <= max
         ? null
         : `Between ${min} and ${max} characters`;
 }
@@ -247,6 +250,10 @@ export default function CreateDatabase({
                                         }
                                     })
                                     .catch((err) => {
+                                        // Console logging only: a % specifier in the interpolated
+                                        // value can at most garble this one log line; nothing is
+                                        // executed, stored or returned from it.
+                                        // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
                                         console.log(`${createOrUpdate} database error`, err);
                                         const msg =
                                             err.message ||
@@ -284,7 +291,7 @@ export default function CreateDatabase({
                         <FormField
                             label={`${Synonyms.Database} Name`}
                             errorText={validateDatabaseName(formState.databaseId)}
-                            constraintText="Required. No special chars or spaces except - and 4 and max 64"
+                            constraintText="Required. 4-63 characters: letters, numbers, - and _ only."
                         >
                             <Input
                                 value={formState.databaseId}

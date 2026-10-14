@@ -23,7 +23,7 @@ While AWS Lambda functions run on Python 3.12, local development and testing use
 
 ## Frontend Setup
 
-The VAMS frontend is a React 17 single-page application built with Vite.
+The VAMS frontend is a React 18 single-page application built with Vite.
 
 ### Install Dependencies
 
@@ -116,9 +116,9 @@ pip install -r requirements-dev.txt
 | Package                 | Version | Purpose                   |
 | ----------------------- | ------- | ------------------------- |
 | `aws-lambda-powertools` | 2.36.0  | Logger, Parser, BaseModel |
-| `boto3`                 | 1.34.84 | AWS SDK                   |
+| `boto3`                 | 1.43.45 | AWS SDK                   |
 | `pydantic`              | 1.10.13 | Data validation (v1 only) |
-| `casbin`                | 1.33.0  | ABAC/RBAC authorization   |
+| `casbin`                | 1.36.0  | ABAC/RBAC authorization   |
 | `moto`                  | 5.1.0   | AWS service mocking (dev) |
 | `pytest`                | 9.0.3   | Test framework (dev)      |
 
@@ -128,7 +128,7 @@ VAMS uses Pydantic **v1** (1.10.x). Never install or use Pydantic v2 APIs such a
 
 ### Managing Python Dependencies
 
-The backend and Lambda layer projects manage their Python dependencies with [Poetry](https://python-poetry.org/). Wherever a `pyproject.toml` sits next to a `requirements*.txt`, the requirements file is a generated artifact exported from `poetry.lock` — the Lambda layer bundling process installs from the exported file, so it must always match the lock. Poetry-managed projects are `backend/`, `backend/lambdaLayers/base/`, `backend/lambdaLayers/authorizer/`, and `backendPipelines/multi/rapidPipelineEKS/lambdaLayer/`.
+The backend and Lambda layer projects manage their Python dependencies with [Poetry](https://python-poetry.org/). Wherever a `pyproject.toml` sits next to a `requirements*.txt`, the requirements file is a generated artifact exported from `poetry.lock`, so it must always match the lock. The backend test environment installs `backend/requirements-dev.txt` directly. The Lambda layer bundling process does not read the committed file: it runs `poetry export` inside the build container, installs that export, and writes it over the layer directory's `requirements.txt`, so a layer ships what its `poetry.lock` resolves to. Poetry-managed projects are `backend/`, `backend/lambdaLayers/base/`, `backend/lambdaLayers/authorizer/`, and `backendPipelines/multi/rapidPipelineEKS/lambdaLayer/`.
 
 To change a dependency version, edit the constraint in `pyproject.toml` (only needed when the existing constraint excludes the target version), re-resolve the lock, and re-export the requirements file:
 
@@ -145,6 +145,8 @@ poetry export --with dev --without-hashes -f requirements.txt -o requirements-de
 ```
 
 Commit `pyproject.toml`, `poetry.lock`, and the exported requirements file(s) together. Do not edit a Poetry-exported requirements file directly — the next export silently overwrites manual changes. Requirements files without a side-by-side `pyproject.toml` (for example, `backendPipelines/multi/rapidPipelineEKS/lambda/requirements.txt`) are hand-maintained pip files and are edited directly.
+
+`backend/` and `backend/lambdaLayers/base/` lock every package they share at the same version, because the handler Lambdas load their packages from the base layer while the backend tests install `backend/requirements-dev.txt`. Update a shared package in both projects together; `backend/tests/test_base_layer_dependency_parity.py` fails when the two locks differ.
 
 ## Infrastructure Setup
 
@@ -180,6 +182,10 @@ npx cdk deploy --all --require-approval never
 
 :::info[Docker Required]
 Docker must be running before deployment. CDK builds container images for Lambda layers and processing pipeline containers during synthesis.
+:::
+
+:::warning[Wait for every stack to complete before using the deployment]
+The solution is usable only after `cdk deploy` reports success for every stack. Resource names -- Amazon DynamoDB tables, the auxiliary and artefacts Amazon S3 buckets, and the audit log groups -- are published to AWS Systems Manager Parameter Store by the `ResourceNamesBuilder` nested stack, which AWS CloudFormation creates after the storage stack. The Amazon S3 bucket-sync functions live in that storage stack and resolve their names from those parameters, so on a first deployment into an account an invocation that arrives before the parameters exist fails at initialization. Its Amazon SQS message returns to the queue and is retried, and the event is processed once the remaining stacks finish.
 :::
 
 ### Configuration
@@ -256,14 +262,18 @@ Do not run lint or prettier commands from individual subdirectories. The root-le
 | `USE_LOCAL_MOCKS`      | Enable local mock mode (`true`)     |
 | `COGNITO_AUTH_ENABLED` | Enable/disable Cognito auth locally |
 
+:::note
+`USE_LOCAL_MOCKS` applies to the local mock server only. A deployed AWS Lambda function resolves its resource names from AWS Systems Manager Parameter Store and therefore carries `VAMS_RESOURCE_PARAM_PREFIX` in its environment. The auth routes handler ignores `USE_LOCAL_MOCKS` whenever that variable is set, records the combination as an error in its log, and evaluates every submitted web route against the caller's permissions.
+:::
+
 ### Infrastructure
 
-| Variable                         | Description                                  |
-| -------------------------------- | -------------------------------------------- |
-| `AWS_REGION`                     | Target deployment region                     |
-| `STACK_NAME`                     | CloudFormation stack name override           |
-| `AWS_USE_FIPS_ENDPOINT`          | Enable FIPS endpoints (`true`)               |
-| `BUILDX_NO_DEFAULT_ATTESTATIONS` | Workaround for Docker/CDK build issues (`1`) |
+| Variable                         | Description                                                                                                             |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `AWS_REGION`                     | Target deployment region                                                                                                |
+| `STACK_NAME`                     | CloudFormation stack name override                                                                                      |
+| `AWS_USE_FIPS_ENDPOINT`          | Turns on `app.useFips` at synthesis and points the deploying shell's AWS CLI and AWS CDK CLI at FIPS endpoints (`true`) |
+| `BUILDX_NO_DEFAULT_ATTESTATIONS` | Workaround for Docker/CDK build issues (`1`)                                                                            |
 
 ## Docker Requirements
 

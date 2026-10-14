@@ -155,20 +155,28 @@ test.describe("the create form offers only in-scope tag types", () => {
         const createTag = page.getByRole("button", { name: /^Create Tag$/i }).first();
         test.skip(!(await createTag.count()), "Tag creation not permitted for this user");
 
-        // Read the names the page lists. Both tables render their header row immediately while the data
-        // is still loading, so waiting on "a row is visible" captures column titles only. Every DATA
-        // row carries a scope badge, which is the signal that the listing has actually arrived.
+        // Read the names the page lists. The page holds TWO tables — tags, then tag types — and each
+        // renders its header row immediately while its own data is still loading. "Some row has a scope
+        // badge" is satisfied by the tags table alone, so the tag-type names can still be missing from
+        // the captured text, which then reads as the form offering something out of scope when really
+        // the second listing had not arrived. Require a data row in BOTH tables.
         let listed = "";
         const deadline = Date.now() + 25000;
         while (Date.now() < deadline) {
-            const rows = await page.getByRole("row").allInnerTexts();
-            if (rows.some((r) => /🌐|🏢/.test(r))) {
-                listed = rows.join("\n");
-                break;
+            const tables = await page.getByRole("table").all();
+            if (tables.length >= 2) {
+                const perTable = await Promise.all(tables.map((t) => t.innerText()));
+                if (perTable.every((text) => /🌐|🏢/.test(text))) {
+                    listed = perTable.join("\n");
+                    break;
+                }
             }
             await page.waitForTimeout(500);
         }
-        test.skip(!listed, "No tags or tag types in the GLOBAL scope of this environment");
+        test.skip(
+            !listed,
+            "This environment has no tags or no tag types in the GLOBAL scope, so the two listings cannot be compared"
+        );
 
         await createTag.click();
         const dialog = page.getByRole("dialog");
@@ -240,8 +248,18 @@ test.describe("switching scope replaces the listing", () => {
 
         // ...and the new scope actually loaded. Without this, an empty list would satisfy the
         // assertion above for the wrong reason. A database with no tags of its own is a legitimate
-        // state, so this is a skip rather than a failure.
-        const ownRows = page.getByText("🏢");
+        // state, so this is a skip rather than a failure. Only rendered badges count (the page also
+        // holds hidden ones), and the skip is decided once both tables have loaded: rows, or both
+        // empty states.
+        const ownRows = page.getByText("🏢").filter({ visible: true });
+        const bothEmpty = async () =>
+            (await page.getByText("No tags to display.").isVisible()) &&
+            (await page.getByText("No tag types to display.").isVisible());
+        await expect
+            .poll(async () => (await ownRows.count()) > 0 || (await bothEmpty()), {
+                timeout: 20000,
+            })
+            .toBe(true);
         test.skip(
             (await ownRows.count()) === 0,
             `${databaseName} has no tags or tag types of its own to prove the refetch`

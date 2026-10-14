@@ -40,6 +40,7 @@ import loginBgImageSrc from "../resources/img/login_bg.png";
 import logoDarkImageSrc from "../../logo_dark.png";
 
 import LoadingScreen from "../components/loading/LoadingScreen";
+import { ErrorBoundary } from "../components/common/ErrorBoundary";
 import { Alert } from "@cloudscape-design/components";
 import styles from "./loginbox.module.css";
 import "@aws-amplify/ui-react/styles.css";
@@ -59,6 +60,7 @@ import { useThemeSettings } from "../hooks/useThemeSettings";
 import { TopNavigation } from "@cloudscape-design/components";
 import logoWhite from "../../logo_white.png";
 import { ensureApiStage } from "../utils/apiEndpoint";
+import { idpButtonLabel } from "./idpLabel";
 
 /**
  * Additional configuration needed to use federated identities
@@ -68,6 +70,10 @@ export interface AmplifyConfigFederatedIdentityProps {
      * The name of the federated identity provider.
      */
     customFederatedIdentityProviderName: string;
+    /**
+     * Display name for the identity provider (shown on login button)
+     */
+    idpDisplayName?: string;
     /**
      * The cognito auth domain
      */
@@ -248,6 +254,10 @@ function configureAmplify(config: Config, setAmpInit: (x: boolean) => void) {
 
 type AuthProps = { children?: React.ReactNode };
 
+/** Bounded retry for the secure-config fetch that carries the feature switches. */
+const SECURE_CONFIG_MAX_ATTEMPTS = 3;
+const SECURE_CONFIG_RETRY_DELAY_MILLIS = 1500;
+
 //Cognito components
 const CenteredBox: React.FC<PropsWithChildren<{}>> = ({ children }) => {
     return (
@@ -269,9 +279,14 @@ const cognitoAuthenticatorComponents = {
 interface CognitoFederatedLoginProps {
     onLogin: () => void;
     logoSrc?: string;
+    idpDisplayName?: string;
 }
 
-const FedLoginBox: React.FC<CognitoFederatedLoginProps> = ({ onLogin, logoSrc }) => {
+const FedLoginBox: React.FC<CognitoFederatedLoginProps> = ({
+    onLogin,
+    logoSrc,
+    idpDisplayName,
+}) => {
     const { tokens } = useTheme();
 
     return (
@@ -290,7 +305,7 @@ const FedLoginBox: React.FC<CognitoFederatedLoginProps> = ({ onLogin, logoSrc })
                         onClick={onLogin}
                         data-testid="federated-login-button"
                     >
-                        Login with Federated Identity Provider
+                        Login with {idpButtonLabel(idpDisplayName)}
                     </button>
                 </div>
             </div>
@@ -418,10 +433,19 @@ const Auth: React.FC<AuthProps> = (props) => {
         () => localStorage.getItem(SESSION_EXPIRED_KEY) === "true"
     );
 
+    // Always the latest config, for async callbacks that must merge over current
+    // state rather than the value captured when they started.
+    const configRef = useRef(config);
+    configRef.current = config;
+
     // Tracks whether secure-config has been fetched for the current login
     // session, so feature switches are refetched on every re-login instead of
     // being cached forever in localStorage.
     const secureConfigFetchedRef = useRef(false);
+
+    // Attempt number for the secure-config fetch. Held in state, not a ref, so a
+    // failed attempt actually schedules another effect run.
+    const [secureConfigAttempt, setSecureConfigAttempt] = useState(0);
 
     // Tracks whether amplify-config has been re-fetched for this page load, so the
     // runtime Amplify/OAuth configuration is refreshed from the backend on every
@@ -498,11 +522,13 @@ const Auth: React.FC<AuthProps> = (props) => {
                         !fetchedConfig._configError &&
                         fetchedConfig.api
                     ) {
-                        // Merge fresh amplify-config over the cached config so
-                        // secure-config-derived fields (featuresEnabled, etc.) are
-                        // preserved. Only re-render/reconfigure if something changed.
-                        const merged = { ...config, ...fetchedConfig };
-                        if (JSON.stringify(merged) !== JSON.stringify(config)) {
+                        // Merge fresh amplify-config over the CURRENT config, not the one
+                        // captured when this fetch started, so secure-config-derived fields
+                        // (featuresEnabled, etc.) that landed meanwhile are preserved. Only
+                        // re-render/reconfigure if something changed.
+                        const latest = configRef.current;
+                        const merged = { ...latest, ...fetchedConfig };
+                        if (JSON.stringify(merged) !== JSON.stringify(latest)) {
                             appCache.setItem("config", merged);
                             setConfig(merged);
                         }
@@ -693,32 +719,43 @@ const Auth: React.FC<AuthProps> = (props) => {
             secureConfigFetchedRef.current = true;
             getSecureConfig()
                 .then((value) => {
-                    // Normalize to a string array so the many config.featuresEnabled.includes(...)
-                    // consumers cannot crash if the API returns a
-                    // non-array (e.g. a boolean or comma-separated string).
-                    config.featuresEnabled = normalizeFeaturesEnabled(value.featuresEnabled);
-                    config.locationServiceApiUrl = value.locationServiceApiUrl;
-                    config.webDeployedUrl = value.webDeployedUrl || "";
-                    // Only overwrite the cached viewer key when the backend supplied
-                    // a value. The /secure-config response omits mirisViewerKey when
-                    // MIRIS_VIEWER_KEY env is unset, so an unconditional assignment
-                    // would clobber a valid key with `undefined` and re-fire the
-                    // self-heal refetch every render if MIRIS_STREAMING is in
-                    // featuresEnabled but the env var is missing (degenerate
-                    // deployment inconsistency — gated by getConfig() in normal
-                    // flow, but worth defending against here).
-                    if (value.mirisViewerKey) {
-                        config.mirisViewerKey = value.mirisViewerKey;
-                    }
-                    appCache.setItem("config", config);
-                    // nosemgrep: calling-set-state-on-current-state
-                    setConfig(config);
+                    // A new object, not a mutation of the current one: re-setting the same
+                    // reference makes React bail out of the render, leaving every mounted
+                    // consumer of featuresEnabled on its pre-fetch reading.
+                    // featuresEnabled is normalized to a string array so the many
+                    // config.featuresEnabled.includes(...) consumers cannot crash if the API
+                    // returns a non-array (e.g. a boolean or comma-separated string).
+                    // mirisViewerKey is only overwritten when the backend supplied a value:
+                    // /secure-config omits it when MIRIS_VIEWER_KEY is unset, and an
+                    // unconditional assignment would clobber a valid cached key with undefined.
+                    const withSecureConfig = {
+                        ...configRef.current,
+                        featuresEnabled: normalizeFeaturesEnabled(value.featuresEnabled),
+                        locationServiceApiUrl: value.locationServiceApiUrl,
+                        webDeployedUrl: value.webDeployedUrl || "",
+                        ...(value.mirisViewerKey ? { mirisViewerKey: value.mirisViewerKey } : {}),
+                    };
+                    appCache.setItem("config", withSecureConfig);
+                    setConfig(withSecureConfig);
                 })
                 .catch((error: Error) => {
                     console.error("Error getting secure-config:", error.message);
 
-                    // Allow a retry on the next effect run if the fetch failed
+                    // Retry: a single transient failure would otherwise hold the app on its
+                    // no-features configuration for the whole session. Clearing the ref alone
+                    // is not enough — nothing in the dependency list would change, so the
+                    // attempt counter (state) is what schedules the next run.
                     secureConfigFetchedRef.current = false;
+                    if (secureConfigAttempt + 1 < SECURE_CONFIG_MAX_ATTEMPTS) {
+                        const retry = () => setSecureConfigAttempt((attempt) => attempt + 1);
+                        setTimeout(retry, SECURE_CONFIG_RETRY_DELAY_MILLIS);
+                    } else {
+                        console.error(
+                            "secure-config could not be loaded after",
+                            SECURE_CONFIG_MAX_ATTEMPTS,
+                            "attempts; feature-gated functionality stays disabled until the page is reloaded"
+                        );
+                    }
                 });
             console.log("Fetched secure config");
         }
@@ -743,7 +780,7 @@ const Auth: React.FC<AuthProps> = (props) => {
             console.log("Pinged LoginProfile API");
         }
         if (isLoggedIn) setIsLoading(false); // if logged in, can deem that the loading is complete
-    }, [config, isLoggedIn]);
+    }, [config, isLoggedIn, secureConfigAttempt]);
 
     //Both Effect
     //Once logged in, fetch and cache the API routes the user is authorized to
@@ -1017,7 +1054,8 @@ const Auth: React.FC<AuthProps> = (props) => {
                                         variant="primary"
                                         onClick={() => handleExternalOauthSignIn()}
                                     >
-                                        Log in with SSO
+                                        Log in with{" "}
+                                        {idpButtonLabel(config.externalOAuthIdpDisplayName)}
                                     </Button>
                                     {config.externalOAuthIdpScopeMfa &&
                                     config.externalOAuthIdpScopeMfa !== "undefined" &&
@@ -1138,6 +1176,7 @@ const Auth: React.FC<AuthProps> = (props) => {
                         ) : null}
                         <FedLoginBox
                             logoSrc={loginLogoSrc}
+                            idpDisplayName={config.cognitoFederatedConfig?.idpDisplayName}
                             onLogin={() =>
                                 signInWithRedirect({
                                     provider: {
@@ -1160,7 +1199,11 @@ const Auth: React.FC<AuthProps> = (props) => {
         return (
             <>
                 <GlobalHeader authorizationHeader={false} />
-                <Suspense fallback={<LoadingScreen />}>{props.children}</Suspense>
+                {/* Guards the shell itself (top navigation, router, footer). routes.tsx has a
+                    second boundary around each page, so a page error stays inside the layout. */}
+                <ErrorBoundary componentName="The application">
+                    <Suspense fallback={<LoadingScreen />}>{props.children}</Suspense>
+                </ErrorBoundary>
             </>
         );
     }

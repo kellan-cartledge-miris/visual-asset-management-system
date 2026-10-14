@@ -2,9 +2,9 @@ name: Build and Scan for Vulnerabilities
 
 on:
     push:
-        branches: [main]
+        branches: [main, "release/**"]
     pull_request:
-        branches: [main]
+        branches: [main, "release/**"]
 
 # Least-privilege token: the build job only checks out code and uploads artifacts
 permissions:
@@ -15,19 +15,36 @@ jobs:
         runs-on: ubuntu-latest
         steps:
             - name: Checkout repo
+              # Major-version tag of a GitHub-maintained action, the repo's current pinning
+              # convention; commit-SHA pinning is tracked as a 2.6.1 follow-up.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
               uses: actions/checkout@v4
               with:
                   path: ./vams
 
             - name: Setup Python Version
+              # Major-version tag of a GitHub-maintained action, the repo's current pinning
+              # convention; commit-SHA pinning is tracked as a 2.6.1 follow-up.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
               uses: actions/setup-python@v4
               with:
                   python-version: 3.12.7
 
             - name: Setup node for the whole package
+              # Major-version tag of a GitHub-maintained action, the repo's current pinning
+              # convention; commit-SHA pinning is tracked as a 2.6.1 follow-up.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
               uses: actions/setup-node@v4
+              with:
+                  node-version: "22"
+
+            - name: Pin npm version
+              run: npm install -g npm@11.19.1
 
             - name: Clone automated security helper
+              # Major-version tag of a GitHub-maintained action, the repo's current pinning
+              # convention; commit-SHA pinning is tracked as a 2.6.1 follow-up.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
               uses: actions/checkout@v4
               with:
                   repository: aws-samples/automated-security-helper
@@ -39,10 +56,28 @@ jobs:
                   export PATH=$PATH:./
                   ash --source-dir ../vams || true
             - name: Upload Report
+              # Major-version tag of a GitHub-maintained action, the repo's current pinning
+              # convention; commit-SHA pinning is tracked as a 2.6.1 follow-up.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
               uses: actions/upload-artifact@v4
               with:
                   name: automated-security-helper-report
                   path: ash/aggregated_results.txt
+
+            # `npm install` below tolerates a package-lock.json that has drifted from its
+            # package.json and silently rewrites it, so drift only surfaces for consumers who run
+            # `npm ci`. This dry run is the same check `npm ci` performs and fails the build instead.
+            # npm 11.7 and later validate the optional native bindings for every platform; earlier
+            # releases (including the npm bundled with Node 22) check only the runner's own, so the
+            # check runs under a pinned npm 11 rather than the runner's bundled version.
+            - name: Check package-lock.json files are in sync
+              working-directory: vams
+              run: |
+                  for dir in . web infra documentation/docusaurus-site; do
+                      echo "::group::npm ci --dry-run ($dir)"
+                      (cd "$dir" && npx -y -p npm@11 npm ci --dry-run --ignore-scripts --no-audit --no-fund)
+                      echo "::endgroup::"
+                  done
 
             - name: Npm install root directory
               working-directory: vams
@@ -57,6 +92,9 @@ jobs:
               run: npm run prettier-check
 
             - name: Install Poetry Action
+              # Third-party action on its major-version tag, the repo's current pinning convention;
+              # commit-SHA pinning is tracked as a 2.6.1 follow-up.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
               uses: snok/install-poetry@v1
               with:
                   version: 1.8.2
@@ -76,6 +114,9 @@ jobs:
                   pytest --cov=vamscli --cov-report=xml --cov-report=term -v --tb=short > pytest_output.txt 2>&1
 
             - name: Upload VamsCLI test results
+              # Major-version tag of a GitHub-maintained action, the repo's current pinning
+              # convention; commit-SHA pinning is tracked as a 2.6.1 follow-up.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
               uses: actions/upload-artifact@v4
               with:
                   name: vamscli-test-results
@@ -92,11 +133,14 @@ jobs:
             #   working-directory: vams/web
             #   run: npm audit
 
-            # - name: Web test
-            #   working-directory: vams/web
-            #   env:
-            #       CI: "true"
-            #   run: npm run test
+            # The web suite runs on a PUSH to main or a release branch, not on every pull request.
+            # Scoped to pushes so PR feedback stays fast
+            - name: Web test
+              if: github.event_name == 'push'
+              working-directory: vams/web
+              env:
+                  CI: "true"
+              run: npx jest --ci
             #####
 
             - name: Web build
@@ -111,6 +155,10 @@ jobs:
 
             - name: Infra tests
               working-directory: vams/infra
+              # jest.config.js keys its worker bound on CI: two workers here, where a forced worker exit
+              # was first reported. GitHub sets CI=true by default; stated so the coupling is visible.
+              env:
+                  CI: "true"
               run: npm test
 
             # - name: Npm audit infrastructure directory
@@ -131,17 +179,59 @@ jobs:
               run: npm run lint
 
             - name: Scan VAMS WAF Cloudformation template
+              # Third-party action referenced by branch, as its own README documents; accepted for
+              # the 2.6.1 gate per release policy and flagged for commit-SHA pinning follow-up.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
               uses: stelligent/cfn_nag@master
               with:
                   input_path: vams/infra/cdk.out/vams-waf-prod-us-east-1.template.json
 
             - name: Scan VAMS Cloudformation template
+              # Third-party action referenced by branch, as its own README documents; accepted for
+              # the 2.6.1 gate per release policy and flagged for commit-SHA pinning follow-up.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
               uses: stelligent/cfn_nag@master
               with:
                   input_path: vams/infra/cdk.out/vams-core-prod-us-east-1.template.json
 
             #####
-            #- name: run checks
-            #  working-directory: vams/backend
-            #  run: make all
+            # The backend suite runs on a PUSH to main or a release branch.
+            #
+            # `pytest` directly rather than `make all`: that target chains install + flake8 + mypy +
+            # coverage, and its sibling `test` target invokes `ptw` — pytest-WATCH, which never exits and
+            # would hang a runner. Running the suite is the property being restored here; adding lint and
+            # type-check in the same step would make an unrelated mypy finding read as a test regression.
+            #
+            # `backendPipelines` stays out deliberately. Those suites must be invoked one directory per
+            # process: 12 test-module basenames are duplicated across pipeline `lambda/tests/` dirs.
+            # Adding them needs a matrix over ~30 directories, which is a separate change.
+            # The backend requires Python >= 3.13 (backend/pyproject.toml: requires-python = ">=3.13,<4"),
+            # and EVERY line of requirements-dev.txt carries a `; python_version >= "3.13"` marker
+            # because it is exported from a lock resolved under that constraint. Under the job's 3.12.7
+            # interpreter every marker evaluates FALSE, so `pip install -r requirements-dev.txt` installs
+            # nothing, exits 0, and pytest then fails at collection — a green install followed by an
+            # inexplicable failure.
+            #
+            # Switched here rather than job-wide: these are the LAST steps in the job, so nothing after
+            # them can be affected, and the earlier VamsCLI/ash/synth steps keep the interpreter they
+            # already pass on. (VamsCLI declares >= 3.12, so it would tolerate 3.13 too — but changing
+            # what currently passes is not part of restoring the backend suite.)
+            - name: Setup Python for the backend suite
+              if: github.event_name == 'push'
+              # Major-version tag of a GitHub-maintained action, the repo's current pinning
+              # convention; commit-SHA pinning is tracked as a 2.6.1 follow-up.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/setup-python@v4
+              with:
+                  python-version: 3.13
+
+            - name: Install backend dependencies
+              if: github.event_name == 'push'
+              working-directory: vams/backend
+              run: pip install -r requirements-dev.txt
+
+            - name: Run backend pytest tests
+              if: github.event_name == 'push'
+              working-directory: vams/backend
+              run: pytest -q --tb=short
             #####

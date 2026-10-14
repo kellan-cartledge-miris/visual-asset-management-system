@@ -261,24 +261,32 @@ These interface endpoints are always created when VPC endpoints are enabled:
 | Amazon EventBridge        | `EVENTBRIDGE`     | Orchestration bus access (`events`). In-VPC Lambdas publish and consume events on the workflow orchestration bus — file-upload trigger dispatch and pipeline sub-process registration.         |
 | Amazon SNS                | `SNS`             | Event notifications                                                                                                                                                                            |
 | Amazon SQS                | `SQS`             | Queue operations                                                                                                                                                                               |
+| AWS Secrets Manager       | `SECRETS_MANAGER` | Secret retrieval. Used by add-on Lambda functions that hold third-party credentials and by the pipeline container execution roles that inject access tokens into AWS Batch jobs.               |
 
 :::info[Execute-API VPC endpoint]
 The execute-api interface VPC endpoint (`com.amazonaws.{region}.execute-api`) is created only for a `PRIVATE` REST API — that is, when `endpointType="PRIVATE"` and `useGlobalVpc.addVpcEndpoints` is `true`. A `PRIVATE` endpoint is reachable **only** through it (or through an operator-supplied endpoint via `optionalExternalPrivateApigVPCEId`). A `REGIONAL` endpoint is publicly addressable and does **not** route through any execute-api VPC endpoint, even when a VPC and its endpoints are enabled.
+:::
+
+:::info[AWS Secrets Manager VPC endpoint]
+The AWS Secrets Manager interface VPC endpoint (`com.amazonaws.{region}.secretsmanager`) is part of the common endpoint set: it is created for every deployment with `useGlobalVpc.addVpcEndpoints = true`, independently of which add-ons and pipelines are enabled. Because it is created with `privateDnsEnabled: true`, it carries **every** in-VPC AWS Secrets Manager call, including the AWS Batch pipeline task execution roles that read a third-party access token from a secret. Only the standard endpoint is created; VAMS Lambda functions and task execution roles resolve the default regional AWS Secrets Manager endpoint rather than the `secretsmanager-fips` variant, so no FIPS endpoint is created when `useFips = true`.
+:::
+
+:::warning[The Physna Sync add-on requires VPC egress]
+The Physna Sync add-on (`app.addons.usePhysnaSync.enabled`) calls the Physna software as a service API and its authorization token endpoint over the public internet. The AWS Secrets Manager endpoint covers the add-on's credential retrieval, but there is no VPC endpoint for a third-party service, so the add-on's Lambda functions need an outbound internet path. With `useGlobalVpc.useForAllLambdas = true` those functions run in the isolated subnets, which have no egress, and every Physna API call fails. Enable the add-on only in a VPC that provides egress to the Physna endpoints — for example, an imported VPC (`optionalExternalVpcId`) whose `optionalExternalIsolatedSubnetIds` name subnets with a NAT gateway route, or a deployment left at `useForAllLambdas = false` so the add-on's Lambda functions run outside the VPC. Configuration validation does not reject the combination, so it is a deployment-planning consideration rather than a synth-time error.
 :::
 
 ### Conditional Interface Endpoints
 
 These non-pipeline endpoints are created based on the deployment configuration:
 
-| Endpoint                      | Condition                                                       | Purpose                                                                                                                                                                                                   |
-| ----------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Amazon Cognito user pools     | `authProvider.useCognito.enabled` (not GovCloud / EU Sovereign) | `cognito-idp` — browser SRP sign-in and the Lambda MFA check                                                                                                                                              |
-| Amazon Cognito identity pools | `authProvider.useCognito.enabled` (not GovCloud / EU Sovereign) | `cognito-identity` — token/credential exchange                                                                                                                                                            |
-| Amazon Cognito (FIPS)         | `useCognito.enabled` + `useFips` (not GovCloud / EU Sovereign)  | FIPS-compliant `cognito-idp` and `cognito-identity`                                                                                                                                                       |
-| AWS KMS                       | `useKmsCmkEncryption.enabled`                                   | KMS key operations                                                                                                                                                                                        |
-| AWS KMS (FIPS)                | `useKmsCmkEncryption.enabled` + `useFips`                       | FIPS-compliant KMS                                                                                                                                                                                        |
-| Amazon S3 (ALB web)           | ALB mode + `useAlb.addAlbS3SpecialVpcEndpoint`                  | ALB-to-S3 static web file serving                                                                                                                                                                         |
-| AWS Deadline Cloud            | `pipelines.deadlineCloudExecutionTypeEnabled`                   | `deadline.management` — the job-callback Lambda calls `deadline:GetJob`. AWS Deadline Cloud is unavailable in GovCloud / EU Sovereign, so the execution type (and this endpoint) cannot be enabled there. |
+| Endpoint            | Condition                                                                       | Purpose                                                                                                                                                                                             |
+| ------------------- | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AWS KMS             | `useKmsCmkEncryption.enabled`                                                   | KMS key operations                                                                                                                                                                                  |
+| AWS KMS (FIPS)      | `useKmsCmkEncryption.enabled` + `useFips`                                       | FIPS-compliant KMS                                                                                                                                                                                  |
+| Amazon S3 (ALB web) | ALB mode + `useAlb.addAlbS3SpecialVpcEndpoint`                                  | ALB-to-S3 static web file serving                                                                                                                                                                   |
+| AWS Deadline Cloud  | `pipelines.deadlineCloudExecutionTypeEnabled` + `useGlobalVpc.useForAllLambdas` | `deadline.management` — read a job's status and cancel a farm job. AWS Deadline Cloud is unavailable in GovCloud / EU Sovereign, so the execution type (and this endpoint) cannot be enabled there. |
+
+VAMS does not create Amazon Cognito interface endpoints. See [MFA-Aware Roles](security.md#mfa-aware-roles) for what that means for Lambda functions running in the VPC.
 
 :::info[ALB Amazon S3 interface endpoint]
 In Application Load Balancer deployment mode, VAMS creates a dedicated Amazon S3 **interface** VPC endpoint (separate from the S3 **gateway** endpoint above) so the ALB can forward requests for the React web application to the Amazon S3 web-app bucket. This endpoint is created by the static web construct (not the VPC builder) and differs from the common interface endpoints in several ways:
@@ -349,7 +357,9 @@ When VAMS creates a managed VPC, VPC flow logs are automatically enabled:
 | Destination  | Amazon CloudWatch Logs                         |
 | Traffic Type | ALL                                            |
 | Log Group    | `/aws/vendedlogs/VAMSCloudWatchVPCLogs-{hash}` |
-| Retention    | 10 years                                       |
+| Retention    | 1 year                                         |
+
+The retention period comes from the `LogRetentionAspect` CDK aspect, which sets it on every CloudWatch log group in the stack and overwrites any value declared on an individual construct. Change it for the whole deployment at the single `new LogRetentionAspect(...)` call site in `infra/lib/core-stack.ts` — see [Configuring Log Retention](../developer/audit-logging.md#configuring-log-retention).
 
 ## DNS Configuration
 
@@ -362,7 +372,7 @@ VAMS VPCs are created with:
 
 ## FIPS Endpoint Usage
 
-When `useFips = true`, the partition-aware service helper (`service-helper.ts`) automatically resolves FIPS-compliant hostnames for all AWS service calls. This is achieved through the `SERVICE_LOOKUP` table in `const.ts`, which maps each service to its standard and FIPS hostname per partition.
+The `SERVICE_LOOKUP` table in `const.ts` maps each service to its standard and FIPS hostname per partition, and the partition-aware service helper (`service-helper.ts`) returns the FIPS hostname when `useFips = true` to a caller that does not ask for the standard one. Every caller in VAMS asks for the standard hostname except the Amazon Cognito hosted UI domain (SAML or OIDC federation, commercial partition only), whose entry carries the standard `auth.{region}.amazoncognito.com` domain in both fields, so the web Content Security Policy names the standard hostnames either way. The Lambda functions receive no FIPS endpoint setting and call each service's default regional endpoint. The resource `useFips` adds is the AWS KMS (FIPS) interface endpoint listed under [Conditional Interface Endpoints](#conditional-interface-endpoints).
 
 For example:
 
@@ -373,7 +383,11 @@ For example:
 | AWS STS         | `sts.{region}.amazonaws.com`      | `sts-fips.{region}.amazonaws.com`      |
 
 :::note[GovCloud FIPS]
-In AWS GovCloud, all endpoints are inherently FIPS-compliant. The API Gateway endpoint URL always uses the non-FIPS variant regardless of the `useFips` setting, as documented by AWS.
+Some AWS GovCloud (US) service endpoints are FIPS-validated by default and others publish a separate `-fips` hostname; the AWS GovCloud (US) User Guide lists which applies to each service. The API Gateway endpoint URL always uses the non-FIPS variant regardless of the `useFips` setting, as documented by AWS.
+:::
+
+:::note[AWS European Sovereign Cloud]
+The AWS European Sovereign Cloud (`aws-eusc`) offers FIPS endpoints for only four services (AWS KMS, Amazon EFS, Amazon ElastiCache and AWS WAF), so configuration validation warns when `useFips` is `true` there. The shipped `config.template.eusovereign.json` sets it to `false`.
 :::
 
 ## Next Steps

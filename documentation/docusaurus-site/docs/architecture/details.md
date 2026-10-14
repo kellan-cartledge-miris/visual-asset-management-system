@@ -136,7 +136,8 @@ sequenceDiagram
     participant SNS as Amazon SNS
     participant SQS as Amazon SQS
     participant Sync as Bucket Sync Lambda
-    participant WF as Workflow Auto-Execute
+    participant EB as Amazon EventBridge (Orchestration Bus)
+    participant WF as Workflow Trigger Dispatch
 
     Web->>API: POST /upload (file metadata)
     API->>Upload: Generate Presigned URL
@@ -146,9 +147,10 @@ sequenceDiagram
     SNS->>SQS: Forward to Bucket Sync Queue
     SQS->>Sync: Trigger Bucket Sync Lambda
     Sync->>Sync: Index file metadata in DynamoDB
-    Sync->>SQS: Send to Workflow Auto-Execute Queue
-    SQS->>WF: Trigger Auto-Execute Lambda
-    WF->>WF: Execute matching workflows
+    Sync->>EB: Publish asset.file.uploaded event
+    EB->>SQS: Route to Workflow Trigger Dispatch Queue
+    SQS->>WF: Trigger Dispatch Lambda
+    WF->>WF: Execute workflows for matching fileUpload triggers
 ```
 
 ### Upload Process Details
@@ -281,11 +283,16 @@ Configuration values resolve through a four-tier fallback chain:
 | `NOOPENSEARCH`                  | Amazon OpenSearch disabled                                                           |
 | `AUTHPROVIDER_COGNITO`          | Amazon Cognito authentication provider                                               |
 | `AUTHPROVIDER_COGNITO_SAML`     | Amazon Cognito with SAML federation                                                  |
+| `AUTHPROVIDER_COGNITO_OIDC`     | Amazon Cognito with OIDC federation                                                  |
 | `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth identity provider                                                     |
+| `PHYSNA_ADDON`                  | Physna add-on frontend features enabled                                              |
+| `DEADLINECLOUD_PIPELINES`       | AWS Deadline Cloud pipeline execution type enabled                                   |
 
 ## Nested Stack Dependency Chain
 
-The following diagram shows the complete dependency ordering between VAMS nested stacks.
+The following diagram shows the nested stacks that `CoreVAMSStack` builds and the deployment order declared between them. Each solid arrow is an explicit `addStackDependency()` call in `infra/lib/core-stack.ts`, drawn from the prerequisite stack to the stack that deploys after it; the stacks the root points at declare no dependency. RestApi renders the routes that ApiBuilder, ApiBuilder2, SearchBuilder, and AddonBuilder register into a single Amazon API Gateway REST API, so it deploys after each of them.
+
+Stacks also read each other's outputs (the Lambda layers, `storageResources`, `authResources`, and the VPC), and AWS CloudFormation orders each such reference implicitly. The dotted arrow marks the one that places StaticWeb: it reads the REST API endpoint, so it deploys after RestApi. When `env.loadContextIgnoreVPCStacks` is `true`, ApiBuilder, ApiBuilder2, SearchBuilder, PipelineBuilder, AddonBuilder, RestApi, and StaticWeb are not built.
 
 ```mermaid
 graph TD
@@ -294,24 +301,44 @@ graph TD
     Core --> VPC["VPCBuilder<br/><i>Conditional</i>"]
     Core --> LL["LambdaLayers"]
     Core --> SRB["StorageResourcesBuilder"]
-
-    SRB --> AB["AuthBuilder"]
-
-    AB --> APIGW["ApiGatewayV2Amplify"]
-
-    APIGW --> APIBuild["ApiBuilder"]
-    APIGW --> SW["StaticWeb"]
-    APIGW --> SearchB["SearchBuilder"]
-    APIGW --> PB["PipelineBuilder"]
-    APIGW --> Addon["AddonBuilder"]
-
     Core --> LS["LocationService<br/><i>Conditional</i>"]
     Core --> FE["CustomFeatureEnabledConfig"]
+
+    SRB --> RNB["ResourceNamesBuilder"]
+
+    SRB --> AB["AuthBuilder"]
+    RNB --> AB
+
+    SRB --> APIBuild["ApiBuilder"]
+    RNB --> APIBuild
+
+    SRB --> APIBuild2["ApiBuilder2"]
+    RNB --> APIBuild2
+    APIBuild --> APIBuild2
+
+    SRB --> SearchB["SearchBuilder"]
+    RNB --> SearchB
+
+    SRB --> PB["PipelineBuilder"]
+    APIBuild2 --> PB
+
+    SRB --> Addon["AddonBuilder"]
+    RNB --> Addon
+
+    SRB --> REST["RestApi"]
+    AB --> REST
+    APIBuild --> REST
+    APIBuild2 --> REST
+    SearchB --> REST
+    Addon --> REST
+
+    SRB --> SW["StaticWeb<br/><i>Conditional</i>"]
+    REST -.->|API endpoint| SW
 ```
 
 ## Resource Name Resolution
 
-VAMS Lambda functions resolve AWS resource names (Amazon DynamoDB tables, Amazon S3 buckets, Amazon CloudWatch log groups) from AWS Systems Manager Parameter Store at cold start. The CDK deployment publishes 39 SSM String parameters under `/{config.name}-{baseStackName}/resourceNames/` with resource names (28 DynamoDB tables, 2 S3 buckets, 9 audit log groups). Non-pipeline handlers receive a single `VAMS_RESOURCE_PARAM_PREFIX` environment variable pointing to this SSM prefix, plus AWS IAM permissions for `ssm:GetParameter`, `ssm:GetParameters`, and `ssm:GetParametersByPath`.
+VAMS Lambda functions resolve AWS resource names (Amazon DynamoDB tables, Amazon S3 buckets, Amazon CloudWatch log groups) from AWS Systems Manager Parameter Store at cold start. The CDK deployment publishes one SSM String parameter per registered resource name under `/{config.name}-{baseStackName}/resourceNames/` — 65 in the shipped configuration (53 DynamoDB tables, of which 7 are deprecated tables retained for migration under `dynamoTables/legacy/`; 9 audit log groups; 2 S3 buckets; 1 Lambda function name). The set is derived from the `resourceNameRegistry`, so it grows with each registered resource. The Resource Names nested stack materializes 64 of them; the Amazon OpenSearch Service stack publishes the remaining one, because the reindexer function it names is created there. Non-pipeline handlers receive a single `VAMS_RESOURCE_PARAM_PREFIX` environment variable pointing to this SSM prefix, plus AWS IAM permissions for `ssm:GetParameter`, `ssm:GetParameters`, and `ssm:GetParametersByPath`.
 
 At cold start, each handler calls `get_table_name(ResourceKeys.*)`, `get_bucket_name(ResourceKeys.*)`, or `get_log_group_name(ResourceKeys.*)` from `backend/backend/common/resourceNames.py`, which caches the parameter fetch for 60 minutes. This centralizes name management, enables environment variable overrides for testing, and reduces CDK template size by removing per-handler table/bucket/log-group environment variables (pipelines in `backendPipelines/` retain their direct environment variables).
 
@@ -319,7 +346,8 @@ At cold start, each handler calls `get_table_name(ResourceKeys.*)`, `get_bucket_
 
 1. **Environment variable override** — check for a legacy-style env var (e.g., `ASSET_STORAGE_TABLE_NAME`), used by tests and local utilities
 2. **In-module cache** — 60-minute TTL per resource key
-3. **SSM GetParametersByPath** — one paginated call fetching all parameters under the prefix on first access
+3. **Negative record** — a key a completed sweep did not carry is remembered as absent for a short window, so an unpublished parameter costs one sweep per window rather than one call. A later sweep that does carry the key clears the record.
+4. **SSM GetParametersByPath** — one paginated call fetching all parameters under the prefix on first access
 
 :::tip[Lambda Builder Pattern]
 Every Lambda function is constructed by a builder function in `infra/lib/lambdaBuilder/`. Non-pipeline builders inject only handler-specific environment variables (e.g., `PRESIGNED_URL_TIMEOUT_SECONDS`); resource names are resolved from SSM. Each builder calls four required security helpers: `kmsKeyLambdaPermissionAddToResourcePolicy`, `setupSecurityAndLoggingEnvironmentAndPermissions`, `globalLambdaEnvironmentsAndPermissions` (injects `VAMS_RESOURCE_PARAM_PREFIX` and grants SSM read), and `suppressCdkNagErrorsByGrantReadWrite`.

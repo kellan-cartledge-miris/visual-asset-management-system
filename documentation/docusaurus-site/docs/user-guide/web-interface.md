@@ -6,7 +6,7 @@ This page provides a comprehensive tour of the VAMS web interface, covering each
 
 ## Navigation Structure
 
-The VAMS interface uses a persistent side navigation panel on the left and a top navigation bar. The side panel groups pages into five sections: **Home**, **Manage**, **Orchestrate and Automate**, **Admin - Data**, and **Admin - Auth**. Pages within these sections are filtered based on your role permissions -- you will only see navigation items you are authorized to access.
+The VAMS interface uses a persistent side navigation panel on the left and a top navigation bar. The side panel groups pages into six sections: **Home**, **Manage**, **Orchestrate & Automate**, **Admin - Data**, **Admin - Auth**, and **User**. Pages within these sections are filtered based on your role permissions -- you will only see navigation items you are authorized to access.
 
 :::info
 If the navigation panel shows **No Access**, your account does not have any web route permissions assigned. Contact your administrator to request the necessary role assignments.
@@ -128,18 +128,18 @@ Below the tabbed container, the metadata section displays all key-value metadata
 
 ## File Viewer Page
 
-When you select a file in the file manager and choose to view it, VAMS opens a dedicated file viewer page. The viewer automatically selects the best plugin based on the file extension.
+When you select a file in the file manager and choose to view it, VAMS opens a dedicated file viewer page. If only one viewer plugin supports the file extension, the page opens the file in it; if several do, you choose one from the viewer dropdown.
 
 ![File viewer page displaying a USDZ 3D model](/img/view_file_page_usdz_20260323_v2.5.png)
 
 ### Supported Viewer Types
 
-VAMS includes 17 built-in viewer plugins covering 3D models, point clouds, Gaussian splats, images, video, audio, documents, and tabular data. The viewer is selected automatically based on the file extension. If multiple viewers support the same extension, you can switch between them using a dropdown.
+VAMS includes 20 built-in viewer plugins covering 3D models, point clouds, Gaussian splats, images, video, audio, documents, and tabular data. The viewer is selected automatically only when exactly one viewer supports the file extension. If multiple viewers support the same extension, you choose one from a dropdown and can switch between them.
 
 For the complete list of supported file viewers and extensions, see [File Viewers](../concepts/viewers.md).
 
 :::tip
-If a file's extension matches multiple viewers, VAMS selects the highest-priority viewer. The preview viewer serves as a fallback for files that have a preview image but no dedicated viewer.
+If a file's extension matches multiple viewers, the viewer dropdown lists them with the lowest priority number first, and the file opens once you choose one. If the file has a preview image, the file page also offers a **Preview** option that shows it in the Preview Viewer.
 :::
 
 ---
@@ -166,7 +166,7 @@ The **Pipelines** page lists all registered processing pipelines. Pipelines defi
 
 Each pipeline entry shows its name and id, its execution type, its owning database, its category, and how many configuration templates it carries, together with **Disabled** or **Archived** where either applies. Entries are grouped by category or by database, and the list can be filtered by execution type, status, and database.
 
-Each entry's **⋮** actions menu holds **Edit**, **Templates**, and **Archive**, limited to the actions your permissions allow. **Create Pipeline** in the page header starts a new one.
+Each entry's **⋮** actions menu holds **Edit**, **Templates**, and **Archive**, limited to the actions your permissions allow. **Create Pipeline** in the page header starts a new one. Deleting a template from the **Templates** list reports a warning, kept on the list, when an auto-triggered workflow's trigger had chosen it as this pipeline's default.
 
 ![Pipelines page listing registered pipelines grouped by category](/img/pipelines_page_20260803_v2.6.png)
 

@@ -18,6 +18,7 @@ import { Duration, RemovalPolicy, NestedStack } from "aws-cdk-lib";
 import { BlockPublicAccess } from "aws-cdk-lib/aws-s3";
 import { Construct } from "constructs";
 import {
+    suppressCdkNagErrorsByGrantReadWrite,
     requireTLSAndAdditionalPolicyAddToResourcePolicy,
     addPresignedUrlNetworkRestrictionsToBucketPolicy,
     generateUniqueNameHash,
@@ -151,34 +152,16 @@ export class StorageResourcesBuilderNestedStack extends NestedStack {
             resourceNameRegistry
         );
 
-        //Nag supressions
-        const reason =
-            "The custom resource CDK bucket deployment needs full access to the bucket to deploy files";
-        NagSuppressions.addResourceSuppressions(
-            this,
-            [
-                {
-                    id: "AwsSolutions-IAM5",
-                    reason: reason,
-                    appliesTo: [
-                        {
-                            regex: "/Action::s3:.*/g",
-                        },
-                    ],
-                },
-                {
-                    id: "AwsSolutions-IAM5",
-                    reason: reason,
-                    appliesTo: [
-                        {
-                            // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "/^Resource::.*/g",
-                        },
-                    ],
-                },
-            ],
-            true
-        );
+        // Nag suppressions. Delegated to the shared helper, which carries one individually justified
+        // entry per wildcard SHAPE that a CDK grant produces — an S3 object ARN, a DynamoDB index ARN, a
+        // Lambda qualifier ARN, a Step Functions execution ARN.
+        //
+        // This used to be an inline `/^Resource::.*/g` entry applied to the whole stack with a reason
+        // that described only the CDK bucket deployment. The scope is everything this stack owns: the
+        // KMS key, every DynamoDB table, the asset and auxiliary buckets, the SNS topics and the
+        // bucket-sync queues — so the repository's primary IAM guardrail was off for all of them under a
+        // justification that covered one construct.
+        suppressCdkNagErrorsByGrantReadWrite(this);
 
         if (!this.storageResources.encryption.kmsKey) {
             NagSuppressions.addResourceSuppressions(
@@ -251,10 +234,14 @@ export function storageResourcesBuilder(
             );
         } else {
             vamsGeneratedKmsKey = true;
+            // RETAIN so the key outlives a stack teardown and the RETAINed tables and buckets it
+            // encrypts stay decryptable. The key carries no kms.Alias and is addressed only by its
+            // generated key id/ARN, so a retained key never collides with the one a redeploy creates.
+            // Deleting it is a deliberate operator step once the retained data is no longer needed.
             kmsEncryptionKey = new kms.Key(scope, "VAMSEncryptionKMSKey", {
                 description: "VAMS Generated KMS Encryption key",
                 enableKeyRotation: true,
-                removalPolicy: cdk.RemovalPolicy.DESTROY,
+                removalPolicy: cdk.RemovalPolicy.RETAIN,
             });
 
             //Add policy
@@ -645,7 +632,7 @@ export function storageResourcesBuilder(
                     "VAMSAuditAuthentication",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }),
@@ -658,7 +645,7 @@ export function storageResourcesBuilder(
                     "VAMSAuditAuthorization",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }),
@@ -671,7 +658,7 @@ export function storageResourcesBuilder(
                     "VAMSAuditFileUpload",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }),
@@ -684,7 +671,7 @@ export function storageResourcesBuilder(
                     "VAMSAuditFileDownload",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }),
@@ -697,7 +684,7 @@ export function storageResourcesBuilder(
                     "VAMSAuditFileDownloadStreamed",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }),
@@ -710,7 +697,7 @@ export function storageResourcesBuilder(
                     "VAMSAuditAuthOther",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }),
@@ -723,7 +710,7 @@ export function storageResourcesBuilder(
                     "VAMSAuditAuthChanges",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }),
@@ -736,7 +723,7 @@ export function storageResourcesBuilder(
                     "VAMSAuditActions",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }),
@@ -749,7 +736,7 @@ export function storageResourcesBuilder(
                     "VAMSAuditErrors",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }),
@@ -789,7 +776,7 @@ export function storageResourcesBuilder(
                     "VAMSOrchestrationBusAudit",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
             encryptionKey: config.app.useKmsCmkEncryption.enabled ? kmsEncryptionKey : undefined,
         }
@@ -2213,6 +2200,16 @@ export function storageResourcesBuilder(
     // Create SNS Queuing Lambdas
     /////////////////////////////////////////////////////////////////////////////
 
+    // Failure handling shared by every SNS queuing stream mapping. snsQueuing reports the records
+    // it could not publish in batchItemFailures, which a mapping reads only with
+    // reportBatchItemFailures; bisectBatchOnError splits a batch that fails outright, and the retry
+    // bound keeps one failing batch from holding its shard for the stream's 24-hour retention.
+    const indexingStreamFailureHandling = {
+        reportBatchItemFailures: true,
+        bisectBatchOnError: true,
+        retryAttempts: 10,
+    };
+
     // Create file indexer SNS queuing Lambda
     const fileIndexerSnsQueuingFunction = buildFileIndexerSnsQueuingFunction(
         scope,
@@ -2234,6 +2231,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: assetFileMetadataStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
         const cfnEsmFileIndexerAssetFileMetadata = esmFileIndexerAssetFileMetadata.node
@@ -2249,6 +2247,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: fileAttributeStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
         const cfnEsmFileIndexerFileAttribute = esmFileIndexerFileAttribute.node
@@ -2264,6 +2263,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: assetFileMetadataStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
 
@@ -2276,6 +2276,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: fileAttributeStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
     }
@@ -2301,6 +2302,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: assetStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
         const cfnEsmAssetIndexerAsset = esmAssetIndexerAsset.node
@@ -2315,6 +2317,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: assetStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
     }
@@ -2330,6 +2333,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: assetFileMetadataStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
         const cfnEsmAssetIndexerAssetFileMetadata = esmAssetIndexerAssetFileMetadata.node
@@ -2345,6 +2349,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: assetFileMetadataStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
     }
@@ -2359,6 +2364,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: assetLinksStorageTableV2.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
         const cfnEsmAssetIndexerLinks = esmAssetIndexerLinks.node
@@ -2373,6 +2379,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: assetLinksMetadataStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
         const cfnEsmAssetIndexerLinksMetadata = esmAssetIndexerLinksMetadata.node
@@ -2387,6 +2394,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: assetLinksStorageTableV2.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
 
@@ -2398,6 +2406,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: assetLinksMetadataStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
     }
@@ -2423,6 +2432,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: databaseStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
         const cfnEsmDatabaseTableIndexerSns = esmDatabaseTableIndexerSns.node
@@ -2437,6 +2447,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: databaseMetadataStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
         const cfnEsmDatabaseMetadataIndexerSns = esmDatabaseMetadataIndexerSns.node
@@ -2451,6 +2462,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: databaseStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
 
@@ -2462,6 +2474,7 @@ export function storageResourcesBuilder(
                 eventSourceArn: databaseMetadataStorageTable.tableStreamArn,
                 startingPosition: lambda.StartingPosition.TRIM_HORIZON,
                 batchSize: 100,
+                ...indexingStreamFailureHandling,
             }
         );
     }
@@ -2472,6 +2485,12 @@ export function storageResourcesBuilder(
 
     // Loop through each asset bucket and setup S3 event notifications sync
     let bucketSyncIndex = 0;
+    // Receives before a bucket-sync record is dead-lettered. Matches the indexer queues'
+    // `indexerQueueMaxReceiveCount` in searchBuilder, so a record that cannot be processed reaches a
+    // DLQ after the same number of attempts wherever it entered VAMS.
+    const bucketSyncQueueMaxReceiveCount = 3;
+    // Bucket-sync dead-letter queues, covered by the AwsSolutions-SQS3 suppression below.
+    const bucketSyncDlqs: sqs.Queue[] = [];
     const bucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
     // A bucket instance can appear in multiple records (same bucket, different
     // prefixes). The sync-queue construct IDs are derived from the bucket instance,
@@ -2485,6 +2504,31 @@ export function storageResourcesBuilder(
         bucketSyncOccurrence.set(record.bucket, bucketOccurrence + 1);
         const bucketSyncIdSuffix = bucketOccurrence === 0 ? "" : `-${bucketOccurrence}`;
 
+        // Dead-letter queue for the created-events queue.
+        //
+        // Without one, a message the event source cannot land is retried until the 4-day retention
+        // expires, and nothing surfaces it: MEASURED on a live deployment, 15 messages cycled every
+        // 960 seconds for 14 hours with Errors and Throttles both zero and NOT ONE log line, because
+        // AWS Lambda's recursive-loop detection was dropping the invocations before the handler ran.
+        // A dropped invocation never deletes its message. The only signals were the
+        // RecursiveInvocationsDropped metric and the in-flight depth.
+        //
+        // One DLQ per source queue, and one pair per registered bucket, so a poison record stays
+        // attributable to the bucket and the direction (created vs deleted) it arrived on.
+        const onS3ObjectCreatedDlq = new sqs.Queue(
+            scope,
+            "bucketSyncCreatedDLQ--" + record.bucket + bucketSyncIdSuffix,
+            {
+                retentionPeriod: cdk.Duration.days(14),
+                encryption: kmsEncryptionKey
+                    ? sqs.QueueEncryption.KMS
+                    : sqs.QueueEncryption.SQS_MANAGED,
+                encryptionMasterKey: kmsEncryptionKey,
+                enforceSSL: true,
+            }
+        );
+        bucketSyncDlqs.push(onS3ObjectCreatedDlq);
+
         // Create SQS queue for S3 object created events
         const onS3ObjectCreatedQueue = new sqs.Queue(
             scope,
@@ -2497,9 +2541,12 @@ export function storageResourcesBuilder(
                     : sqs.QueueEncryption.SQS_MANAGED,
                 encryptionMasterKey: kmsEncryptionKey,
                 enforceSSL: true,
+                deadLetterQueue: {
+                    queue: onS3ObjectCreatedDlq,
+                    maxReceiveCount: bucketSyncQueueMaxReceiveCount,
+                },
             }
         );
-        onS3ObjectCreatedQueue.grantSendMessages(Service("SNS").Principal);
 
         // Create Lambda for bucket sync (created events)
         const sqsBucketSyncFunctionCreated = buildSqsBucketSyncFunction(
@@ -2535,6 +2582,7 @@ export function storageResourcesBuilder(
                     target: sqsBucketSyncFunctionCreated,
                     batchSize: 10,
                     maxBatchingWindow: cdk.Duration.seconds(3),
+                    reportBatchItemFailures: true,
                 }
             );
             const cfnEsm = esmCreated.node.defaultChild as lambda.CfnEventSourceMapping;
@@ -2548,11 +2596,27 @@ export function storageResourcesBuilder(
                     target: sqsBucketSyncFunctionCreated,
                     batchSize: 10,
                     maxBatchingWindow: cdk.Duration.seconds(3),
+                    reportBatchItemFailures: true,
                 }
             );
         }
 
         bucketSyncIndex = bucketSyncIndex + 1;
+
+        // Dead-letter queue for the deleted-events queue. Same reasoning as the created side above.
+        const onS3ObjectDeletedDlq = new sqs.Queue(
+            scope,
+            "bucketSyncDeletedDLQ--" + record.bucket + bucketSyncIdSuffix,
+            {
+                retentionPeriod: cdk.Duration.days(14),
+                encryption: kmsEncryptionKey
+                    ? sqs.QueueEncryption.KMS
+                    : sqs.QueueEncryption.SQS_MANAGED,
+                encryptionMasterKey: kmsEncryptionKey,
+                enforceSSL: true,
+            }
+        );
+        bucketSyncDlqs.push(onS3ObjectDeletedDlq);
 
         // Create SQS queue for S3 object deleted events
         const onS3ObjectDeletedQueue = new sqs.Queue(
@@ -2566,9 +2630,12 @@ export function storageResourcesBuilder(
                     : sqs.QueueEncryption.SQS_MANAGED,
                 encryptionMasterKey: kmsEncryptionKey,
                 enforceSSL: true,
+                deadLetterQueue: {
+                    queue: onS3ObjectDeletedDlq,
+                    maxReceiveCount: bucketSyncQueueMaxReceiveCount,
+                },
             }
         );
-        onS3ObjectDeletedQueue.grantSendMessages(Service("SNS").Principal);
 
         // Create Lambda for bucket sync (deleted events)
         const sqsBucketSyncFunctionRemoved = buildSqsBucketSyncFunction(
@@ -2604,6 +2671,7 @@ export function storageResourcesBuilder(
                     target: sqsBucketSyncFunctionRemoved,
                     batchSize: 10,
                     maxBatchingWindow: cdk.Duration.seconds(3),
+                    reportBatchItemFailures: true,
                 }
             );
             const cfnEsm = esmDeleted.node.defaultChild as lambda.CfnEventSourceMapping;
@@ -2617,6 +2685,7 @@ export function storageResourcesBuilder(
                     target: sqsBucketSyncFunctionRemoved,
                     batchSize: 10,
                     maxBatchingWindow: cdk.Duration.seconds(3),
+                    reportBatchItemFailures: true,
                 }
             );
         }
@@ -2762,17 +2831,20 @@ export function storageResourcesBuilder(
         resourceNameRegistry.register({ paramKey, value });
     });
 
-    // Add Nag suppressions for SQS queues
-    NagSuppressions.addResourceSuppressions(
-        scope,
-        [
-            {
-                id: "AwsSolutions-SQS3",
-                reason: "Intended not to use DLQs for these types of SQS events. Files easily redriven based on the logic of assets.",
-            },
-        ],
-        true
-    );
+    // Scoped to the bucket-sync dead-letter queues rather than the stack: every bucket-sync source queue
+    // carries a redrive policy, so a source queue added here later without one is still reported.
+    if (bucketSyncDlqs.length > 0) {
+        NagSuppressions.addResourceSuppressions(
+            bucketSyncDlqs,
+            [
+                {
+                    id: "AwsSolutions-SQS3",
+                    reason: "This queue is the dead-letter queue of a bucket-sync source queue and so terminates that queue's redrive chain; a redrive policy of its own would only move the same failed S3 notification to a further queue.",
+                },
+            ],
+            true
+        );
+    }
 
     //Return final storage resource object
     return storageResources;

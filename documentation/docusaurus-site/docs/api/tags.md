@@ -6,6 +6,10 @@ The Tags and Tag Types API allows you to manage the categorization system for as
 All endpoints require a valid JWT token in the `Authorization` header. Tags use the `tag` object type for Casbin enforcement, and tag types use `tagType`.
 :::
 
+:::note[Free-text whitespace]
+Surrounding whitespace is removed from a submitted `description` before the length constraint is applied and before the value is stored, so a subsequent read returns the trimmed value. A padded value whose trimmed length falls below the documented minimum is rejected with `400`. Interior whitespace is preserved.
+:::
+
 ---
 
 ## Tag scope
@@ -23,11 +27,11 @@ An asset resolves its tag names within its own database plus GLOBAL, so while a 
 
 `GET /tags` and `GET /tag-types` accept optional query parameters that filter the results by scope:
 
-| Parameter    | Value          | Result                                                    |
-| ------------ | -------------- | --------------------------------------------------------- |
-| `databaseId` | a database ID  | Only the tags scoped to that database (global tags excluded) |
-| `scope`      | `global`       | Global tags only                                          |
-| `scope`      | `all`          | Every tag the caller is permitted to see                  |
+| Parameter    | Value         | Result                                                       |
+| ------------ | ------------- | ------------------------------------------------------------ |
+| `databaseId` | a database ID | Only the tags scoped to that database (global tags excluded) |
+| `scope`      | `global`      | Global tags only                                             |
+| `scope`      | `all`         | Every tag the caller is permitted to see                     |
 
 With no parameter, the response contains the tags visible to the caller under their permissions.
 
@@ -53,12 +57,12 @@ GET /tag-types
 
 #### Query parameters
 
-| Parameter       | Type   | Required | Default | Description                                                                            |
-| --------------- | ------ | -------- | ------- | -------------------------------------------------------------------------------------- |
-| `maxItems`      | number | No       | `30000` | Maximum number of items to return                                                      |
-| `pageSize`      | number | No       | `3000`  | Number of items per page                                                               |
-| `startingToken` | string | No       | `null`  | Pagination token from previous response                                                |
-| `databaseId`    | string | No       | `null`  | Return only the tag types scoped to this database (global tag types excluded)          |
+| Parameter       | Type   | Required | Default | Description                                                                             |
+| --------------- | ------ | -------- | ------- | --------------------------------------------------------------------------------------- |
+| `maxItems`      | number | No       | `30000` | Maximum number of items to return                                                       |
+| `pageSize`      | number | No       | `3000`  | Number of items per page                                                                |
+| `startingToken` | string | No       | `null`  | Pagination token from previous response                                                 |
+| `databaseId`    | string | No       | `null`  | Return only the tag types scoped to this database (global tag types excluded)           |
 | `scope`         | string | No       | `null`  | `global` returns only global tag types; `all` returns every tag type the caller may see |
 
 See [Tag scope](#tag-scope) for how these parameters filter results.
@@ -108,11 +112,11 @@ POST /tag-types
 
 #### Request body
 
-| Field         | Type   | Required | Description                                                                          |
-| ------------- | ------ | -------- | ------------------------------------------------------------------------------------ |
-| `tagTypeName` | string | Yes      | Tag type name, unique per database (1-256 chars)                                     |
-| `description` | string | No       | Description of the tag type                                                          |
-| `required`    | string | No       | Whether this tag type is required (`True`/`False`, default `False`)                  |
+| Field         | Type   | Required | Description                                                                                                                            |
+| ------------- | ------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `tagTypeName` | string | Yes      | Tag type name, unique per database (1-256 chars)                                                                                       |
+| `description` | string | Yes      | Description of the tag type (1-256 chars)                                                                                              |
+| `required`    | string | No       | Whether this tag type is required (`True`/`False`, default `False`)                                                                    |
 | `databaseId`  | string | No       | Scope of the tag type. Omit or use `GLOBAL` for a global tag type; a database ID scopes it to that database. Immutable after creation. |
 
 #### Request body example
@@ -224,13 +228,13 @@ GET /tags
 
 #### Query parameters
 
-| Parameter       | Type   | Required | Default | Description                                                                       |
-| --------------- | ------ | -------- | ------- | --------------------------------------------------------------------------------- |
-| `maxItems`      | number | No       | `30000` | Maximum number of items to return                                                 |
-| `pageSize`      | number | No       | `3000`  | Number of items per page                                                          |
-| `startingToken` | string | No       | `null`  | Pagination token from previous response                                           |
-| `databaseId`    | string | No       | `null`  | Return only the tags scoped to this database (global tags excluded)                |
-| `scope`         | string | No       | `null`  | `global` returns only global tags; `all` returns every tag the caller may see     |
+| Parameter       | Type   | Required | Default | Description                                                                   |
+| --------------- | ------ | -------- | ------- | ----------------------------------------------------------------------------- |
+| `maxItems`      | number | No       | `30000` | Maximum number of items to return                                             |
+| `pageSize`      | number | No       | `3000`  | Number of items per page                                                      |
+| `startingToken` | string | No       | `null`  | Pagination token from previous response                                       |
+| `databaseId`    | string | No       | `null`  | Return only the tags scoped to this database (global tags excluded)           |
+| `scope`         | string | No       | `null`  | `global` returns only global tags; `all` returns every tag the caller may see |
 
 See [Tag scope](#tag-scope) for how these parameters filter results.
 
@@ -268,10 +272,11 @@ POST /tags
 
 #### Request body
 
-| Field         | Type   | Required | Description                                                                          |
-| ------------- | ------ | -------- | ------------------------------------------------------------------------------------ |
-| `tagName`     | string | Yes      | Tag name, unique per database (1-256 chars)                                          |
-| `tagTypeName` | string | Yes      | Tag type this tag belongs to (must already exist)                                    |
+| Field         | Type   | Required | Description                                                                                                                  |
+| ------------- | ------ | -------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `tagName`     | string | Yes      | Tag name, unique per database (1-256 chars)                                                                                  |
+| `description` | string | Yes      | Description of the tag (1-256 chars)                                                                                         |
+| `tagTypeName` | string | Yes      | Tag type this tag belongs to (must already exist)                                                                            |
 | `databaseId`  | string | No       | Scope of the tag. Omit or use `GLOBAL` for a global tag; a database ID scopes it to that database. Immutable after creation. |
 
 The referenced database must exist, and a tag's tag type must live in the tag's own scope — a GLOBAL tag requires a GLOBAL tag type, and a database-scoped tag requires a tag type in that same database (a GLOBAL tag type is not accepted).
@@ -281,6 +286,7 @@ The referenced database must exist, and a tag's tag type must live in the tag's 
 ```json
 {
     "tagName": "High Priority",
+    "description": "Assets that require immediate attention",
     "tagTypeName": "Priority",
     "databaseId": "factory-db"
 }
@@ -290,7 +296,26 @@ The referenced database must exist, and a tag's tag type must live in the tag's 
 
 ```json
 {
-    "message": "Tag created successfully"
+    "success": true,
+    "message": "Tag High Priority created successfully",
+    "tagName": "High Priority",
+    "operation": "create",
+    "timestamp": "2026-01-15T10:30:00.000Z"
+}
+```
+
+A create that succeeds with an advisory carries a `warnings` array — currently returned when a GLOBAL tag is created for a name a database already uses:
+
+```json
+{
+    "success": true,
+    "message": "Tag High Priority created successfully",
+    "tagName": "High Priority",
+    "operation": "create",
+    "timestamp": "2026-01-15T10:30:00.000Z",
+    "warnings": [
+        "This name is also used by a database-specific tag. Asset forms will list both entries until the database-specific tag is removed."
+    ]
 }
 ```
 

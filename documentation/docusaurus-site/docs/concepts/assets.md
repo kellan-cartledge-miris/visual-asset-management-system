@@ -18,18 +18,18 @@ Each asset acts as a container that groups related files under a single identity
 
 To create an asset, provide the following fields:
 
-| Field               | Required | Description                                                                                                                             |
-| ------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `databaseId`        | Yes      | The database this asset belongs to. 4-256 characters, must match an existing database.                                                  |
-| `assetId`           | No       | Unique identifier within the database. If omitted, VAMS generates one. Cannot contain forward slashes. Max 256 characters.              |
-| `assetName`         | Yes      | Human-readable display name. 1-256 characters, alphanumeric plus `-`, `_`, `.`, and spaces.                                             |
-| `description`       | Yes      | Describes the asset. 4-256 characters.                                                                                                  |
-| `isDistributable`   | Yes      | Boolean flag controlling whether files in this asset can be downloaded.                                                                 |
-| `tags`              | No       | Array of string tags for categorization. Each tag up to 256 characters.                                                                 |
-| `bucketExistingKey` | No       | Optional. Points to an existing key in the database's Amazon S3 bucket to register as the asset's location without uploading new files. |
+| Field               | Required | Description                                                                                                                                     |
+| ------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `databaseId`        | Yes      | The database this asset belongs to. 4-63 characters, must match an existing database.                                                           |
+| `assetId`           | No       | Unique identifier within the database. If omitted, VAMS generates one. ASCII characters only, cannot contain forward slashes, 2-255 characters. |
+| `assetName`         | Yes      | Human-readable display name. 1-256 characters, alphanumeric plus `-`, `_`, `.`, and spaces.                                                     |
+| `description`       | Yes      | Describes the asset. 4-256 characters.                                                                                                          |
+| `isDistributable`   | Yes      | Boolean flag controlling whether files in this asset can be downloaded.                                                                         |
+| `tags`              | No       | Array of string tags for categorization. Each tag up to 256 characters.                                                                         |
+| `bucketExistingKey` | No       | Optional. Points to an existing key in the database's Amazon S3 bucket to register as the asset's location without uploading new files.         |
 
 :::info[Asset ID restrictions]
-The `assetId` cannot contain forward slashes (`/`) because it is used as an Amazon S3 prefix component. If you provide a custom `assetId`, choose a value that is unique within the database.
+The `assetId` cannot contain forward slashes (`/`) because it is used as an Amazon S3 prefix component. If you provide a custom `assetId`, choose a value that is unique within the database and made up of ASCII characters — two identifiers that render identically but differ in a non-ASCII character are two separate assets, which an operator reading an asset listing or an audit record cannot tell apart. The restriction applies where you name a new asset; an identifier already stored stays valid everywhere it is used, and an asset VAMS discovers in an external Amazon S3 bucket takes its identifier from the folder name it is found under.
 :::
 
 ### Example: creating an asset
@@ -202,13 +202,13 @@ When an asset is archived:
 
 ### Unarchiving an asset
 
-Unarchiving reverses the process:
+Unarchiving restores the asset record. By default the asset's files stay archived:
 
-1. Amazon S3 delete markers are removed, restoring access to the latest file versions.
-2. The preview file delete marker is removed.
-3. The asset record is moved back from `{databaseId}#deleted` to `{databaseId}`.
-4. Archive metadata fields are removed and unarchive metadata is recorded.
-5. The asset count is updated and notifications are sent.
+1. The asset record is moved back from `{databaseId}#deleted` to `{databaseId}`.
+2. Archive metadata fields are removed and unarchive metadata is recorded.
+3. The asset count is updated and notifications are sent.
+
+When the request sets `unarchiveFiles` to `true`, VAMS first removes the Amazon S3 delete markers that the asset archive created (matched by `assetArchive` provenance in the file version history), restoring access to those files' latest versions, and removes the preview file's delete marker. Files archived individually before the asset archive keep their delete markers and stay archived; restore them with [Unarchive File](../api/files.md#unarchive-file). An asset archived before provenance tracking has no restorable file set, so no files are restored for it. An asset whose database has been deleted cannot be unarchived until a database with the same ID is created again.
 
 :::note[Viewing archived assets]
 Use the `showArchived=true` query parameter when listing or getting assets to include archived assets in results.
@@ -216,13 +216,13 @@ Use the `showArchived=true` query parameter when listing or getting assets to in
 
 ## Permanent deletion
 
-Permanent deletion is an irreversible operation that removes all traces of an asset. It requires explicit confirmation via `confirmPermanentDelete: true`.
+Permanent deletion is an irreversible operation that removes an asset and the data listed below. It requires explicit confirmation via `confirmPermanentDelete: true`.
 
 When an asset is permanently deleted, the following are removed:
 
 | Component                | Details                                                                               |
 | ------------------------ | ------------------------------------------------------------------------------------- |
-| Amazon S3 files          | All objects and all versions under the asset prefix, plus auxiliary files.            |
+| Amazon S3 files          | All versions of every object under the asset prefix and of its auxiliary files.       |
 | Amazon S3 preview        | All versions of the preview file.                                                     |
 | Asset record             | Both active and archived records in Amazon DynamoDB.                                  |
 | Metadata                 | All asset-level and file-level metadata and attributes.                               |
@@ -233,6 +233,8 @@ When an asset is permanently deleted, the following are removed:
 | Metadata version records | All versioned metadata snapshots.                                                     |
 | Amazon SNS topic         | The asset's subscription notification topic.                                          |
 | Subscription records     | Subscription records for this asset.                                                  |
+
+Auxiliary files are the previews and viewer data derived from the asset's files. Temporary working files that a workflow execution writes to the auxiliary bucket under `pipelines/{pipelineName}/{executionId}/`, and staged export payloads under `assetExports/`, belong to the execution or the export request rather than the asset, and permanent deletion does not remove them.
 
 :::warning[Permanent deletion cannot be undone]
 Unlike archiving, permanent deletion removes all Amazon S3 object versions. The data cannot be recovered after this operation completes.

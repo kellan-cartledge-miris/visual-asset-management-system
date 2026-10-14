@@ -26,7 +26,10 @@ import * as ServiceHelper from "../../../../../helper/service-helper";
 import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
 import { Service } from "../../../../../helper/service-helper";
 import * as Config from "../../../../../../config/config";
-import { generateUniqueNameHash } from "../../../../../helper/security";
+import {
+    NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
+    generateUniqueNameHash,
+} from "../../../../../helper/security";
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
 import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
@@ -174,6 +177,36 @@ export class PcPotreeViewerConstruct extends NestedStack {
         // (no-op when no external keys are configured)
         grantExternalAssetBucketKmsKeys(containerJobRole);
 
+        // The containers' stdout/stderr, one group per job. Named vended groups under the
+        // /aws/vendedlogs/Pipelines/ prefix the execution-service role is granted to read;
+        // KMS-encrypted and retained for a year, unlike Batch's default group.
+        const pdalLogGroup = new logs.LogGroup(this, "PcPotreeViewerPdalBatchJobLogGroup", {
+            logGroupName:
+                "/aws/vendedlogs/Pipelines/PcPotreeViewerPDAL" +
+                generateUniqueNameHash(
+                    props.config.env.coreStackName,
+                    props.config.env.account,
+                    "PcPotreeViewerPdalBatchJobLogGroup",
+                    10
+                ),
+            encryptionKey: props.storageResources.encryption.kmsKey,
+            retention: logs.RetentionDays.ONE_YEAR,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+        });
+        const potreeLogGroup = new logs.LogGroup(this, "PcPotreeViewerPotreeBatchJobLogGroup", {
+            logGroupName:
+                "/aws/vendedlogs/Pipelines/PcPotreeViewerPotree" +
+                generateUniqueNameHash(
+                    props.config.env.coreStackName,
+                    props.config.env.account,
+                    "PcPotreeViewerPotreeBatchJobLogGroup",
+                    10
+                ),
+            encryptionKey: props.storageResources.encryption.kmsKey,
+            retention: logs.RetentionDays.ONE_YEAR,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+        });
+
         /**
          * AWS Batch Job Definition & Compute Env for PDAL Container
          */
@@ -181,12 +214,15 @@ export class PcPotreeViewerConstruct extends NestedStack {
             this,
             "BatchFargatePipeline_PDAL",
             {
+                // Matches the 5-hour state machine timeout that encloses this job.
+                attemptDuration: cdk.Duration.hours(5),
                 config: props.config,
                 vpc: props.vpc,
                 subnets: props.pipelineSubnets,
                 securityGroups: props.pipelineSecurityGroups,
                 jobRole: containerJobRole,
                 executionRole: containerExecutionRole,
+                logGroup: pdalLogGroup,
                 imageAssetPath: path.join(
                     "..",
                     "..",
@@ -214,12 +250,17 @@ export class PcPotreeViewerConstruct extends NestedStack {
             this,
             "BatchFargatePipeline_Potree",
             {
+                // Matches the 5-hour state machine timeout that encloses this job. The Potree
+                // conversion is the second Batch job in the same state machine as the PDAL one, so
+                // both are bounded by that single timeout.
+                attemptDuration: cdk.Duration.hours(5),
                 config: props.config,
                 vpc: props.vpc,
                 subnets: props.pipelineSubnets,
                 securityGroups: props.pipelineSecurityGroups,
                 jobRole: containerJobRole,
                 executionRole: containerExecutionRole,
+                logGroup: potreeLogGroup,
                 imageAssetPath: path.join(
                     "..",
                     "..",
@@ -306,6 +347,22 @@ export class PcPotreeViewerConstruct extends NestedStack {
             resultPath: "$",
         }).next(pipeLineEndTask);
 
+        // ConstructPipelineTask is the first state, so a failure there ends the execution before
+        // PipelineEndTask runs -- and PipelineEndTask is the only state that reports on the parent
+        // workflow's callback token, which then pends for its full taskTimeout. The handler reports the
+        // token for the errors it raises itself; this covers the failures where it never runs at all:
+        // the function timeout, an out-of-memory kill, an import failure, or an invoke fault that
+        // exhausts the task's service-exception retries.
+        const handleConstructPipelineError = new sfn.Pass(this, "HandleConstructPipelineError", {
+            resultPath: "$",
+        }).next(pipeLineEndTask);
+
+        // resultPath keeps the state and appends the error, so pipelineEnd still finds
+        // externalSfnTaskToken alongside it.
+        constructPipelineTask.addCatch(handleConstructPipelineError, {
+            resultPath: "$.error",
+        });
+
         // batch job Potree Converter
         const potreeConverterBatchJob = new tasks.BatchSubmitJob(this, "PotreeConverterBatchJob", {
             jobName: sfn.JsonPath.stringAt("$.jobName"),
@@ -363,6 +420,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
             this,
             "PcPotreeViewerProcessing-StateMachineLogGroup",
             {
+                encryptionKey: props.storageResources.encryption.kmsKey,
                 logGroupName:
                     "/aws/vendedlogs/VAMSstateMachine-PreviewPcPotreeViewerPipeline" +
                     generateUniqueNameHash(
@@ -371,7 +429,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
                         "PcPotreeViewerProcessing-StateMachineLogGroup",
                         10
                     ),
-                retention: logs.RetentionDays.TEN_YEARS,
+                retention: logs.RetentionDays.ONE_YEAR,
                 removalPolicy: cdk.RemovalPolicy.DESTROY,
             }
         );
@@ -394,6 +452,25 @@ export class PcPotreeViewerConstruct extends NestedStack {
             }
         );
 
+        // Stopping the state machine cancels whichever .sync Batch task is running (PDAL or Potree),
+        // which requires terminating the job; the BatchSubmitJob tasks grant only batch:SubmitJob.
+        // DescribeJobs has no resource type; job ids are generated at submit time, so TerminateJob is
+        // scoped to this account's jobs.
+        pipelineStateMachine.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["batch:DescribeJobs"],
+                resources: ["*"],
+            })
+        );
+        pipelineStateMachine.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["batch:TerminateJob"],
+                resources: [`arn:${ServiceHelper.Partition()}:batch:${region}:${account}:job/*`],
+            })
+        );
+
         /**
          * Lambda Resources & SNS Subscriptions
          */
@@ -411,6 +488,12 @@ export class PcPotreeViewerConstruct extends NestedStack {
             props.pipelineSubnets,
             props.storageResources.eventBridge.orchestrationBus,
             stateMachineLogGroup,
+            {
+                pdalJobDefinitionName: pdalBatchPipeline.batchJobDefinition.jobDefinitionName,
+                pdalLogGroup: pdalLogGroup,
+                potreeJobDefinitionName: potreeBatchPipeline.batchJobDefinition.jobDefinitionName,
+                potreeLogGroup: potreeLogGroup,
+            },
             props.storageResources.encryption.kmsKey
         );
 
@@ -481,7 +564,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*openPipeline/ServiceRole/.*/g",
+                            regex: "/^Resource::.*openPipeline/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -498,7 +581,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*PcPotreeViewerProcessing-StateMachine/Role/.*/g",
+                            regex: "/^Resource::.*PcPotreeViewerProcessing-StateMachine/Role/.*/g",
                         },
                     ],
                 },
@@ -515,7 +598,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*pipelineEnd/ServiceRole/.*/g",
+                            regex: "/^Resource::.*pipelineEnd/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -532,7 +615,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
                     appliesTo: [
                         {
                             // https://github.com/cdklabs/cdk-nag#suppressing-a-rule
-                            regex: "^Resource::.*vamsExecutePreviewPcPotreeViewerPipeline/ServiceRole/.*/g",
+                            regex: "/^Resource::.*vamsExecutePreviewPcPotreeViewerPipeline/ServiceRole/.*/g",
                         },
                     ],
                 },
@@ -545,7 +628,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for ECS Container execution uses AWS Managed Policies",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",
@@ -560,7 +643,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for ECS Container execution uses AWS Managed Policies",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",
@@ -606,11 +689,17 @@ export class PcPotreeViewerConstruct extends NestedStack {
             [
                 {
                     id: "AwsSolutions-IAM5",
-                    reason: "PipelineProcessingStateMachine uses default policy that contains wildcard",
+                    reason:
+                        "batch:DescribeJobs supports no resource-level permissions and Batch job ids are " +
+                        "generated at submit time, so cancelling the .sync job on StopExecution needs " +
+                        "DescribeJobs on * and TerminateJob on job/*; BatchSubmitJob grants SubmitJob on " +
+                        "job-definition/* and LambdaInvoke grants the functions' version qualifiers, and " +
+                        "the logging and X-Ray delivery actions have no resource type.",
                     appliesTo: [
                         "Resource::*",
                         "Action::kms:GenerateDataKey*",
                         `Resource::arn:<AWS::Partition>:batch:${region}:${account}:job-definition/*`,
+                        { regex: "/^Resource::arn:.*:batch:.*:job/\\*$/g" },
                         {
                             regex: "/^Resource::<.*Function.*.Arn>:.*$/g",
                         },

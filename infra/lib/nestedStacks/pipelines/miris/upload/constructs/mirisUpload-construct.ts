@@ -200,6 +200,10 @@ export class MirisUploadConstruct extends Construct {
                 ephemeralStorageGiB: 21,
                 dockerPlatform: cdk.aws_ecr_assets.Platform.LINUX_AMD64,
                 fargateCpuArchitecture: ecs.CpuArchitecture.X86_64,
+                // Matches the state machine timeout that encloses this RUN_JOB (.sync) submission.
+                attemptDuration: Duration.seconds(
+                    props.config.app.miris.upload.taskTimeoutSeconds + 1200
+                ),
             }
         );
 

@@ -4,7 +4,8 @@
 """Metadata Schema models for VAMS - V2 implementation with support for multiple entity types."""
 
 from typing import List, Optional, Literal
-from pydantic import BaseModel, Field, validator, root_validator
+from pydantic import Field
+from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
 from enum import Enum
 import json
 from customLogging.logger import safeLogger
@@ -34,6 +35,41 @@ MAX_CONTROLLED_LIST_KEYS = 1000
 
 # Upper bound for the comma-delimited file-extension restriction string.
 MAX_FILE_KEY_TYPE_RESTRICTION_LENGTH = 1024
+
+# Pagination ceilings for the schema listing. A page must fit the 6 MB Lambda response limit; these
+# match the shared ceilings in common/dynamodb.py so a request one layer accepts the other accepts.
+MAX_SCHEMA_LIST_MAX_ITEMS = 30000
+MAX_SCHEMA_LIST_PAGE_SIZE = 10000
+
+
+def _validate_file_extension_list(value):
+    """Check each entry of a comma-delimited fileKeyTypeRestriction list.
+
+    A restricted schema applies to a file when one entry, stripped and lowercased, equals the
+    extension common.metadataSchemaValidation.extract_file_extension reads from the file's name: the
+    text after its last dot, with that dot. An entry is therefore accepted only in a form that can
+    equal such a value, or as '.all', which applies the schema to every file. The field's
+    max_length bounds the list; no entry has a length limit of its own.
+
+    Messages describe the rule and never repeat the entry.
+    """
+    for extension in (entry.strip() for entry in value.split(',')):
+        if not extension:
+            raise ValueError("Each file extension must be non-empty")
+        if extension.lower() == '.all':
+            continue
+        if not extension.startswith('.'):
+            raise ValueError("Each file extension must start with a dot (e.g., '.glb')")
+        if len(extension) < 2:
+            raise ValueError("Each file extension must have at least one character after the dot")
+        if '.' in extension[1:]:
+            raise ValueError(
+                "Each file extension may contain only one dot; a file is matched by the text "
+                "after the last dot in its name"
+            )
+        if '/' in extension or '\\' in extension:
+            raise ValueError("File extensions may not contain a path separator")
+
 
 #######################
 # Metadata Schema Entity Types
@@ -148,8 +184,8 @@ class GetMetadataSchemasRequestModel(BaseModel, extra='ignore'):
     """Request model for listing metadata schemas with filters"""
     databaseId: Optional[str] = Field(None, min_length=1, max_length=256, description="Filter by database ID")
     metadataEntityType: Optional[MetadataSchemaEntityType] = Field(None, description="Filter by entity type")
-    maxItems: Optional[int] = Field(default=30000, ge=1, description="Maximum items to return")
-    pageSize: Optional[int] = Field(default=3000, ge=1, description="Page size for pagination")
+    maxItems: Optional[int] = Field(default=30000, ge=1, le=MAX_SCHEMA_LIST_MAX_ITEMS, description="Maximum items to return")
+    pageSize: Optional[int] = Field(default=3000, ge=1, le=MAX_SCHEMA_LIST_PAGE_SIZE, description="Page size for pagination")
     startingToken: Optional[str] = Field(None, max_length=MAX_PAGINATION_TOKEN_LENGTH, description="Token for pagination")
 
     @validator('metadataEntityType', pre=True)
@@ -255,10 +291,7 @@ class CreateMetadataSchemaRequestModel(BaseModel, extra='ignore'):
                 raise ValueError("fileKeyTypeRestriction can only be set for fileMetadata or fileAttribute entity types")
             
             # Validate format (comma-delimited extensions)
-            extensions = [ext.strip() for ext in values.get('fileKeyTypeRestriction').split(',')]
-            for ext in extensions:
-                if not ext or len(ext) > 10:
-                    raise ValueError("Each file extension must be non-empty and at most 10 characters")
+            _validate_file_extension_list(values.get('fileKeyTypeRestriction'))
         
         # For fileAttribute entity type, validate that all fields are STRING type
         if values.get('metadataSchemaEntityType') == MetadataSchemaEntityType.FILE_ATTRIBUTE:
@@ -305,6 +338,11 @@ class UpdateMetadataSchemaRequestModel(BaseModel, extra='ignore'):
                 logger.error(message)
                 raise ValueError(message)
         
+        # Validate fileKeyTypeRestriction format if provided; a blank value clears it
+        file_key_type_restriction = values.get('fileKeyTypeRestriction')
+        if file_key_type_restriction is not None and file_key_type_restriction.strip():
+            _validate_file_extension_list(file_key_type_restriction)
+
         # Ensure at least one field is provided for update
         if not any([values.get('schemaName'), values.get('fileKeyTypeRestriction'), values.get('fields'), values.get('enabled') is not None]):
             raise ValueError("At least one field must be provided for update")
@@ -316,9 +354,13 @@ class DeleteMetadataSchemaRequestModel(BaseModel, extra='ignore'):
     """Request model for deleting a metadata schema"""
     confirmDelete: bool = Field(default=False, description="Confirmation for deletion")
 
-    @validator('confirmDelete')
+    @validator('confirmDelete', always=True)
     def validate_confirmation(cls, v):
-        """Ensure confirmation is provided for deletion"""
+        """Ensure confirmation is provided for deletion
+
+        always=True is required: a plain v1 validator does not run when the field is absent from
+        the body, so the default would satisfy the interlock it exists to enforce.
+        """
         if not v:
             raise ValueError("confirmDelete must be true for deletion")
         return v

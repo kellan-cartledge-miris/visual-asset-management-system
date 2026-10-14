@@ -4,6 +4,10 @@ This page documents the asset management endpoints in the VAMS API. Assets are t
 
 For general API information, see the [API Overview](overview.md). For file-level operations within assets, see [Files](files.md). For asset metadata, see [Metadata](metadata.md).
 
+:::note[Free-text whitespace]
+Surrounding whitespace is removed from a submitted `description` before the length constraint is applied and before the value is stored, so a subsequent read returns the trimmed value. A padded value whose trimmed length falls below the documented minimum is rejected with `400`. Interior whitespace is preserved.
+:::
+
 ---
 
 ## Concepts
@@ -28,7 +32,7 @@ Returns a paginated list of all assets in the specified database. By default, ar
 | Parameter       | Location | Type    | Required | Description                                                                                     |
 | --------------- | -------- | ------- | -------- | ----------------------------------------------------------------------------------------------- |
 | `databaseId`    | path     | string  | Yes      | Database identifier. Pattern: `^[-_a-zA-Z0-9]{3,63}$`                                           |
-| `showArchived`  | query    | boolean | No       | When `true`, returns archived (soft-deleted) assets instead of active assets. Default: `false`. |
+| `showArchived`  | query    | boolean | No       | When `true`, returns archived (soft-deleted) assets as well as active assets. Default: `false`. |
 | `maxItems`      | query    | integer | No       | Maximum number of assets to return. Default: `30000`.                                           |
 | `pageSize`      | query    | integer | No       | Page size for pagination. Default: `3000`.                                                      |
 | `startingToken` | query    | string  | No       | Continuation token from a previous response.                                                    |
@@ -42,17 +46,17 @@ Returns a paginated list of all assets in the specified database. By default, ar
             "databaseId": "my-database",
             "assetId": "asset-001",
             "assetName": "Building Model",
-            "assetType": "ifc",
+            "assetType": ".ifc",
             "description": "Main building 3D model",
             "isDistributable": true,
             "tags": ["architecture", "building"],
-            "currentVersionId": "v1",
+            "status": "active",
+            "bucketId": "bucket-001",
+            "bucketName": "vams-asset-bucket",
             "assetLocation": {
-                "Bucket": "vams-asset-bucket",
                 "Key": "my-database/asset-001"
             },
             "previewLocation": {
-                "Bucket": "vams-asset-bucket",
                 "Key": "my-database/asset-001/preview.jpg"
             },
             "currentVersion": {
@@ -61,9 +65,7 @@ Returns a paginated list of all assets in the specified database. By default, ar
                 "Comment": "Initial upload",
                 "description": "",
                 "createdBy": "user@example.com"
-            },
-            "dateCreated": "2024-06-15T10:30:00Z",
-            "dateModified": "2024-06-15T10:30:00Z"
+            }
         }
     ],
     "NextToken": "eyJ..."
@@ -102,7 +104,7 @@ Returns a paginated list of all assets across all databases that the user has pe
             "databaseId": "my-database",
             "assetId": "asset-001",
             "assetName": "Building Model",
-            "assetType": "ifc",
+            "assetType": ".ifc",
             "description": "Main building 3D model",
             "isDistributable": true,
             "tags": ["architecture"]
@@ -138,15 +140,15 @@ Creates a new asset in the specified database. This endpoint creates the asset r
 }
 ```
 
-| Field               | Type          | Required | Description                                                                                              |
-| ------------------- | ------------- | -------- | -------------------------------------------------------------------------------------------------------- |
-| `databaseId`        | string        | Yes      | Target database identifier.                                                                              |
-| `assetName`         | string        | Yes      | Display name for the asset (1-256 characters).                                                           |
-| `description`       | string        | Yes      | Asset description (4-256 characters).                                                                    |
-| `isDistributable`   | boolean       | Yes      | Whether the asset can be downloaded.                                                                     |
-| `assetId`           | string        | No       | Explicit asset identifier (1-256 characters). Cannot contain forward slashes. Auto-generated if omitted. |
+| Field               | Type          | Required | Description                                                                                                                                                                          |
+| ------------------- | ------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `databaseId`        | string        | Yes      | Target database identifier.                                                                                                                                                          |
+| `assetName`         | string        | Yes      | Display name for the asset (1-256 characters).                                                                                                                                       |
+| `description`       | string        | Yes      | Asset description (4-256 characters).                                                                                                                                                |
+| `isDistributable`   | boolean       | Yes      | Whether the asset can be downloaded.                                                                                                                                                 |
+| `assetId`           | string        | No       | Explicit asset identifier (2-255 characters), ASCII characters only. Cannot contain forward slashes. Auto-generated if omitted.                                                      |
 | `tags`              | array[string] | No       | Tags for categorization. Each name must resolve in the asset's database or `GLOBAL`, and every required tag type that has tags must be represented. See [Tags](../concepts/tags.md). |
-| `bucketExistingKey` | string        | No       | Existing key in the database default Amazon S3 bucket to associate with the new asset.                   |
+| `bucketExistingKey` | string        | No       | Existing key in the database default Amazon S3 bucket to associate with the new asset.                                                                                               |
 
 **Response:**
 
@@ -165,6 +167,138 @@ Creates a new asset in the specified database. This endpoint creates the asset r
 | `403`  | Not authorized to create assets in this database. |
 | `404`  | Database not found.                               |
 | `500`  | Internal server error.                            |
+
+---
+
+### Ingest Asset
+
+`POST /ingest-asset`
+
+Creates an asset and uploads its files in one call, combining [Create Asset](#create-asset) with the [upload endpoints](files.md#upload-file). Use it to bring an asset and its complete file set into VAMS without orchestrating the two APIs separately. If the asset already exists, its files are added to it; otherwise the asset is created first.
+
+The endpoint runs in two stages against the same path, distinguished by the presence of `uploadId` in the request body:
+
+1. **Initialize** — describe the asset and the files to upload. The response returns an `uploadId` and presigned part-upload URLs.
+2. **Complete** — after uploading every part to its presigned URL, send the same asset fields plus the `uploadId` and each file's part ETags.
+
+Both stages require `PUT` permission on the asset (`objectType: "asset"`) in addition to route access.
+
+#### Initialize request body
+
+| Field             | Type          | Required | Description                                                                                                          |
+| ----------------- | ------------- | -------- | -------------------------------------------------------------------------------------------------------------------- |
+| `databaseId`      | string        | Yes      | Target database identifier (4-63 characters of letters, numbers, `-` and `_`).                                       |
+| `assetId`         | string        | Yes      | Asset identifier (2-255 characters), ASCII characters only. Every file's `relativeKey` must begin with `{assetId}/`. |
+| `assetName`       | string        | Yes      | Display name for the asset (1-256 characters).                                                                       |
+| `description`     | string        | Yes      | Asset description (4-256 characters).                                                                                |
+| `files`           | array         | Yes      | Files to upload; at least one entry, each with a unique `relativeKey`.                                               |
+| `isDistributable` | boolean       | No       | Whether the asset can be downloaded. Defaults to `true`.                                                             |
+| `tags`            | array[string] | No       | Tags for categorization, applied when the asset is created. See [Tags](../concepts/tags.md).                         |
+
+Each entry in `files` is an object:
+
+| Field         | Type    | Required | Description                                                                           |
+| ------------- | ------- | -------- | ------------------------------------------------------------------------------------- |
+| `relativeKey` | string  | Yes      | Relative file path for the upload. Must begin with `{assetId}/`.                      |
+| `file_size`   | integer | No       | File size in bytes. Either `file_size` or `num_parts` must be provided.               |
+| `num_parts`   | integer | No       | Number of multipart upload parts. Either `file_size` or `num_parts` must be provided. |
+
+```json
+{
+    "databaseId": "my-database",
+    "assetId": "building-model-001",
+    "assetName": "New Building Model",
+    "description": "A detailed 3D model of the new building",
+    "isDistributable": true,
+    "tags": ["architecture"],
+    "files": [
+        {
+            "relativeKey": "building-model-001/models/building.ifc",
+            "file_size": 15728640
+        }
+    ]
+}
+```
+
+#### Initialize response
+
+```json
+{
+    "message": "Upload initialized successfully",
+    "uploadId": "upload-12345",
+    "files": [
+        {
+            "relativeKey": "building-model-001/models/building.ifc",
+            "uploadIdS3": "multipart-upload-id",
+            "numParts": 1,
+            "partUploadUrls": [
+                {
+                    "PartNumber": 1,
+                    "UploadUrl": "https://bucket.s3.amazonaws.com/...?X-Amz-..."
+                }
+            ]
+        }
+    ]
+}
+```
+
+#### Complete request body
+
+Repeat the asset fields from the initialize request, and add:
+
+| Field      | Type   | Required | Description                                                                                                                                    |
+| ---------- | ------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `uploadId` | string | Yes      | Identifier returned by the initialize stage. Its presence selects this stage.                                                                  |
+| `files`    | array  | Yes      | Completed files, each with `relativeKey`, `uploadIdS3`, and a `parts` array of `{ "PartNumber", "ETag" }` objects. At least one part per file. |
+
+```json
+{
+    "databaseId": "my-database",
+    "assetId": "building-model-001",
+    "assetName": "New Building Model",
+    "description": "A detailed 3D model of the new building",
+    "uploadId": "upload-12345",
+    "files": [
+        {
+            "relativeKey": "building-model-001/models/building.ifc",
+            "uploadIdS3": "multipart-upload-id",
+            "parts": [
+                {
+                    "PartNumber": 1,
+                    "ETag": "\"d41d8cd98f00b204e9800998ecf8427e\""
+                }
+            ]
+        }
+    ]
+}
+```
+
+#### Complete response
+
+```json
+{
+    "message": "Multipart upload and asset ingestion completed successfully.",
+    "uploadId": "upload-12345",
+    "assetId": "building-model-001",
+    "fileResults": [
+        {
+            "relativeKey": "building-model-001/models/building.ifc",
+            "uploadIdS3": "multipart-upload-id",
+            "success": true
+        }
+    ],
+    "overallSuccess": true,
+    "largeFileAsynchronousHandling": false
+}
+```
+
+**Error Responses:**
+
+| Status | Description                                                                                                                                                               |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, a `relativeKey` that does not begin with `{assetId}/`, duplicate keys, a database that does not exist, or a failure creating the asset or the upload. |
+| `403`  | Not authorized to write this asset.                                                                                                                                       |
+| `500`  | Internal server error.                                                                                                                                                    |
 
 ---
 
@@ -189,18 +323,17 @@ Retrieves detailed information about a specific asset, including version informa
     "databaseId": "my-database",
     "assetId": "asset-001",
     "assetName": "Building Model",
-    "assetType": "ifc",
+    "assetType": ".ifc",
     "description": "Main building 3D model",
     "isDistributable": true,
     "tags": ["architecture", "building"],
+    "status": "active",
     "bucketId": "bucket-001",
-    "currentVersionId": "v1",
+    "bucketName": "vams-asset-bucket",
     "assetLocation": {
-        "Bucket": "vams-asset-bucket",
         "Key": "my-database/asset-001"
     },
     "previewLocation": {
-        "Bucket": "vams-asset-bucket",
         "Key": "my-database/asset-001/preview.jpg"
     },
     "currentVersion": {
@@ -209,9 +342,7 @@ Retrieves detailed information about a specific asset, including version informa
         "Comment": "Initial upload",
         "description": "",
         "createdBy": "user@example.com"
-    },
-    "dateCreated": "2024-06-15T10:30:00Z",
-    "dateModified": "2024-06-15T10:30:00Z"
+    }
 }
 ```
 
@@ -229,7 +360,7 @@ Retrieves detailed information about a specific asset, including version informa
 
 `PUT /database/{databaseId}/assets/{assetId}`
 
-Updates the editable fields of an existing asset. Only the provided fields are updated; omitted fields remain unchanged.
+Updates the editable fields of an existing asset. Only the provided fields are updated; omitted fields and fields sent as `null` remain unchanged, so at least one field must carry a non-null value. An empty `tags` array clears the tag list, subject to the required tag types described for `tags` below.
 
 **Request Parameters:**
 
@@ -249,11 +380,11 @@ Updates the editable fields of an existing asset. Only the provided fields are u
 }
 ```
 
-| Field             | Type          | Required | Description                            |
-| ----------------- | ------------- | -------- | -------------------------------------- |
-| `assetName`       | string        | No       | Updated asset name.                    |
-| `description`     | string        | No       | Updated description.                   |
-| `isDistributable` | boolean       | No       | Updated distributable flag.            |
+| Field             | Type          | Required | Description                                                                                                                                                                                     |
+| ----------------- | ------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `assetName`       | string        | No       | Updated asset name.                                                                                                                                                                             |
+| `description`     | string        | No       | Updated description.                                                                                                                                                                            |
+| `isDistributable` | boolean       | No       | Updated distributable flag.                                                                                                                                                                     |
 | `tags`            | array[string] | No       | Updated tags (replaces existing tags). Only newly added names are checked for existence, so an asset keeps a tag that was deleted; required tag types that have tags must still be represented. |
 
 **Response:**
@@ -264,7 +395,7 @@ Updates the editable fields of an existing asset. Only the provided fields are u
     "message": "Asset updated successfully",
     "assetId": "asset-001",
     "operation": "update",
-    "timestamp": "2024-06-15T10:30:00Z"
+    "timestamp": "2024-06-15T10:30:00.123456"
 }
 ```
 
@@ -317,10 +448,10 @@ An empty JSON object (`{}`) is sufficient. Both fields are optional.
 ```json
 {
     "success": true,
-    "message": "Asset archived successfully",
+    "message": "Asset asset-001 archived successfully",
     "assetId": "asset-001",
     "operation": "archive",
-    "timestamp": "2024-06-15T10:30:00Z"
+    "timestamp": "2024-06-15T10:30:00.123456"
 }
 ```
 
@@ -339,7 +470,7 @@ An empty JSON object (`{}`) is sufficient. Both fields are optional.
 
 `PUT /database/{databaseId}/assets/{assetId}/unarchiveAsset`
 
-Restores a previously archived asset record, making it active again. The asset's files remain archived by default. Setting `unarchiveFiles` to `true` also restores the files that the asset archive operation archived (matched by `assetArchive` provenance in the file version history); files archived individually before the asset archive always remain archived and can be restored with the [Unarchive File](files.md#unarchive-file) endpoint. Assets archived before provenance tracking have no restorable file set, so no files are restored for them.
+Restores a previously archived asset record, making it active again. The asset's files remain archived by default. Setting `unarchiveFiles` to `true` also restores the files that the asset archive operation archived (matched by `assetArchive` provenance in the file version history); files archived individually before the asset archive always remain archived and can be restored with the [Unarchive File](files.md#unarchive-file) endpoint. Assets archived before provenance tracking have no restorable file set, so no files are restored for them. When `unarchiveFiles` is `true`, the `message` reads `Asset {assetId} unarchived successfully; {count} file(s) archived by the asset archive were restored` instead.
 
 **Request Parameters:**
 
@@ -356,20 +487,20 @@ Restores a previously archived asset record, making it active again. The asset's
 ```json
 {
     "success": true,
-    "message": "Asset unarchived successfully",
+    "message": "Asset asset-001 unarchived successfully. Files previously archived remain archived; unarchive files individually or use the restore-files option.",
     "assetId": "asset-001",
     "operation": "unarchive",
-    "timestamp": "2024-06-15T10:30:00Z"
+    "timestamp": "2024-06-15T10:30:00.123456"
 }
 ```
 
 **Error Responses:**
 
-| Status | Description                             |
-| ------ | --------------------------------------- |
-| `403`  | Not authorized to unarchive this asset. |
-| `404`  | Asset not found or not archived.        |
-| `500`  | Internal server error.                  |
+| Status | Description                                                                                                    |
+| ------ | -------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters or missing body, asset not found or not archived, or the asset's database has been deleted. |
+| `403`  | Not authorized to unarchive this asset.                                                                        |
+| `500`  | Internal server error.                                                                                         |
 
 ---
 
@@ -377,7 +508,7 @@ Restores a previously archived asset record, making it active again. The asset's
 
 `DELETE /database/{databaseId}/assets/{assetId}/deleteAsset`
 
-Permanently deletes an asset, including all associated files, metadata, versions, and auxiliary data.
+Permanently deletes an asset, including all associated files, metadata, versions, and every version of its auxiliary data. The temporary working files a workflow execution writes to the auxiliary bucket under `pipelines/{pipelineName}/{executionId}/`, and staged export payloads under `assetExports/`, are not deleted.
 
 :::danger[Irreversible Operation]
 This operation permanently removes the asset and all its data. It cannot be undone. Consider using [Archive Asset](#archive-asset) for soft-deletion instead.
@@ -411,10 +542,10 @@ A body is required; `confirmPermanentDelete` must be `true`. An empty body retur
 ```json
 {
     "success": true,
-    "message": "Asset deleted successfully",
+    "message": "Asset asset-001 permanently deleted from all systems",
     "assetId": "asset-001",
     "operation": "delete",
-    "timestamp": "2024-06-15T10:30:00Z"
+    "timestamp": "2024-06-15T10:30:00.123456"
 }
 ```
 
@@ -565,6 +696,7 @@ Exports comprehensive asset data including the asset hierarchy (child relationsh
     "includeArchivedFiles": false,
     "fileExtensions": [".pdf", ".jpg"],
     "maxAssets": 100,
+    "maxFiles": 2000,
     "startingToken": null
 }
 ```
@@ -582,7 +714,8 @@ Exports comprehensive asset data including the asset hierarchy (child relationsh
 | `includeParentRelationships`  | boolean       | `false` | Include parent relationships in the relationship data.                |
 | `includeArchivedFiles`        | boolean       | `false` | Include archived files in export.                                     |
 | `fileExtensions`              | array[string] | --      | Filter files to specified extensions only.                            |
-| `maxAssets`                   | integer       | `100`   | Maximum assets per page (minimum `1`).                                |
+| `maxAssets`                   | integer       | `100`   | Maximum assets per page (minimum `1`, maximum `1000`).                |
+| `maxFiles`                    | integer       | `2000`  | Maximum files per page across all of the page's assets (`1`-`10000`). |
 | `startingToken`               | string        | --      | Pagination token from a previous response.                            |
 
 **Response:**
@@ -595,13 +728,14 @@ Exports comprehensive asset data including the asset hierarchy (child relationsh
             "databaseid": "my-database",
             "assetid": "asset-001",
             "assetname": "Building Model",
-            "assettype": "ifc",
+            "assettype": ".ifc",
             "description": "Main building",
             "isdistributable": true,
             "tags": ["architecture"],
             "archived": false,
             "metadata": { ... },
-            "files": [ ... ]
+            "files": [ ... ],
+            "files_truncated": false
         }
     ],
     "relationships": [ ... ],
@@ -611,8 +745,31 @@ Exports comprehensive asset data including the asset hierarchy (child relationsh
 }
 ```
 
-:::info[Response Compression]
-Responses exceeding 100KB are automatically gzip-compressed. The `Content-Encoding: gzip` header indicates compression.
+:::note[A Large Asset Is Returned Over Several Pages]
+`maxFiles` bounds the files one page returns across all of its assets, so a page can end before `maxAssets` assets when the budget runs out. An asset holding more files than the budget is returned over successive pages: its entry sets `files_truncated` to `true`, and `NextToken` resumes that asset's file list where the page stopped rather than moving on to the next asset.
+
+The same asset therefore appears on more than one page, each entry carrying a different part of its `files`. A client that accumulates pages merges an asset's `files` on its `databaseid` and `assetid` instead of appending a second entry for it; `vamscli assets export --auto-paginate` does this. The budget bounds one request and never limits what an export can retrieve.
+:::
+
+:::info[Large Export Payloads Are Delivered by Presigned URL]
+A serialized payload of 100KB or less is returned inline with status `200`, as shown above. A larger payload is staged as a JSON object in the VAMS auxiliary Amazon S3 bucket, and the endpoint responds with status `303` redirecting to a presigned URL for it:
+
+```json
+{
+    "message": "Export payload exceeds the inline response size and is available at the redirect target",
+    "presignedExportPayloadUrl": "https://<auxiliary-bucket>.s3.<region>.amazonaws.com/assetExports/...",
+    "presignedExportPayloadExpiresIn": 3600
+}
+```
+
+The presigned URL is also returned in the `Location` header. Fetching it yields exactly the response body documented above, so a client that follows redirects — which most HTTP clients, including the VAMS CLI, do by default — sees no difference between the two cases. Clients that disable redirect following must read `presignedExportPayloadUrl` from the body and request it separately.
+
+Two constraints apply to the redirect target:
+
+-   **Send no `Authorization` header to the presigned URL.** It carries its own authorization in the query string, and Amazon S3 rejects a request presenting two authorization mechanisms. Standard clients strip the header automatically on a cross-host redirect.
+-   **Issue a `GET`, not a `POST`.** The status is `303` rather than `307` precisely so that redirect-following clients switch the method; the URL is signed for a `GET` and rejects any other verb.
+
+`presignedExportPayloadExpiresIn` reports the longest the URL can remain valid, in seconds, taken from the deployment's presigned-URL timeout. The URL stops working earlier if the Lambda role credentials that signed it expire first, so request the payload promptly.
 :::
 
 **Error Responses:**
@@ -702,3 +859,14 @@ The `assetSnapshot` object is open-schema: snapshot fields may grow over time, a
 | `403`  | Not authorized to view this asset's history. |
 | `404`  | Asset not found.                             |
 | `500`  | Internal server error.                       |
+
+---
+
+## Related resources
+
+-   [Databases API](databases.md) -- Manage the databases assets belong to
+-   [Files API](files.md) -- Upload, move, and stream an asset's files
+-   [Asset Versions API](asset-versions.md) -- Create, inspect, and revert asset versions
+-   [Comments API](comments.md) -- Attach review comments to an asset version
+-   [Metadata API](metadata.md) -- Manage asset and file metadata
+-   [Asset Links API](asset-links.md) -- Relate assets to one another

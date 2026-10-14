@@ -17,12 +17,12 @@ The `user cognito` commands operate against the Amazon Cognito user pool and req
 
 **Symptoms:**
 
--   Commands fail with a `Cognito Operation Error` referencing that Cognito is not enabled
+-   Commands fail with a `Cognito Operation Error` that begins `Cognito not enabled:` and carries the API's message `Cognito user management is not available` (the API answers this case with HTTP `400`, the same status as an invalid request; the CLI tells the two apart by the message)
 -   The CLI reports that the Cognito authentication provider is unavailable
 
 **Cause:**
 
-The VAMS deployment was not configured with the Amazon Cognito authentication provider, so the user management API routes are not active.
+The VAMS deployment was not configured with the Amazon Cognito authentication provider. The user management API routes are deployed in every configuration, but without Cognito the API refuses these calls.
 
 **Resolution:**
 
@@ -43,7 +43,7 @@ The VAMS deployment was not configured with the Amazon Cognito authentication pr
 3. If Cognito is not enabled, contact your VAMS administrator to enable the Amazon Cognito authentication provider in the deployment configuration.
 
 :::note
-The `user cognito` command group is feature-gated. When Amazon Cognito is the configured provider for a deployment, these commands manage users directly in the Amazon Cognito user pool.
+The CLI does not gate the `user cognito` command group on a feature switch; the deployment's API decides whether the commands succeed. When Amazon Cognito is the configured provider for a deployment, these commands manage users directly in the Amazon Cognito user pool.
 :::
 
 ---
@@ -77,7 +77,7 @@ The specified user does not exist in the Amazon Cognito user pool, or the user I
 3. Verify you are operating against the intended profile, since each profile targets a different deployment:
 
     ```bash
-    vamscli --profile \{profile-name\} user cognito list
+    vamscli --profile {profile-name} user cognito list
     ```
 
 ### User Already Exists
@@ -184,13 +184,13 @@ Your account lacks the permissions required for user management operations, whic
 2. Re-authenticate if your session may have expired:
 
     ```bash
-    vamscli auth login -u \{your-username\}
+    vamscli auth login -u {your-username}
     ```
 
 3. If you use an override token, ensure it carries the required permissions:
 
     ```bash
-    vamscli auth set-override --token \{new-token\}
+    vamscli auth set-override --token {new-token}
     ```
 
 4. If the problem persists, ask your VAMS administrator to verify your role grants user management permissions.

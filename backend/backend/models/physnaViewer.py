@@ -14,9 +14,9 @@ pointing at Physna's hosted viewer, bypassing all JS/HTML proxying.
 
 from typing import Optional
 
-from pydantic import Field
+from pydantic import Field, validator
 
-# The Lambda runtime ships aws_lambda_powertools 2.36.0 + Pydantic 1.10.7,
+# The Lambda runtime ships aws_lambda_powertools 2.36.0 + Pydantic 1.10.13,
 # where root_validator is re-exported from the parser module. In older dev/
 # test environments that ship a newer powertools (3.x) this re-export is
 # missing, so we fall back to importing directly from pydantic. BaseModel is
@@ -33,6 +33,7 @@ from common.validators import (
     id_pattern,
     filename_pattern,
     relative_file_path_pattern,
+    trim_name,
 )
 
 logger = safeLogger(service_name="PhysnaViewerModels")
@@ -49,22 +50,23 @@ class PhysnaViewerRequestModel(BaseModel, extra="ignore"):
 
     databaseId: str = Field(
         min_length=4,
-        max_length=256,
-        strip_whitespace=True,
+        max_length=63,
         regex=id_pattern,
     )
     assetId: str = Field(
         min_length=1,
         max_length=256,
-        strip_whitespace=False,
         regex=filename_pattern,
     )
+    # Deliberately NOT trimmed: a trailing space is a legitimate character in an asset-relative
+    # file path, so trimming would retarget the lookup at a different object.
     relativePath: str = Field(
         min_length=2,
         max_length=1024,
-        strip_whitespace=False,
         regex=relative_file_path_pattern,
     )
+
+    _trim_ids = validator('databaseId', 'assetId', pre=True, allow_reuse=True)(trim_name)
 
     # ``skip_on_failure=True`` is a no-op under Pydantic v1 (Lambda runtime)
     # and required under Pydantic v2's compatibility shim (dev/test envs);

@@ -73,7 +73,7 @@
             "usePublicSubnet": false,
             "addAlbS3SpecialVpcEndpoint": true,
             "domainHost": "vams1.example.com",
-            "certificateArn": "arn:aws-us-gov:acm:<REGION>:<ACCOUNTID>:certificate/<CERTIFICATEID>",
+            "certificateArn": "arn:aws:acm:<REGION>:<ACCOUNTID>:certificate/<CERTIFICATEID>",
             "optionalHostedZoneId": null
         },
         "useCloudFront": {
@@ -132,7 +132,7 @@
                     "enabled": false,
                     "ecrContainerImageURI": "<ACCOUNTID>.dkr.ecr.<REGION>.amazonaws.com/<ECR-REPOSITORY>/<IMAGE-ID>:<IMAGE-TAG>",
                     "autoRegisterWithVAMS": true,
-                    "eksClusterVersion": "1.31",
+                    "eksClusterVersion": "1.36",
                     "nodeInstanceType": "m5.2xlarge",
                     "minNodes": 1,
                     "maxNodes": 10,
@@ -220,6 +220,42 @@
                     }
                 }
             },
+            "useNvidiaCosmos3": {
+                "enabled": false,
+                "huggingFaceToken": "",
+                "useCodeBuild": false,
+                "useWarmInstances": false,
+                "warmInstanceCount": 1,
+                "modelsOmni": {
+                    "nano16B": {
+                        "enabled": false,
+                        "autoRegisterWithVAMS": true,
+                        "autoTriggerOnFileExtensionsUpload": "",
+                        "instanceTypes": ["g6e.12xlarge", "g6e.24xlarge", "g6e.48xlarge"],
+                        "maxVCpus": 192
+                    },
+                    "super64B": {
+                        "enabled": false,
+                        "autoRegisterWithVAMS": true,
+                        "autoTriggerOnFileExtensionsUpload": "",
+                        "instanceTypes": ["p5.48xlarge", "p5e.48xlarge", "p4de.24xlarge"],
+                        "maxVCpus": 192
+                    },
+                    "superText2Image64B": {
+                        "enabled": false,
+                        "autoRegisterWithVAMS": true,
+                        "instanceTypes": ["p5.48xlarge", "p5e.48xlarge"],
+                        "maxVCpus": 192
+                    },
+                    "superImage2Video64B": {
+                        "enabled": false,
+                        "autoRegisterWithVAMS": true,
+                        "autoTriggerOnFileExtensionsUpload": "",
+                        "instanceTypes": ["p5.48xlarge", "p5e.48xlarge", "p4de.24xlarge"],
+                        "maxVCpus": 192
+                    }
+                }
+            },
             "useNvidiaGr00t": {
                 "enabled": false,
                 "huggingFaceToken": "",
@@ -257,16 +293,19 @@
         "authProvider": {
             "presignedUrlTimeoutSeconds": 86400,
             "authorizerOptions": {
-                "allowedIpRanges": []
+                "allowedIpRanges": [],
+                "defaultUserRoleName": ""
             },
             "useCognito": {
                 "enabled": true,
                 "useSaml": false,
+                "useOidc": false,
                 "useUserPasswordAuthFlow": false,
                 "credTokenTimeoutSeconds": 3600
             },
             "useExternalOAuthIdp": {
                 "enabled": false,
+                "idpDisplayName": "",
                 "idpAuthProviderUrl": null,
                 "idpAuthClientId": null,
                 "idpAuthProviderScope": null,
@@ -281,7 +320,8 @@
         },
         "webUi": {
             "optionalBannerHtmlMessage": "",
-            "allowUnsafeEvalFeatures": false
+            "allowUnsafeEvalFeatures": false,
+            "allowLocalhostAuthCallbacks": false
         },
         "api": {
             "apiType": "APIGATEWAY_REST",

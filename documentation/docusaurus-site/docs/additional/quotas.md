@@ -44,6 +44,8 @@ All VAMS Lambda functions share the same configuration:
 | Presigned URL timeout    | 86,400 seconds (24 hours) | Yes          | `app.authProvider.presignedUrlTimeoutSeconds`         |
 | Upload initializations   | 20 per user per minute    | No           | Hardcoded rate limit                                  |
 
+`app.authProvider.presignedUrlTimeoutSeconds` takes a whole number from 1 to 604,800 seconds (7 days), the longest Amazon S3 allows for a presigned URL; synthesis warns about any other value. It is an upper bound: a presigned URL is signed with the Lambda function's temporary role credentials and stops working when they expire, which can be sooner than the configured timeout.
+
 ---
 
 ## Storage Limits
@@ -57,7 +59,7 @@ All VAMS DynamoDB tables use on-demand (pay-per-request) billing mode, which aut
 | Billing mode                | On-demand (PAY_PER_REQUEST)               |
 | Maximum item size           | 400 KB (DynamoDB service limit)           |
 | Metadata records per entity | 500                                       |
-| Table count                 | 46 tables (plus 5 retained for migration) |
+| Table count                 | 46 tables (plus 7 retained for migration) |
 
 :::info
 On-demand mode has no provisioned throughput to configure. Amazon DynamoDB automatically allocates capacity based on traffic patterns. For sustained high-throughput workloads, monitor your account-level DynamoDB service quotas.
@@ -138,6 +140,7 @@ so an authoring mistake is reported immediately rather than surfacing at run tim
 | AWS Deadline Cloud job template length | 256 KB                           |
 | Pipeline task timeout                  | 604,800 seconds (7 days)         |
 | `systemConfig` serialized size         | 64 KB                            |
+| Template `overrides` serialized size   | 64 KB                            |
 | `executionConfig` serialized size      | 320 KB                           |
 | `configBody` + `webFormJson` combined  | 5 MB                             |
 
@@ -149,10 +152,12 @@ without a client ever addressing Amazon S3 directly.
 :::
 
 :::info
-The two configuration blocks are bounded by their serialized size so an oversized request is rejected
+The configuration blocks are bounded by their serialized size so an oversized request is rejected
 with a `400` at validation time rather than failing when the record is written. `executionConfig` has
 the larger allowance because an AWS Deadline Cloud block carries a job template up to its own 256 KB
-limit, alongside the settings for the other execution types.
+limit, alongside the settings for the other execution types. A template's `overrides` shares
+`systemConfig`'s budget, since it replaces a subset of the same keys and is stored on the template row
+beside the configuration body.
 :::
 
 ### Workflow Execution Limits

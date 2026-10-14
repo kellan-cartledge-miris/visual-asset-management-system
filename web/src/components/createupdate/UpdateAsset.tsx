@@ -3,9 +3,10 @@ import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
 import FormField from "@cloudscape-design/components/form-field";
 import Synonyms from "../../synonyms";
-import { buildTagOptionGroups } from "../../common/utils/tagOptions";
+import { buildTagOptionGroups, readCachedTagTypes } from "../../common/utils/tagOptions";
 import Input from "@cloudscape-design/components/input";
 import { useEffect, useState } from "react";
+import { useParams } from "react-router-dom";
 import { OptionDefinition } from "@cloudscape-design/components/internal/components/option/interfaces";
 import ProgressBar from "@cloudscape-design/components/progress-bar";
 import { fetchTagsForAsset, fetchTagTypesForAsset, updateAsset } from "../../services/APIService";
@@ -70,6 +71,11 @@ const update = async (
 };
 
 export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
+    const { databaseId: routeDatabaseId } = useParams<{ databaseId: string }>();
+    // The scope the tag-type constraint is read for: the asset's own database, or the route's when
+    // the record in hand does not carry one. Never the unscoped list — that surfaces every other
+    // database's required tag types as constraints on this form.
+    const tagScopeDatabaseId = asset?.databaseId || routeDatabaseId;
     const [assetDetail, setAssetDetail] = useState(asset);
     const [error, setError] = useState({ isError: false, message: "" });
     const [complete, setComplete] = useState(false);
@@ -96,22 +102,23 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
     useEffect(() => {
         setAssetDetail(asset);
         // Scope to global + the asset's database so tags from other databases are hidden.
-        fetchTagsForAsset(asset?.databaseId ? { databaseId: asset.databaseId } : undefined).then(
-            (res) => {
-                tags.length = 0; // Clear without losing reference
-                if (res && Array.isArray(res)) {
-                    // Grouped, scope-labelled and ordered by the shared helper so this picker and the
-                    // upload form present tags identically.
-                    const storedTypes = JSON.parse(localStorage.getItem("tagTypes") || "[]");
-                    buildTagOptionGroups(res, storedTypes).forEach((group) => tags.push(group));
-                }
+        if (!tagScopeDatabaseId) return;
+        fetchTagsForAsset({ databaseId: tagScopeDatabaseId }).then((res) => {
+            tags.length = 0; // Clear without losing reference
+            if (res && Array.isArray(res)) {
+                // Grouped, scope-labelled and ordered by the shared helper so this picker and the
+                // upload form present tags identically.
+                buildTagOptionGroups(res, readCachedTagTypes()).forEach((group) =>
+                    tags.push(group)
+                );
             }
-        );
-        const tagTypesString = localStorage.getItem("tagTypes");
-        const tagTypes = tagTypesString ? JSON.parse(tagTypesString) : [];
+        });
+        const tagTypes = readCachedTagTypes();
         const initTags = asset.tags
             ? asset.tags.map((tagName: string) => {
-                  const tagType = tagTypes.find((type: any) => type.tags.includes(tagName));
+                  const tagType = tagTypes.find(
+                      (type: any) => Array.isArray(type?.tags) && type.tags.includes(tagName)
+                  );
                   const label = tagType ? `${tagName} (${tagType.tagTypeName})` : tagName;
 
                   return {
@@ -130,9 +137,8 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
 
         // Scope to global + the asset's database. The unscoped list let required tag types
         // from OTHER databases block this form, because the tag picker only offers in-scope tags.
-        fetchTagTypesForAsset(
-            asset?.databaseId ? { databaseId: asset.databaseId } : undefined
-        ).then((res) => {
+        if (!tagScopeDatabaseId) return;
+        fetchTagTypesForAsset({ databaseId: tagScopeDatabaseId }).then((res) => {
             if (!Array.isArray(res)) {
                 return;
             }
@@ -164,7 +170,7 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                 }
             }
         });
-    }, []);
+    }, [tagScopeDatabaseId]);
 
     useEffect(() => {
         // Form Validation Error Check

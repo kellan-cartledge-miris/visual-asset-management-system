@@ -23,6 +23,11 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.resourceNames import get_table_name, ResourceKeys
 from customLogging.logger import safeLogger
+from common.batchItemFailures import (
+    all_batch_item_failures,
+    batch_item_identifier,
+    with_batch_item_failures,
+)
 from common.syncTracking import (
     SYNC_OBJECT_TYPE_ASSET_FILE,
     SYNC_ACTION_CREATE,
@@ -33,13 +38,15 @@ from common.syncTracking import (
     write_outbound_sync_record,
 )
 from common.validators import validate
+from common.dynamodb import query_all_items
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
     SEARCHABLE_VAMS_METADATA_KEYS,
     is_system_metadata_key,
 )
-from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS
+from common.s3 import S3_VERSIONS_PAGE_SIZE, is_object_version_archived, list_all_object_versions
+from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS, join_asset_location_key
 from common.dynamoDbMetadataKeys import is_excluded_metadata_record
 from models.common import VAMSGeneralErrorResponse
 
@@ -67,6 +74,30 @@ logger = safeLogger(service_name="GarnetFileIndexer")
 SYNC_SYSTEM_TYPE = "garnetFramework"
 
 
+def _sync_action_for_stream_event(event_name: str) -> str:
+    """Map a DynamoDB stream event name onto a sync-tracking action.
+
+    Mirrors the asset and database indexers: a first-time index (INSERT) is a
+    create and a removed metadata record is a delete. The Garnet entity itself is
+    re-sent with the archived flag rather than removed from the broker, so the
+    action describes what happened to the VAMS record.
+    """
+    if event_name == 'INSERT':
+        return SYNC_ACTION_CREATE
+    if event_name == 'REMOVE':
+        return SYNC_ACTION_DELETE
+    return SYNC_ACTION_MODIFY
+
+
+def _sync_action_for_s3_event(event_name: str) -> str:
+    """Map an S3 notification event name onto a sync-tracking action."""
+    if event_name.startswith('ObjectCreated'):
+        return SYNC_ACTION_CREATE
+    if event_name.startswith('ObjectRemoved'):
+        return SYNC_ACTION_DELETE
+    return SYNC_ACTION_MODIFY
+
+
 def _record_sync(object_type, action, success, database_id, asset_id=None,
                  file_path=None, s3_version_id=None, entity_id=None):
     """Best-effort outbound sync tracking record. Success means the entity was
@@ -90,55 +121,51 @@ def _record_sync(object_type, action, success, database_id, asset_id=None,
 excluded_prefixes = RESERVED_S3_PREFIX_FOLDERS
 excluded_patterns = EXCLUDED_FILE_PATH_PATTERNS
 
+# HeadObject error codes for a key or version that does not exist. A HeadObject error
+# carries no body, so botocore reports the HTTP status as the code.
+S3_NOT_FOUND_ERROR_CODES = ('NoSuchKey', '404', 'NotFound')
+
 try:
     asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving asset storage table name")
-    asset_storage_table_name = None
-
-try:
     asset_file_metadata_storage_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving asset file metadata table name")
-    asset_file_metadata_storage_table_name = None
-
-try:
     file_attribute_storage_table_name = get_table_name(ResourceKeys.FILE_ATTRIBUTE_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving file attribute table name")
-    file_attribute_storage_table_name = None
-
-try:
     s3_asset_buckets_storage_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
-except Exception as e:
-    logger.exception("Failed resolving S3 asset buckets table name")
-    s3_asset_buckets_storage_table_name = None
-
-try:
     garnet_ingestion_queue_url = os.environ["GARNET_INGESTION_QUEUE_URL"]
     garnet_api_endpoint = os.environ["GARNET_API_ENDPOINT"]
 except Exception as e:
-    logger.exception("Failed loading Garnet environment variables")
+    logger.exception("Failed loading environment variables and resource names")
     raise e
 
-asset_storage_table = dynamodb.Table(asset_storage_table_name) if asset_storage_table_name else None
-asset_file_metadata_table = dynamodb.Table(asset_file_metadata_storage_table_name) if asset_file_metadata_storage_table_name else None
-file_attribute_table = dynamodb.Table(file_attribute_storage_table_name) if file_attribute_storage_table_name else None
-s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_storage_table_name) if s3_asset_buckets_storage_table_name else None
+asset_storage_table = dynamodb.Table(asset_storage_table_name)
+asset_file_metadata_table = dynamodb.Table(asset_file_metadata_storage_table_name)
+file_attribute_table = dynamodb.Table(file_attribute_storage_table_name)
+s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_storage_table_name)
 
 #######################
 # Utility Functions
 #######################
 
 def extract_file_extension(file_path: str) -> Optional[str]:
-    """Extract file extension from file path"""
-    if '.' in file_path and not file_path.endswith('/'):
-        return file_path.split('.')[-1].lower()
-    return None
+    """Extract file extension from file path.
+
+    Read from the basename, so a dot in a parent folder name (`/folder.v2/LICENSE`)
+    is not mistaken for an extension. A file with no extension has none.
+    """
+    if file_path.endswith('/'):
+        return None
+    basename = os.path.basename(file_path)
+    if '.' not in basename:
+        return None
+    return basename.split('.')[-1].lower()
 
 def is_folder_path(file_path: str) -> bool:
-    """Check if path represents a folder"""
-    return file_path.endswith('/') or '.' not in os.path.basename(file_path)
+    """Check if path represents a folder.
+
+    Folder-ness is decided from the key shape alone. A missing filename extension
+    does not mean a folder: `LICENSE`, `Dockerfile`, `Makefile` and extension-less
+    data exports are ordinary files, and upload validation accepts them.
+    """
+    return file_path.endswith('/')
 
 def should_skip_file(s3_key: str) -> bool:
     """Check if file should be skipped based on excluded patterns/prefixes"""
@@ -219,6 +246,17 @@ def get_asset_details(database_id: str, asset_id: str) -> Optional[Dict[str, Any
         logger.exception(f"Error getting asset details for {database_id}/{asset_id}: {e}")
         return None
 
+def get_asset_details_any_state(database_id: str, asset_id: str) -> Optional[Dict[str, Any]]:
+    """Get asset details from the live partition, falling back to the archived one.
+
+    Archiving an asset moves its record to the `{databaseId}#deleted` partition, while
+    its files keep the live database id in their S3 metadata.
+    """
+    asset_details = get_asset_details(database_id, asset_id)
+    if asset_details or database_id.endswith('#deleted'):
+        return asset_details
+    return get_asset_details(f"{database_id}#deleted", asset_id)
+
 def get_file_metadata(database_id: str, asset_id: str, file_path: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
     Get file-specific metadata AND attributes from schema tables.
@@ -235,12 +273,13 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str) -> Tuple[
         attributes = {}
         
         # Query assetFileMetadataStorageTable for metadata fields
-        response = asset_file_metadata_table.query(
+        metadata_items = query_all_items(
+            asset_file_metadata_table,
             IndexName='DatabaseIdAssetIdFilePathIndex',
             KeyConditionExpression=Key('databaseId:assetId:filePath').eq(composite_key)
         )
-        
-        for item in response.get('Items', []):
+
+        for item in metadata_items:
             metadata_key = item.get('metadataKey')
             metadata_value = item.get('metadataValue')
             metadata_value_type = item.get('metadataValueType', 'string')
@@ -257,12 +296,13 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str) -> Tuple[
                 }
         
         # Query fileAttributeStorageTable for attribute fields
-        response = file_attribute_table.query(
+        attribute_items = query_all_items(
+            file_attribute_table,
             IndexName='DatabaseIdAssetIdFilePathIndex',
             KeyConditionExpression=Key('databaseId:assetId:filePath').eq(composite_key)
         )
-        
-        for item in response.get('Items', []):
+
+        for item in attribute_items:
             attribute_key = item.get('attributeKey')
             attribute_value = item.get('attributeValue')
             attribute_value_type = item.get('attributeValueType', 'string')
@@ -278,75 +318,72 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str) -> Tuple[
         logger.exception(f"Error getting file metadata for {database_id}/{asset_id}/{file_path}: {e}")
         return {}, {}
 
+def file_info_from_head(response: Dict[str, Any]) -> Dict[str, Any]:
+    """File information carried on a HeadObject response"""
+    file_info = {
+        'size': response.get('ContentLength'),
+        'lastModified': response.get('LastModified').isoformat() if response.get('LastModified') else None,
+        'etag': response.get('ETag', '').strip('"'),
+        'versionId': response.get('VersionId', 'null'),
+        'contentType': response.get('ContentType')
+    }
+
+    # Extract additional metadata from S3 object metadata
+    s3_metadata = response.get('Metadata', {})
+    for key, value in s3_metadata.items():
+        if not is_system_metadata_key(key):
+            file_info[f"s3_{key}"] = value
+        if key in SEARCHABLE_VAMS_METADATA_KEYS:
+            file_info[f"s3_{key}"] = value
+
+    return file_info
+
+def get_s3_object_head(bucket_name: str, s3_key: str) -> Tuple[Optional[Dict[str, Any]], bool]:
+    """Get the HeadObject response that describes a key, and whether the key is archived.
+
+    A live key is described by its current version. A key whose current version is a
+    delete marker is archived and is described by its newest remaining version
+    (ListObjectVersions lists a key's versions newest first). Only the first page of that
+    listing is read; the key's own entries lead it, ahead of any longer sibling key. A key
+    with no remaining version returns (None, False). A HeadObject error other than
+    not-found is raised. The archive check (is_object_version_archived) is best-effort, so
+    an error inside it reads as a key with no remaining version.
+    """
+    try:
+        return s3_client.head_object(Bucket=bucket_name, Key=s3_key), False
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') not in S3_NOT_FOUND_ERROR_CODES:
+            raise
+
+    if not is_object_version_archived(bucket_name, s3_key, client=s3_client):
+        return None, False
+
+    versions = list_all_object_versions(
+        bucket_name, s3_key, client=s3_client, max_keys=S3_VERSIONS_PAGE_SIZE
+    ).get('Versions', [])
+    newest = next((version for version in versions if version.get('Key') == s3_key), None)
+    if newest is None:
+        return None, False
+
+    try:
+        return s3_client.head_object(
+            Bucket=bucket_name, Key=s3_key, VersionId=newest['VersionId']), True
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') not in S3_NOT_FOUND_ERROR_CODES:
+            raise
+        return None, False
+
 def get_s3_file_info(bucket_name: str, s3_key: str) -> Tuple[Optional[Dict[str, Any]], bool]:
     """Get S3 file information and archive status"""
     try:
-        # Try to get current object
-        try:
-            response = s3_client.head_object(Bucket=bucket_name, Key=s3_key)
-            
-            file_info = {
-                'size': response.get('ContentLength'),
-                'lastModified': response.get('LastModified').isoformat() if response.get('LastModified') else None,
-                'etag': response.get('ETag', '').strip('"'),
-                'versionId': response.get('VersionId', 'null'),
-                'contentType': response.get('ContentType')
-            }
-            
-            # Extract additional metadata from S3 object metadata
-            s3_metadata = response.get('Metadata', {})
-            for key, value in s3_metadata.items():
-                if not is_system_metadata_key(key):
-                    file_info[f"s3_{key}"] = value
-                if key in SEARCHABLE_VAMS_METADATA_KEYS:
-                    file_info[f"s3_{key}"] = value
-            
-            return file_info, False  # Not archived
-            
-        except ClientError as e:
-            if e.response['Error']['Code'] == 'NoSuchKey':
-                # File might be archived, check for delete markers
-                try:
-                    versions_response = s3_client.list_object_versions(
-                        Bucket=bucket_name,
-                        Prefix=s3_key,
-                        MaxKeys=10
-                    )
-                    
-                    delete_markers = versions_response.get('DeleteMarkers', [])
-                    versions = versions_response.get('Versions', [])
-                    
-                    has_delete_marker = any(marker['Key'] == s3_key for marker in delete_markers)
-                    
-                    if has_delete_marker:
-                        # File is archived, try to get info from latest version
-                        latest_version = None
-                        for version in versions:
-                            if version['Key'] == s3_key:
-                                if latest_version is None or version['LastModified'] > latest_version['LastModified']:
-                                    latest_version = version
-                        
-                        if latest_version:
-                            file_info = {
-                                'size': latest_version.get('Size'),
-                                'lastModified': latest_version.get('LastModified').isoformat() if latest_version.get('LastModified') else None,
-                                'etag': latest_version.get('ETag', '').strip('"'),
-                                'versionId': latest_version.get('VersionId', 'null'),
-                                'contentType': None
-                            }
-                            return file_info, True  # Archived
-                    
-                    return None, False  # File doesn't exist
-                    
-                except Exception as inner_e:
-                    logger.warning(f"Error checking versions for {s3_key}: {inner_e}")
-                    return None, False
-            else:
-                raise e
-                
+        head_response, is_archived = get_s3_object_head(bucket_name, s3_key)
     except Exception as e:
         logger.exception(f"Error getting S3 file info for {bucket_name}/{s3_key}: {e}")
         return None, False
+
+    if head_response is None:
+        return None, False
+    return file_info_from_head(head_response), is_archived
 
 #######################
 # NGSI-LD Conversion Functions
@@ -366,7 +403,7 @@ def convert_file_to_ngsi_ld(
     """
     Convert VAMS file data to NGSI-LD format for Garnet Framework.
     
-    NGSI-LD Reference: https://garnet-framework.dev/docs/getting-started/ngsi-ld
+    NGSI-LD Reference: https://garnet-framework.tech/docs/getting-started/ngsi-ld
     
     Args:
         database_id: The database ID
@@ -472,7 +509,7 @@ def convert_file_to_ngsi_ld(
             # Calculate full S3 key
             asset_location = asset_data.get('assetLocation', {})
             asset_base_key = asset_location.get('Key', f"{bucket_details['baseAssetsPrefix']}{asset_id}/")
-            s3_key = asset_base_key + file_path.lstrip('/')
+            s3_key = join_asset_location_key(asset_base_key, file_path)
             
             ngsi_ld_entity["s3Key"] = {
                 "type": "Property",
@@ -677,24 +714,30 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> bool:
 
         logger.info(f"Processing S3 event: {event_name} for {s3_key}")
         
-        # Get S3 object metadata to extract asset/database IDs
+        # Resolve the key from S3 rather than from the event: the current version of a
+        # live key, or the newest remaining version of a key whose current version is a
+        # delete marker. A key with no remaining version was permanently deleted, and the
+        # ingestion queue cannot delete an entity, so the record is acknowledged unchanged.
         try:
-            s3_response = s3_client.head_object(Bucket=bucket_name, Key=s3_key)
-            s3_metadata = s3_response.get('Metadata', {})
-            
-            asset_id = s3_metadata.get(ASSET_ID_METADATA_KEY)
-            database_id = s3_metadata.get(DATABASE_ID_METADATA_KEY)
-
-            if not asset_id or not database_id:
-                logger.warning(f"Missing asset/database ID in S3 metadata for {s3_key}")
-                return True  # Skip, not an error
-            
+            s3_response, is_archived = get_s3_object_head(bucket_name, s3_key)
         except ClientError as e:
-            logger.warning(f"Error getting S3 object metadata: {e}")
+            logger.warning(f"Error getting S3 object metadata for {s3_key}: {e}")
+            return False
+
+        if s3_response is None:
+            logger.info(f"No version of {s3_key} remains; Garnet entity left unchanged")
+            return True
+
+        s3_metadata = s3_response.get('Metadata', {})
+        asset_id = s3_metadata.get(ASSET_ID_METADATA_KEY)
+        database_id = s3_metadata.get(DATABASE_ID_METADATA_KEY)
+
+        if not asset_id or not database_id:
+            logger.warning(f"Missing asset/database ID in S3 metadata for {s3_key}")
             return True  # Skip, not an error
-        
-        # Get asset details
-        asset_details = get_asset_details(database_id, asset_id)
+
+        # Get asset details from the live or the archived partition
+        asset_details = get_asset_details_any_state(database_id, asset_id)
         if not asset_details:
             logger.warning(f"Asset not found for S3 file: {database_id}/{asset_id}")
             return True  # Skip, not an error
@@ -721,8 +764,8 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> bool:
         # Get file metadata and attributes
         file_metadata, file_attributes = get_file_metadata(database_id, asset_id, relative_path)
         
-        # Get S3 file information
-        s3_file_info, is_archived = get_s3_file_info(bucket_name, s3_key)
+        # S3 file information from the version resolved above
+        s3_file_info = file_info_from_head(s3_response)
         
         # Convert to NGSI-LD format
         ngsi_ld_entity = convert_file_to_ngsi_ld(
@@ -743,7 +786,8 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> bool:
             logger.info(f"Successfully sent file to Garnet from S3 event: {database_id}/{asset_id}{relative_path}")
         else:
             logger.error(f"Failed to send file to Garnet from S3 event: {database_id}/{asset_id}{relative_path}")
-        _record_sync(SYNC_OBJECT_TYPE_ASSET_FILE, SYNC_ACTION_MODIFY, success,
+        _record_sync(SYNC_OBJECT_TYPE_ASSET_FILE,
+                     _sync_action_for_s3_event(event_name), success,
                      database_id, asset_id=asset_id, file_path=relative_path,
                      s3_version_id=(s3_file_info or {}).get("versionId"),
                      entity_id=ngsi_ld_entity["id"])
@@ -827,7 +871,7 @@ def handle_file_metadata_stream(event_record: Dict[str, Any]) -> bool:
         # Get S3 file information
         asset_location = asset_details.get('assetLocation', {})
         asset_base_key = asset_location.get('Key', f"{bucket_details['baseAssetsPrefix']}{asset_id}/")
-        s3_key = asset_base_key + file_path.lstrip('/')
+        s3_key = join_asset_location_key(asset_base_key, file_path)
         
         s3_file_info = None
         is_archived = False
@@ -855,7 +899,8 @@ def handle_file_metadata_stream(event_record: Dict[str, Any]) -> bool:
             logger.info(f"Successfully sent file to Garnet after metadata change: {database_id}/{asset_id}{file_path}")
         else:
             logger.error(f"Failed to send file to Garnet after metadata change: {database_id}/{asset_id}{file_path}")
-        _record_sync(SYNC_OBJECT_TYPE_ASSET_FILE, SYNC_ACTION_MODIFY, success,
+        _record_sync(SYNC_OBJECT_TYPE_ASSET_FILE,
+                     _sync_action_for_stream_event(event_name), success,
                      database_id, asset_id=asset_id, file_path=file_path,
                      s3_version_id=(s3_file_info or {}).get("versionId"),
                      entity_id=ngsi_ld_entity["id"])
@@ -881,6 +926,9 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
         
         successful_records = 0
         failed_records = 0
+        # Identifiers of records the event-source mapping must redrive. Counting alone left a
+        # failed record deleted from the queue and its document never indexed.
+        batch_failures = []
         
         # Extract bucket info from top-level event (if present from sqsBucketSync)
         asset_bucket_name = event.get('ASSET_BUCKET_NAME')
@@ -915,6 +963,7 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
                                     successful_records += 1
                                 else:
                                     failed_records += 1
+                                    batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                             
                             # Check if SNS message contains Records array (nested from sqsBucketSync)
                             elif 'Records' in sns_message:
@@ -931,6 +980,7 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
                                             successful_records += 1
                                         else:
                                             failed_records += 1
+                                            batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                                     
                                     elif inner_event_source == 'aws:sqs':
                                         # Nested SQS record (from sqsBucketSync)
@@ -959,45 +1009,52 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, Any]:
                                                                 successful_records += 1
                                                             else:
                                                                 failed_records += 1
+                                                                batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                                         except json.JSONDecodeError as inner_e:
                                             logger.exception(f"Error parsing nested SQS/SNS message: {inner_e}")
                                             failed_records += 1
+                                            batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                                     
                                     else:
                                         logger.warning(f"Unknown inner event source: {inner_event_source}")
                                         failed_records += 1
+                                        batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                             
                             else:
                                 logger.warning(f"SNS message format not recognized: {list(sns_message.keys())}")
                                 failed_records += 1
+                                batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                         else:
                             logger.warning("SQS message is not an SNS notification")
                             failed_records += 1
+                            batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                     except json.JSONDecodeError as e:
                         logger.exception(f"Error parsing SQS/SNS message: {e}")
                         failed_records += 1
+                        batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
                         
                 else:
                     logger.warning(f"Unknown event source: {event_source}")
                     failed_records += 1
+                    batch_failures.append({'itemIdentifier': batch_item_identifier(record)})
         
         logger.info(f"Garnet file indexing completed: {successful_records} successful, {failed_records} failed")
         
-        return {
+        return with_batch_item_failures({
             'statusCode': 200,
             'body': {
                 'message': 'Garnet file indexing completed',
                 'successful_records': successful_records,
                 'failed_records': failed_records
             }
-        }
+        }, event, batch_failures)
         
     except Exception as e:
         logger.exception(f"Error in Garnet file indexer lambda handler: {e}")
-        return {
+        return with_batch_item_failures({
             'statusCode': 500,
             'body': {
                 'message': 'Error processing Garnet file indexing',
                 'error': str(e)
             }
-        }
+        }, event, all_batch_item_failures(event))

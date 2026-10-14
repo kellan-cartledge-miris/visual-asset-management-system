@@ -414,7 +414,7 @@ def run_reindexer_direct(
         error_msg = (
             f"Failed to import the backend reindexer handler from {resolved_backend_path}: {e}. "
             f"Ensure --backend-path is correct and the direct-mode Python libraries are installed "
-            f"(boto3, botocore, urllib3, and opensearch-py when using --clear-indexes)."
+            f"(boto3, botocore, urllib3, aws-lambda-powertools, and opensearch-py when using --clear-indexes)."
         )
         logger.exception(error_msg)
         return {'error': error_msg}
@@ -500,7 +500,7 @@ Examples (direct mode — runs the backend handler locally, no 15-minute limit):
 
 Notes:
   - lambda mode (default): invokes the deployed reindexer Lambda. The Lambda function name can be
-    found in the CDK stack outputs as 'ReindexerFunctionNameOutput'. Bound by the 15-minute Lambda
+    found in the CDK stack outputs as 'OpenSearchReindexerFunctionNameOutput'. Bound by the 15-minute Lambda
     maximum; for large datasets use --async and monitor CloudWatch Logs.
   - direct mode: imports and runs the backend reindexer handler locally with no execution-time
     limit. Use for very large repositories where the Lambda would time out. Requires the backend
@@ -538,7 +538,7 @@ Notes:
     lambda_group = parser.add_argument_group('lambda mode')
     lambda_group.add_argument('--function-name',
                               help='Name of the deployed reindexer Lambda function (from CDK output: '
-                                   'ReindexerFunctionNameOutput). Required for --mode lambda.')
+                                   'OpenSearchReindexerFunctionNameOutput). Required for --mode lambda.')
     lambda_group.add_argument('--async', dest='async_invoke', action='store_true',
                               help='Use asynchronous invocation (for large datasets)')
 
