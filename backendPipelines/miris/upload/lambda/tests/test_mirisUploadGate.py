@@ -5,6 +5,7 @@ import os
 from unittest.mock import MagicMock, patch
 
 import pytest
+from botocore.exceptions import ClientError
 
 # This module's boto3 clients are constructed at import time from AWS_REGION. Set it
 # defensively so this test file does not depend on the ambient shell environment.
@@ -66,18 +67,88 @@ def test_claim_key_ignores_the_execution_scoped_aux_prefix(gate):
     assert first["Key"] == second["Key"] == "locks/miris-upload/a1/v7.claim"
 
 
+def _claimed(gate, s3, existing_claim):
+    """Make the conditional put fail, with `existing_claim` (dict, or an exception) already stored.
+
+    Called with `gate.s3_client` already patched, so the error type comes from botocore directly.
+    """
+    s3.exceptions.ClientError = ClientError
+    s3.put_object.side_effect = ClientError({"Error": {"Code": "PreconditionFailed"}}, "PutObject")
+    if isinstance(existing_claim, Exception):
+        s3.get_object.side_effect = existing_claim
+    else:
+        body = MagicMock()
+        body.read.return_value = json.dumps(existing_claim).encode("utf-8")
+        s3.get_object.return_value = {"Body": body}
+
+
+def test_claim_records_a_digest_of_the_task_token_not_the_token(gate):
+    with patch.object(gate, "s3_client") as s3:
+        gate.lambda_handler(_event(), None)
+
+    written = json.loads(s3.put_object.call_args.kwargs["Body"])
+    assert written["owner"] == gate._owner_id("tok-1")
+    assert "tok-1" not in s3.put_object.call_args.kwargs["Body"].decode("utf-8")
+
+
 def test_second_claim_skips_and_reports_success(gate):
-    error = gate.s3_client.exceptions.ClientError(
-        {"Error": {"Code": "PreconditionFailed"}}, "PutObject")
     with patch.object(gate, "s3_client") as s3, patch.object(gate, "sfn_client") as sfn:
-        s3.exceptions.ClientError = type(error)
-        s3.put_object.side_effect = error
+        _claimed(gate, s3, {"assetId": "a1", "owner": gate._owner_id("tok-other")})
         result = gate.lambda_handler(_event(), None)
 
     assert result["gate"] == "skip"
     sfn.send_task_success.assert_called_once()
     output = json.loads(sfn.send_task_success.call_args.kwargs["output"])
     assert output["status"] == "skipped"
+
+
+def test_a_retried_put_that_meets_its_own_claim_proceeds(gate):
+    """The first put attempt landed but its response was lost; the retry hits our own claim.
+
+    Treating that as another execution's claim would skip the upload and strand the claim, since
+    nothing releases a claim the skipping execution believes it does not hold.
+    """
+    with patch.object(gate, "s3_client") as s3, patch.object(gate, "sfn_client") as sfn:
+        _claimed(gate, s3, {"assetId": "a1", "owner": gate._owner_id("tok-1")})
+        result = gate.lambda_handler(_event(), None)
+
+    assert result["gate"] == "proceed"
+    sfn.send_task_success.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "existing_claim",
+    [
+        {"assetId": "a1"},  # written before claims recorded an owner
+        ValueError("not JSON"),
+    ],
+    ids=["no-owner-field", "unreadable"],
+)
+def test_an_unverifiable_claim_is_treated_as_another_executions(gate, existing_claim):
+    with patch.object(gate, "s3_client") as s3, patch.object(gate, "sfn_client"):
+        _claimed(gate, s3, existing_claim)
+        result = gate.lambda_handler(_event(), None)
+
+    assert result["gate"] == "skip"
+
+
+def test_a_claim_released_before_the_read_back_is_treated_as_another_executions(gate):
+    with patch.object(gate, "s3_client") as s3, patch.object(gate, "sfn_client"):
+        _claimed(gate, s3, None)
+        s3.get_object.side_effect = s3.exceptions.ClientError(
+            {"Error": {"Code": "NoSuchKey"}}, "GetObject")
+        result = gate.lambda_handler(_event(), None)
+
+    assert result["gate"] == "skip"
+
+
+def test_without_a_task_token_a_held_claim_is_never_claimed_as_ours(gate):
+    with patch.object(gate, "s3_client") as s3, patch.object(gate, "sfn_client"):
+        _claimed(gate, s3, {"assetId": "a1", "owner": ""})
+        result = gate.lambda_handler(_event(sfnExternalTaskToken=""), None)
+
+    assert result["gate"] == "skip"
+    s3.get_object.assert_not_called()
 
 
 def test_missing_version_falls_back_to_live(gate):

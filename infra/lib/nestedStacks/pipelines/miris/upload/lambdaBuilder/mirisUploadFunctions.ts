@@ -84,8 +84,10 @@ export function buildMirisUploadGateFunction(
             ],
         })
     );
-    // The gate writes nothing but claim objects, so the grant is scoped to that prefix.
+    // The gate touches nothing but claim objects, so the grants are scoped to that prefix. The read
+    // checks the owner of an existing claim, telling a retry of its own put from another execution's.
     storageResources.s3.assetAuxiliaryBucket.grantPut(fun, `${MIRIS_CLAIM_PREFIX}/*`);
+    storageResources.s3.assetAuxiliaryBucket.grantRead(fun, `${MIRIS_CLAIM_PREFIX}/*`);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);

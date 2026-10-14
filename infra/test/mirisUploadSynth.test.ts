@@ -137,6 +137,23 @@ test("Core stack synthesizes with the Miris upload pipeline enabled", () => {
     // Releases the gate's claim when the pipeline cannot be handed off.
     expect(vamsExecuteActions).toContain("s3:DeleteObject*");
 
+    // The gate writes the claim and reads it back to tell a retry of its own put from another
+    // execution's claim, so it needs both halves on the claim prefix.
+    const gateRoleIds = Object.keys(resources).filter(
+        (id) => resources[id].Type === "AWS::IAM::Role" && id.includes("mirisUploadGate")
+    );
+    expect(gateRoleIds).toHaveLength(1);
+    const gateActions = Object.values(resources)
+        .filter(
+            (r: any) =>
+                r.Type === "AWS::IAM::Policy" &&
+                JSON.stringify(r.Properties.Roles ?? []).includes(gateRoleIds[0])
+        )
+        .flatMap((r: any) => r.Properties.PolicyDocument.Statement as any[])
+        .flatMap((s) => (Array.isArray(s.Action) ? s.Action : [s.Action]));
+    expect(gateActions).toContain("s3:PutObject");
+    expect(gateActions).toContain("s3:GetObject*");
+
     // Every failure route must report against the workflow's callback token, so the Batch failure
     // branch runs the end Lambda with a failure status rather than reaching sfn.Fail directly.
     const stateMachine = Object.values(resources).find(
