@@ -209,6 +209,7 @@ const sidebars: SidebarsConfig = {
                         "api/subscriptions",
                         "api/auth",
                         "api/addon",
+                        "api/miris",
                     ],
                 },
                 {

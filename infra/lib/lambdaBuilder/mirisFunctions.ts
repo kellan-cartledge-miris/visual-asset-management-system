@@ -45,7 +45,6 @@ export function buildGetMirisAssetStatusFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
             MIRIS_API_BASE_URL: config.app.miris.upload.mirisApiBaseUrl,
             // The status probe authenticates with the deployment-wide VIEWER key,
             // the same credential the frontend streams with, so it can only ever
@@ -58,7 +57,10 @@ export function buildGetMirisAssetStatusFunction(
         },
     });
 
+    // Read-only: the asset record for Tier-2 authorization, and the Miris stream keys
+    // stored as file metadata on the viewed file.
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetFileMetadataStorageTable.grantReadData(fun);
 
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);

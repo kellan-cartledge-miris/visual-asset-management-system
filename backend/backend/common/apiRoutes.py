@@ -546,6 +546,15 @@ API_ADDON_PHYSNA_VIEWER = ApiRoute("/addon/physna/viewer", (GET,), "addons")
 ADDON_ROUTES: Tuple[ApiRoute, ...] = (API_ADDON_PHYSNA_VIEWER,)
 
 # ---------------------------------------------------------------------------
+# Miris spatial streaming
+# ---------------------------------------------------------------------------
+API_MIRIS_ASSET_STATUS = ApiRoute(
+    "/database/{databaseId}/assets/{assetId}/miris/asset-status", (GET,), "miris"
+)
+
+MIRIS_ROUTES: Tuple[ApiRoute, ...] = (API_MIRIS_ASSET_STATUS,)
+
+# ---------------------------------------------------------------------------
 # Master list and lookups
 # ---------------------------------------------------------------------------
 ALL_API_ROUTES: Tuple[ApiRoute, ...] = (
@@ -571,6 +580,7 @@ ALL_API_ROUTES: Tuple[ApiRoute, ...] = (
     + USER_ROUTES
     + SEARCH_ROUTES
     + ADDON_ROUTES
+    + MIRIS_ROUTES
 )
 
 

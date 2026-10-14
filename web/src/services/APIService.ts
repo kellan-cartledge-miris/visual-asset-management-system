@@ -317,6 +317,50 @@ export const getMirisAssetStatus = async ({
 };
 
 /**
+ * Miris stream recorded on one asset file, as returned by the stream status endpoint.
+ * `state` is `notStreamed`, `invalidUuid`, `unknown`, or the Miris processing state
+ * (`preview`, `streamable`, `error`, `failed`, ...).
+ */
+export interface MirisStreamStatus {
+    filePath: string;
+    mirisAssetUuid: string | null;
+    sourceVersionId: string | null;
+    uploadedAt: string | null;
+    displayName: string | null;
+    state: string;
+}
+
+/**
+ * Fetch the Miris stream status of a file. The server reads the Miris asset UUID from
+ * the file's metadata, so the caller supplies only the asset-relative file path.
+ *
+ * Returns [true, MirisStreamStatus] on success, or [false, errorMessage] on failure.
+ */
+export const getMirisStreamStatus = async ({
+    databaseId,
+    assetId,
+    filePath,
+}: {
+    databaseId: string;
+    assetId: string;
+    filePath: string;
+}): Promise<[true, MirisStreamStatus] | [false, string]> => {
+    try {
+        const response = await apiClient.get(
+            `database/${databaseId}/assets/${assetId}/miris/asset-status`,
+            { queryStringParameters: { filePath } }
+        );
+        if (response && typeof response === "object" && typeof response.state === "string") {
+            return [true, response as MirisStreamStatus];
+        }
+        return [false, response?.message || "Unknown response shape"];
+    } catch (error: any) {
+        console.log(error);
+        return [false, error?.message || "Failed to fetch Miris stream status"];
+    }
+};
+
+/**
  * Returns array of boolean and response/error message for the workflow that the current user is saving/updating, or false if error.
  * @returns {Promise<boolean|{message}|any>}
  */

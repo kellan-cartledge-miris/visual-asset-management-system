@@ -1139,9 +1139,8 @@ export class ApiBuilderNestedStack extends NestedStack {
             );
         }
 
-        // Miris asset-status query endpoint (gated on the upload pipeline, which is
-        // where the integration-key Secrets Manager ARN is configured)
-        if (config.app.miris.enabled && config.app.miris.upload.enabled) {
+        // Miris stream status for a file, read from that file's metadata (streaming viewer)
+        if (config.app.miris.enabled) {
             const mirisGetAssetStatus = buildGetMirisAssetStatusFunction(
                 this,
                 lambdaCommonBaseLayer,
@@ -1151,8 +1150,7 @@ export class ApiBuilderNestedStack extends NestedStack {
                 subnets
             );
             attachFunctionToApi(this, mirisGetAssetStatus, {
-                routePath:
-                    "/database/{databaseId}/assets/{assetId}/miris/asset-status/{mirisAssetUuid}",
+                routePath: "/database/{databaseId}/assets/{assetId}/miris/asset-status",
                 method: apigateway.HttpMethod.GET,
                 registry: registry,
             });

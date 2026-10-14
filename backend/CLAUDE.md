@@ -72,8 +72,8 @@ backend/
 │   │   ├── addon/garnetFramework/                  # Garnet NGSI-LD indexer Lambdas
 │   │   ├── addon/physna/                           # Physna Sync Lambdas (physnaCommon.py shared)
 │   │   └── assetLinks, comments, config, databases, indexing, metadata,
-│   │       metadataschema, roles, search, sendEmail, subscription, tags,
-│   │       tagTypes, userRoles                     # Domain handlers (folder per domain)
+│   │       metadataschema, miris, roles, search, sendEmail, subscription,
+│   │       tags, tagTypes, userRoles               # Domain handlers (folder per domain)
 │   └── models/                                     # Pydantic v1 models, one file per domain
 │       ├── assetsV3.py                             # GOLD STANDARD model file
 │       ├── common.py                               # Response helpers, APIGatewayProxyResponseV2

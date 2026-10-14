@@ -1,40 +1,59 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""GET /database/{databaseId}/assets/{assetId}/miris/asset-status/{mirisAssetUuid}
+"""GET /database/{databaseId}/assets/{assetId}/miris/asset-status?filePath=<asset-relative path>
 
-Proxies a single GET /viewer/v1/asset/{uuid} call to the Miris viewer API and
-returns a compact status payload the viewer plugin can poll. Used to show a
-"Miris is preparing this asset (1-2 hours)" overlay while the asset is still in
-`preview` state, and auto-refresh when it flips to `streamable`.
+Reports the Miris stream recorded on one asset file. The Miris asset UUID is read server side
+from the file's metadata (`miris_asset_uuid` in the asset file metadata table, keyed by exactly
+this databaseId, assetId and filePath). The request carries no UUID, so a caller can only learn
+the status of a stream that the file itself references.
 
-This uses the **viewer key**, deliberately, not the Integration Key. Streaming
-itself only ever needs the viewer key (the frontend SDK authenticates with it),
-so scoping this status probe to the same credential guarantees it can see
-exactly the assets the viewer can stream. Integration Keys resolve to the owning
-Miris user's home workspace, which is administratively mutable and can drift
-away from the workspace holding the assets — when that happened, every status
-probe 404'd and (because the frontend treated that as fatal) blocked streaming
-that the viewer key could otherwise serve fine. The Integration Key remains
-correct for the upload pipeline, which must *create* assets.
+Response body:
 
-This endpoint is advisory only: it drives a progress overlay. It must never be
-able to block streaming, so anything short of a definitive Miris processing
-failure is reported as indeterminate and the client proceeds optimistically.
+    filePath         the normalized asset-relative path, e.g. "/scene.usd"
+    mirisAssetUuid   `miris_asset_uuid`, or null when it is absent or empty
+    sourceVersionId  `miris_source_version_id`, or null when absent ("" when the source
+                     version was not known at upload time)
+    uploadedAt       `miris_uploaded_at` (ISO 8601), or null when absent
+    displayName      `miris_display_name`, or null when absent
+    state            one of the states below
+
+States:
+
+    notStreamed    `miris_asset_uuid` is absent or empty. Miris is not called.
+    invalidUuid    `miris_asset_uuid` is set but is not a UUID. Miris is not called.
+    unknown        The processing state could not be established. Either no viewer key or
+                   Miris API base URL is configured (Miris is not called), or Miris was
+                   unreachable, returned 404 or another non-2xx status, or returned a payload
+                   without a usable `state`.
+    <Miris state>  The processing state reported by the Miris viewer API, passed through as
+                   is: `preview` while Miris prepares the asset, `streamable` once it can be
+                   streamed, and `error` or `failed` for a definitive processing failure.
+
+The status probe authenticates with the deployment-wide viewer key, the same credential the
+frontend streams with, so it sees exactly the assets the viewer can stream. It does not use the
+Integration Key: that key resolves to its owning Miris user's home workspace, which is
+administratively mutable and can drift away from the workspace holding the assets. The
+Integration Key stays with the upload pipeline, which must create assets.
+
+The probe is advisory and must never block streaming. Everything short of a definitive Miris
+processing failure is reported as `unknown`, and the response still carries the UUID so the
+client can attempt the stream.
 
 Authorization is two-tier:
   - Tier 1: enforceAPI on the route
-  - Tier 2: enforce GET on the parent asset (same check that gates opening the
-    asset detail page or downloading the .mrx)
+  - Tier 2: enforce GET on the parent asset, before any metadata is read
 """
-import json
 import os
+import re
 
 import boto3
 import requests
-from aws_lambda_powertools.utilities.parser import ValidationError
+from aws_lambda_powertools.utilities.parser import ValidationError, parse
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from botocore.config import Config
 
+from common.apiRoutes import API_MIRIS_ASSET_STATUS
+from common.resourceNames import ResourceKeys, get_table_name
 from common.validators import validate
 from customLogging.logger import safeLogger
 from handlers.auth import request_to_claims
@@ -47,6 +66,19 @@ from models.common import (
     internal_error,
     success,
     validation_error,
+    validation_error_message,
+)
+from models.miris import (
+    MIRIS_ASSET_UUID_KEY,
+    MIRIS_DISPLAY_NAME_KEY,
+    MIRIS_SOURCE_VERSION_ID_KEY,
+    MIRIS_STREAM_METADATA_KEYS,
+    MIRIS_UPLOADED_AT_KEY,
+    STATE_INVALID_UUID,
+    STATE_NOT_STREAMED,
+    STATE_UNKNOWN,
+    GetMirisAssetStatusRequestModel,
+    MirisAssetStatusResponseModel,
 )
 
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
@@ -56,41 +88,20 @@ logger = safeLogger(service_name="MirisGetAssetStatus")
 claims_and_roles = {}
 
 try:
-    asset_database = os.environ["ASSET_STORAGE_TABLE_NAME"]
-    miris_api_base_url = os.environ["MIRIS_API_BASE_URL"].rstrip("/")
-    # Deployment-wide Miris viewer key, the same credential the frontend streams
-    # with. Injected by the CDK lambda builder from config.app.miris.viewerKey.
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
+    asset_file_metadata_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
+    miris_api_base_url = os.environ.get("MIRIS_API_BASE_URL", "").strip().rstrip("/")
+    # Deployment-wide Miris viewer key, the same credential the frontend streams with.
     miris_viewer_key = os.environ.get("MIRIS_VIEWER_KEY", "").strip()
-except Exception as e:
-    logger.exception("Failed loading environment variables")
-    raise e
+except Exception:
+    logger.exception("Failed loading resource names")
+    raise
 
-asset_table = dynamodb.Table(asset_database)
+asset_table = dynamodb.Table(asset_storage_table_name)
+asset_file_metadata_table = dynamodb.Table(asset_file_metadata_table_name)
 
-# Per Miris REST API reference (verified 2026-06-22), `state` reaches one of these
-# terminal values: preview, streamable, error, failed. `streamable` is what the
-# viewer plugin needs to render; the others map to user-facing messaging.
-_STREAMABLE_STATE = "streamable"
-_ERROR_STATES = ("error", "failed")
-
-
-def _indeterminate(reason: str) -> APIGatewayProxyResponseV2:
-    """Status could not be determined — tell the client to proceed optimistically.
-
-    Deliberately carries no `errorMessage`: the client treats that field as a
-    definitive processing failure and blocks rendering on it. An indeterminate
-    probe (asset not visible to the viewer key, viewer key unset, malformed
-    payload) must not stop a stream that the Miris SDK may well be able to play,
-    so the SDK is left to be the source of truth.
-    """
-    logger.warning(f"Miris asset status indeterminate: {reason}")
-    return success(
-        body={
-            "state": "unknown",
-            "isStreamable": False,
-            "indeterminate": True,
-        }
-    )
+# A Miris `state` is passed through only when it looks like a state token.
+_MIRIS_STATE_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
 
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
@@ -98,11 +109,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     claims_and_roles = request_to_claims(event)
 
     try:
+        path = event["requestContext"]["http"]["path"]
         method = event["requestContext"]["http"]["method"]
-        if method != "GET":
-            return validation_error(
-                body={"message": "Method not allowed"}, event=event
-            )
 
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
@@ -111,11 +119,13 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         else:
             return authorization_error()
 
-        return _handle_get(event)
+        if method == "GET" and API_MIRIS_ASSET_STATUS.matches(path):
+            return _handle_get(event)
+        return validation_error(body={"message": "Method not allowed"}, event=event)
 
     except ValidationError as v:
         logger.exception(f"Validation error: {v}")
-        return validation_error(body={"message": str(v)}, event=event)
+        return validation_error(body={"message": validation_error_message(v)}, event=event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={"message": str(v)}, event=event)
@@ -125,57 +135,94 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
 
 def _handle_get(event):
-    path_params = event.get("pathParameters", {}) or {}
-    database_id = path_params.get("databaseId")
-    asset_id = path_params.get("assetId")
-    miris_asset_uuid = path_params.get("mirisAssetUuid")
+    path_params = event.get("pathParameters") or {}
+    query_params = event.get("queryStringParameters") or {}
 
-    if not database_id or not asset_id or not miris_asset_uuid:
-        return validation_error(
-            body={"message": "databaseId, assetId, and mirisAssetUuid are required"},
-            event=event,
-        )
-
-    (valid, message) = validate(
+    request_model = parse(
         {
-            "databaseId": {"value": database_id, "validator": "ID"},
-            "assetId": {"value": asset_id, "validator": "ASSET_ID"},
-            "mirisAssetUuid": {"value": miris_asset_uuid, "validator": "UUID"},
-        }
+            "databaseId": path_params.get("databaseId"),
+            "assetId": path_params.get("assetId"),
+            "filePath": query_params.get("filePath"),
+        },
+        model=GetMirisAssetStatusRequestModel,
     )
-    if not valid:
-        return validation_error(body={"message": message}, event=event)
+    database_id = request_model.databaseId
+    asset_id = request_model.assetId
+    file_path = request_model.filePath
 
     # Tier-2: must have GET access to the parent asset
-    asset_resp = asset_table.get_item(
+    asset = asset_table.get_item(
         Key={"databaseId": database_id, "assetId": asset_id}
-    )
-    asset = asset_resp.get("Item")
+    ).get("Item")
     if not asset:
-        return general_error(
-            body={"message": "Asset not found"}, event=event
-        )
+        return general_error(body={"message": "Asset not found"}, event=event)
 
     # Casbin policies on asset objects key off object__type='asset'; the
     # DynamoDB record doesn't carry that field, so annotate before enforce().
-    # See backend/CLAUDE.md anti-pattern #3 (Missing object__type annotation).
     asset["object__type"] = "asset"
     casbin_enforcer = CasbinEnforcer(claims_and_roles)
     if not casbin_enforcer.enforce(asset, "GET"):
         return authorization_error()
 
-    # A deployment with the upload pipeline on but no viewer key configured can
-    # still reach this route; degrade to indeterminate rather than erroring.
-    if not miris_viewer_key:
-        return _indeterminate("MIRIS_VIEWER_KEY is not configured")
+    stream_metadata = _read_stream_metadata(database_id, asset_id, file_path)
 
-    # Proxy to the Miris viewer API using the viewer key (see module docstring for
-    # why this is not the Integration Key).
-    #
-    # The key goes in a header, never the query string. The viewer API accepts
-    # both, but a `?viewerKey=` URL leaks the credential into anything that
-    # records URLs — and `requests` embeds the full URL in its exception messages,
-    # so a single connection error would write the key into CloudWatch.
+    miris_asset_uuid = (stream_metadata.get(MIRIS_ASSET_UUID_KEY) or "").strip()
+    response = MirisAssetStatusResponseModel(
+        filePath=file_path,
+        mirisAssetUuid=miris_asset_uuid or None,
+        sourceVersionId=stream_metadata.get(MIRIS_SOURCE_VERSION_ID_KEY),
+        uploadedAt=stream_metadata.get(MIRIS_UPLOADED_AT_KEY),
+        displayName=stream_metadata.get(MIRIS_DISPLAY_NAME_KEY),
+        state=_stream_state(miris_asset_uuid),
+    )
+    return success(body=response.dict())
+
+
+def _read_stream_metadata(database_id: str, asset_id: str, file_path: str) -> dict:
+    """Read the Miris stream keys stored on one file, as {metadataKey: string value}.
+
+    Each key is a single-item read on (metadataKey, databaseId:assetId:filePath), so only
+    rows belonging to this exact file can be returned. Absent keys are omitted.
+    """
+    sort_key = f"{database_id}:{asset_id}:{file_path}"
+    values = {}
+    for metadata_key in MIRIS_STREAM_METADATA_KEYS:
+        item = asset_file_metadata_table.get_item(
+            Key={"metadataKey": metadata_key, "databaseId:assetId:filePath": sort_key}
+        ).get("Item")
+        if not item or item.get("metadataValue") is None:
+            continue
+        value = item["metadataValue"]
+        values[metadata_key] = value if isinstance(value, str) else str(value)
+    return values
+
+
+def _stream_state(miris_asset_uuid: str) -> str:
+    """Resolve the response `state` for the UUID stored on the file."""
+    if not miris_asset_uuid:
+        return STATE_NOT_STREAMED
+
+    (valid, _message) = validate(
+        {"mirisAssetUuid": {"value": miris_asset_uuid, "validator": "UUID"}}
+    )
+    if not valid:
+        logger.warning("miris_asset_uuid on the file is not a UUID")
+        return STATE_INVALID_UUID
+
+    if not miris_viewer_key or not miris_api_base_url:
+        logger.warning("Miris viewer key or API base URL is not configured")
+        return STATE_UNKNOWN
+
+    return _miris_processing_state(miris_asset_uuid)
+
+
+def _miris_processing_state(miris_asset_uuid: str) -> str:
+    """Ask the Miris viewer API for the asset's processing state.
+
+    The key goes in a header, never the query string: a `?viewerKey=` URL leaks the
+    credential into anything that records URLs, and `requests` embeds the full URL in its
+    exception messages.
+    """
     url = f"{miris_api_base_url}/viewer/v1/asset/{miris_asset_uuid}"
     try:
         r = requests.get(
@@ -184,40 +231,28 @@ def _handle_get(event):
             timeout=15,
         )
     except requests.RequestException as e:
-        logger.exception(f"Miris API connection failure: {e}")
-        return general_error(
-            body={"message": "Could not reach Miris API"}, event=event
-        )
+        logger.warning(f"Miris API connection failure: {e}")
+        return STATE_UNKNOWN
 
     if r.status_code == 404:
-        # Not visible to the viewer key. This is NOT proof the asset is gone: it
-        # also covers an asset still being ingested and any workspace-visibility
-        # drift. Report indeterminate so the client still attempts the stream.
-        return _indeterminate(f"viewer API returned 404 for {miris_asset_uuid}")
+        # Not visible to the viewer key. This is not proof the asset is gone: it also covers
+        # an asset still being ingested and any workspace-visibility drift.
+        logger.warning(f"Miris viewer API returned 404 for {miris_asset_uuid}")
+        return STATE_UNKNOWN
     if r.status_code >= 300:
         logger.error(
             f"Miris API returned {r.status_code} for {miris_asset_uuid}: {r.text[:200]}"
         )
-        return _indeterminate(f"viewer API returned {r.status_code}")
+        return STATE_UNKNOWN
 
     try:
         body = r.json()
-    except json.JSONDecodeError:
+    except ValueError:
         logger.error(f"Miris API returned non-JSON for {miris_asset_uuid}: {r.text[:200]}")
-        return _indeterminate("viewer API returned a non-JSON payload")
+        return STATE_UNKNOWN
 
-    state = body.get("state", "")
-    payload = {
-        "state": state,
-        "isStreamable": state == _STREAMABLE_STATE,
-    }
-    # Only a definitive Miris-side processing failure is surfaced as a blocking
-    # error; every other non-streamable state drives the "preparing" overlay.
-    if state in _ERROR_STATES:
-        payload["errorMessage"] = (
-            "Miris processing failed. Check this asset in app.miris.com."
-        )
-    elif not payload["isStreamable"] and not state:
-        # 200 with no usable state — treat as indeterminate, not "processing".
-        return _indeterminate("viewer API response contained no state field")
-    return success(body=payload)
+    state = body.get("state") if isinstance(body, dict) else None
+    if not isinstance(state, str) or not _MIRIS_STATE_PATTERN.fullmatch(state):
+        logger.warning("Miris viewer API response contained no usable state")
+        return STATE_UNKNOWN
+    return state

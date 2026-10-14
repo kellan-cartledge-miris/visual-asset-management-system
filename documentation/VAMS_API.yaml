@@ -9005,6 +9005,59 @@ Several triggers of one type are supported: address each with its own key ('<typ
             security:
                 - DefaultCognitoAuthorizer: []
 
+    /database/{databaseId}/assets/{assetId}/miris/asset-status:
+        get:
+            summary: "Get the Miris stream status of a file."
+            description: "Returns the Miris stream recorded on one asset file and the stream's processing state. The Miris asset UUID is read server side from the file's metadata (`miris_asset_uuid`); the request carries no UUID. The handler enforces GET on the asset before reading any metadata, then reads the `miris_asset_uuid`, `miris_source_version_id`, `miris_uploaded_at`, and `miris_display_name` keys of the file. When `miris_asset_uuid` holds a UUID and a Miris viewer key is configured, the handler asks the Miris viewer API for the asset's processing state. This route is only deployed when `app.miris.enabled` is `true`."
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Unique identifier for database."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+              - name: "assetId"
+                in: "path"
+                description: "Unique identifier for asset."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+              - name: "filePath"
+                in: "query"
+                description: "Asset-relative path of the file, such as `/scene.usd`. A missing leading slash is added, and a leading `/{assetId}/` segment is removed. Must not contain `..` or end with `/`."
+                required: true
+                schema:
+                    type: string
+                    minLength: 1
+                    maxLength: 1024
+            responses:
+                "200":
+                    description: "Stream metadata recorded on the file and the stream state."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/mirisAssetStatusResponse"
+                "400":
+                    description: "Invalid or missing `filePath`, invalid path parameters, or the asset does not exist."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "403":
+                    description: "Caller lacks API-level access to the route or GET access to the asset."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "500":
+                    description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+                - DefaultCognitoAuthorizer: []
+
     /addon/physna/viewer:
         get:
             summary: "Get Physna viewer metadata for a VAMS file."
@@ -13680,6 +13733,40 @@ components:
                 - metadataValue
                 - metadataValueType
         
+        mirisAssetStatusResponse:
+            type: object
+            description: "Miris stream recorded on a file. Key values are returned as stored, or null when the key is absent."
+            properties:
+                filePath:
+                    type: string
+                    description: "Normalized asset-relative path of the file, beginning with `/`."
+                mirisAssetUuid:
+                    type: string
+                    nullable: true
+                    description: "Value of `miris_asset_uuid`, or null when it is absent or empty."
+                sourceVersionId:
+                    type: string
+                    nullable: true
+                    description: "Value of `miris_source_version_id`: the S3 version ID of the file the stream was made from. An empty string means the version was not known when the stream was recorded."
+                uploadedAt:
+                    type: string
+                    nullable: true
+                    description: "Value of `miris_uploaded_at` (ISO 8601)."
+                displayName:
+                    type: string
+                    nullable: true
+                    description: "Value of `miris_display_name`."
+                state:
+                    type: string
+                    description: "`notStreamed` when `miris_asset_uuid` is absent or empty; `invalidUuid` when it is not a UUID; `unknown` when the processing state could not be established (no viewer key configured, or Miris unreachable, not visible to the viewer key, or returning no usable state); otherwise the Miris processing state as reported, such as `preview`, `streamable`, `error`, or `failed`."
+            required:
+                - filePath
+                - mirisAssetUuid
+                - sourceVersionId
+                - uploadedAt
+                - displayName
+                - state
+
         getFileMetadataResponse:
             type: object
             properties:

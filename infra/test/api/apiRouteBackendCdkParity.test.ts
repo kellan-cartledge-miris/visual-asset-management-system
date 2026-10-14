@@ -19,11 +19,12 @@
  *     API Gateway but absent from `apiRoutes.py` reaches a handler that does not recognise it. Depending
  *     on the handler that is a 500 or, worse, a path the authorizer has no constraint mapping for.
  * *   **backend ⊆ CDK holds only once every route-contributing feature is enabled.** Routes can be
- *     feature-gated: `GET /addon/physna/viewer` is registered by the Physna add-on stack, which ships
- *     disabled, so against the stock commercial template the backend surface is legitimately one pair
- *     larger. Measured — that single route is the whole difference (164 backend pairs vs 163). Asserting
+ *     feature-gated: `GET /addon/physna/viewer` is registered by the Physna add-on stack and the Miris
+ *     stream status route by `app.miris.enabled`, both of which ship disabled, so against the stock
+ *     commercial template the backend surface is legitimately larger by those two pairs. Asserting
  *     equality against the stock template would therefore have to hardcode an allowance, which would
- *     grow silently with each new optional route; enabling the add-on instead keeps the assertion exact.
+ *     grow silently with each new optional route; enabling the features instead keeps the assertion
+ *     exact.
  *
  * The backend side is parsed from the Python SOURCE rather than executed, so the test needs no Python
  * interpreter. That is a real constraint: this suite runs under Jest, and a `python` dependency would
@@ -195,6 +196,10 @@ function withRouteContributingFeatures(c: any) {
         physna.clientSecret = "synth-only-client-secret";
         physna.credentialsSecretArn = "";
     }
+    // Miris registers its stream status route and ships disabled.
+    c.app.webUi.allowUnsafeEvalFeatures = true;
+    c.app.miris.enabled = true;
+    c.app.miris.viewerKey = "test-placeholder-viewer-key-000000";
 }
 
 describe("apiRoutes.py parses as expected", () => {
@@ -264,6 +269,12 @@ describe("every backend route is registered with API Gateway", () => {
         // Proves the mutation took effect. Without this, the parity assertion below could pass because
         // the feature never turned on AND the route was dropped from the backend at the same time.
         expect(cdkPairs(synth).has("GET /addon/physna/viewer")).toBe(true);
+    });
+
+    test("[control] enabling Miris added its route", () => {
+        expect(
+            cdkPairs(synth).has("GET /database/{databaseId}/assets/{assetId}/miris/asset-status")
+        ).toBe(true);
     });
 
     test("no backend route is unregistered", () => {
