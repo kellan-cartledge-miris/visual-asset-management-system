@@ -70,7 +70,8 @@ infra/
                                            # workflow / workflow trigger / execution routes
         lambdaLayersBuilder-nestedStack.ts
         constructs/                        # rest-api-gateway-construct, buildOpenApiSpec, amplify-config-lambda,
-                                           # vams-version-lambda, dynamodb-metadataschema-defaults
+                                           # vams-version-lambda, dynamodb-metadataschema-defaults,
+                                           # dynamodb-metadataschema-miris (+ its schema JSON)
       staticWebApp/
         staticWebBuilder-nestedStack.ts    # S3 + CloudFront or ALB web hosting
         constructs/                        # cloudfront-s3-website, alb-s3-website-albDeploy, gateway-albDeploy, custom-cognito-config

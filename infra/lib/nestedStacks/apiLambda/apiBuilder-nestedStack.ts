@@ -61,6 +61,7 @@ import * as Config from "../../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import { authResources } from "../auth/authBuilder-nestedStack";
 import { DynamoDbMetadataSchemaDefaultsConstruct } from "./constructs/dynamodb-metadataschema-defaults-construct";
+import { DynamoDbMetadataSchemaMirisConstruct } from "./constructs/dynamodb-metadataschema-miris-construct";
 import * as iam from "aws-cdk-lib/aws-iam";
 import { kmsKeyPolicyStatementGenerator } from "../../helper/security";
 import { Service } from "../../../lib/helper/service-helper";
@@ -1049,12 +1050,12 @@ export class ApiBuilderNestedStack extends NestedStack {
         });
 
         // Metadata Schema Defaults - Auto-load default schemas if configured
-        if (
+        const autoLoadDefaultMetadataSchemas =
             config.app.metadataSchema.autoLoadDefaultAssetLinksSchema ||
             config.app.metadataSchema.autoLoadDefaultDatabaseSchema ||
             config.app.metadataSchema.autoLoadDefaultAssetSchema ||
-            config.app.metadataSchema.autoLoadDefaultAssetFileSchema
-        ) {
+            config.app.metadataSchema.autoLoadDefaultAssetFileSchema;
+        if (autoLoadDefaultMetadataSchemas || config.app.miris.enabled) {
             // Setup Custom Resource Role Policy for metadata schema initialization
             const metadataSchemaCustomResourcePolicy = new iam.PolicyDocument({
                 statements: [
@@ -1127,16 +1128,26 @@ export class ApiBuilderNestedStack extends NestedStack {
             }
 
             // Instantiate the metadata schema defaults construct
-            const metadataSchemaDefaults = new DynamoDbMetadataSchemaDefaultsConstruct(
-                this,
-                "MetadataSchemaDefaults",
-                {
+            if (autoLoadDefaultMetadataSchemas) {
+                const metadataSchemaDefaults = new DynamoDbMetadataSchemaDefaultsConstruct(
+                    this,
+                    "MetadataSchemaDefaults",
+                    {
+                        customResourceRole: metadataSchemaCustomResourceRole,
+                        lambdaCommonBaseLayer: lambdaCommonBaseLayer,
+                        storageResources: storageResources,
+                        config: config,
+                    }
+                );
+            }
+
+            // Miris stream file metadata schema (shares the stack's custom resource provider role)
+            if (config.app.miris.enabled) {
+                new DynamoDbMetadataSchemaMirisConstruct(this, "MetadataSchemaMiris", {
                     customResourceRole: metadataSchemaCustomResourceRole,
-                    lambdaCommonBaseLayer: lambdaCommonBaseLayer,
                     storageResources: storageResources,
-                    config: config,
-                }
-            );
+                });
+            }
         }
 
         // Miris stream status for a file, read from that file's metadata (streaming viewer)
