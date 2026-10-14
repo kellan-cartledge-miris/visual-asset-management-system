@@ -273,50 +273,6 @@ export const deleteElement = async ({ deleteRoute, elementId, item }: any) => {
 };
 
 /**
- * Query Miris for the current processing state of an asset referenced by an
- * .mrx manifest. Used by the Phase 1 viewer to show a "still processing"
- * overlay and auto-refresh when the asset becomes streamable.
- *
- * Returns [true, { state, isStreamable, errorMessage? }] on success, or
- * [false, errorMessage] on failure. The endpoint is only deployed when the
- * Miris upload pipeline is enabled; consumers should treat a missing endpoint
- * as "feature not deployed, render the viewer anyway."
- */
-export const getMirisAssetStatus = async ({
-    databaseId,
-    assetId,
-    mirisAssetUuid,
-}: {
-    databaseId: string;
-    assetId: string;
-    mirisAssetUuid: string;
-}) => {
-    try {
-        const response = await apiClient.get(
-            `database/${databaseId}/assets/${assetId}/miris/asset-status/${mirisAssetUuid}`,
-            {}
-        );
-        if (response && typeof response === "object" && "state" in response) {
-            return [true, response];
-        }
-        if (response && response.message) {
-            if (
-                response.message.indexOf("error") !== -1 ||
-                response.message.indexOf("Error") !== -1
-            ) {
-                console.log(response.message);
-                return [false, response.message];
-            }
-            return [true, response.message];
-        }
-        return [false, "Unknown response shape"];
-    } catch (error: any) {
-        console.log(error);
-        return [false, error?.message];
-    }
-};
-
-/**
  * Miris stream recorded on one asset file, as returned by the stream status endpoint.
  * `state` is `notStreamed`, `invalidUuid`, `unknown`, or the Miris processing state
  * (`preview`, `streamable`, `error`, `failed`, ...).

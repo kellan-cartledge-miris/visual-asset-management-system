@@ -1,11 +1,15 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""GET /database/{databaseId}/assets/{assetId}/miris/asset-status?filePath=<asset-relative path>
+"""GET /database/{databaseId}/assets/{assetId}/miris/asset-status?filePath=<path or object key>
 
 Reports the Miris stream recorded on one asset file. The Miris asset UUID is read server side
 from the file's metadata (`miris_asset_uuid` in the asset file metadata table, keyed by exactly
 this databaseId, assetId and filePath). The request carries no UUID, so a caller can only learn
 the status of a stream that the file itself references.
+
+`filePath` is the asset-relative path (`/folder/scene.usd`) or the file's full object key. A
+key under the asset's root key (`assetLocation.Key`) or under `{assetId}/` is reduced to the
+relative path the metadata service stores the file's metadata under.
 
 Response body:
 
@@ -79,6 +83,7 @@ from models.miris import (
     STATE_UNKNOWN,
     GetMirisAssetStatusRequestModel,
     MirisAssetStatusResponseModel,
+    asset_relative_file_path,
 )
 
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
@@ -148,7 +153,6 @@ def _handle_get(event):
     )
     database_id = request_model.databaseId
     asset_id = request_model.assetId
-    file_path = request_model.filePath
 
     # Tier-2: must have GET access to the parent asset
     asset = asset_table.get_item(
@@ -163,6 +167,11 @@ def _handle_get(event):
     casbin_enforcer = CasbinEnforcer(claims_and_roles)
     if not casbin_enforcer.enforce(asset, "GET"):
         return authorization_error()
+
+    # A full object key is reduced against this asset's own root key only.
+    asset_location = asset.get("assetLocation")
+    asset_root_key = asset_location.get("Key") if isinstance(asset_location, dict) else None
+    file_path = asset_relative_file_path(request_model.filePath, asset_id, asset_root_key)
 
     stream_metadata = _read_stream_metadata(database_id, asset_id, file_path)
 

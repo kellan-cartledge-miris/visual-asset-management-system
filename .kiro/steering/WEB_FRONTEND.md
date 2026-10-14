@@ -18,7 +18,7 @@ VAMS frontend is a **React 18.3 + TypeScript ^5.0.0** single-page application bu
 -   React Context API + useReducer for shared state
 -   Custom apiClient (fetch-based) for API calls, AWS Amplify v6 for authentication
 -   HashRouter (`#/` URLs) for all routing
--   Plugin-based 3D viewer architecture (19 viewer plugin directories)
+-   Plugin-based 3D viewer architecture (20 viewer plugin directories)
 -   React.lazy + Suspense for route-level code splitting
 
 ---
@@ -185,6 +185,7 @@ web/
         ColumnarViewerPlugin/
         HTMLViewerPlugin/
         ImageViewerPlugin/
+        MirisStreamViewerPlugin/      # Miris Spatial Streaming (USD files, MIRIS_STREAMING)
         NeedleUSDViewerPlugin/
         Online3dViewerPlugin/
         PDFViewerPlugin/
@@ -816,6 +817,7 @@ The 3D/media viewer system uses a plugin-based architecture:
 | `vntana-viewer`                    | VNTANA 3D Viewer               | 3d       | .glb                                                                                                                                     | **disabled** (licensed)                             |
 | `veerum-viewer`                    | VEERUM 3D Viewer               | 3d       | .e57, .las, .laz, .ply, .json                                                                                                            | **disabled** (licensed)                             |
 | `needletools-usd-viewer`           | Needle USD Viewer              | 3d       | .usd, .usda, .usdc, .usdz                                                                                                                | enabled (requires ALLOWUNSAFEEVAL)                  |
+| `miris-stream-viewer`              | Miris Spatial Streaming        | 3d       | .usd, .usda, .usdc, .usdz                                                                                                                | enabled (requires MIRIS_STREAMING)                  |
 | `threejs-viewer`                   | Three.js Viewer                | 3d       | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .igs, .brep                                                   | enabled                                             |
 | `physna-viewer`                    | Physna Viewer                  | 3d       | .3ds, .asm, .catpart, .catproduct, .glb, .iam, .iges, .igs, .ipt, .jt, .obj, .par, .prt, .sldasm, .sldprt, .stl, .step, .stp, .x_b, .x_t | enabled (requires PHYSNA_ADDON)                     |
 | `thatopenwebifc-viewer`            | ThatOpen IFC BIM Viewer        | 3d       | .ifc, .ifczip                                                                                                                            | enabled (requires ALLOWUNSAFEEVAL)                  |

@@ -58,11 +58,12 @@ def _metadata_table(rows_by_file=None):
     return table
 
 
-def _asset_table(found=True):
+def _asset_table(found=True, root_key=None):
     table = MagicMock()
-    table.get_item.return_value = (
-        {"Item": {"databaseId": DATABASE_ID, "assetId": ASSET_ID}} if found else {}
-    )
+    item = {"databaseId": DATABASE_ID, "assetId": ASSET_ID, "bucketId": "bucket-1"}
+    if root_key is not None:
+        item["assetLocation"] = {"Key": root_key}
+    table.get_item.return_value = {"Item": item} if found else {}
     return table
 
 
@@ -295,6 +296,83 @@ class TestFilePathNormalization:
         asset_table.get_item.assert_not_called()
         table.get_item.assert_not_called()
         miris_get.assert_not_called()
+
+
+# (asset root key, file's full object key, relative path the metadata is stored under)
+ASSET_LAYOUTS = {
+    "default-bucket": (f"{ASSET_ID}/", f"{ASSET_ID}/folder/scene.usd", "/folder/scene.usd"),
+    "base-assets-prefix": (
+        f"assets/{ASSET_ID}/",
+        f"assets/{ASSET_ID}/folder/scene.usd",
+        "/folder/scene.usd",
+    ),
+    "bucket-existing-key": ("projects/site-a/", "projects/site-a/sub/scene.usd", "/sub/scene.usd"),
+    "root-without-slashes": ("projects/site-a", "projects/site-a/sub/scene.usd", "/sub/scene.usd"),
+    "root-with-leading-slash": ("/projects/site-a/", "projects/site-a/sub/scene.usd", "/sub/scene.usd"),
+}
+
+
+@pytest.mark.unit
+class TestAssetRootKey:
+    """filePath may be the file's full object key under any asset root layout."""
+
+    @pytest.mark.parametrize("layout", sorted(ASSET_LAYOUTS))
+    @pytest.mark.parametrize("form", ["key", "slash-key", "relative", "relative-no-slash"])
+    def test_every_form_addresses_the_stored_row(self, layout, form):
+        root_key, full_key, relative = ASSET_LAYOUTS[layout]
+        given = {
+            "key": full_key,
+            "slash-key": "/" + full_key,
+            "relative": relative,
+            "relative-no-slash": relative.lstrip("/"),
+        }[form]
+        table = _metadata_table({f"{DATABASE_ID}:{ASSET_ID}:{relative}": _stream_row()})
+        status, body, _, _ = _invoke(
+            _event(given), metadata_table=table, asset_table=_asset_table(root_key=root_key)
+        )
+        assert status == 200
+        assert body["filePath"] == relative
+        assert body["mirisAssetUuid"] == STORED_UUID
+
+    @pytest.mark.parametrize(
+        "root_key, given",
+        [
+            (f"assets/{ASSET_ID}/", "/assets/asset-2/scene.usd"),
+            (f"{ASSET_ID}/", "/asset-2/scene.usd"),
+            ("projects/site-a/", "/projects/site-b/scene.usd"),
+        ],
+        ids=["other-asset-under-base-prefix", "other-asset-default", "sibling-existing-key"],
+    )
+    def test_another_assets_key_is_not_streamed(self, root_key, given):
+        # The other asset's row exists; only this asset's rows are ever addressed.
+        table = _metadata_table({
+            f"{DATABASE_ID}:asset-2:/scene.usd": _stream_row(),
+            f"{DATABASE_ID}:{ASSET_ID}:/scene.usd": _stream_row(uuid=OTHER_UUID),
+        })
+        status, body, _, miris_get = _invoke(
+            _event(given), metadata_table=table, asset_table=_asset_table(root_key=root_key)
+        )
+        assert status == 200
+        assert body["state"] == "notStreamed"
+        assert body["mirisAssetUuid"] is None
+        sort_keys = {c.kwargs["Key"][SORT_KEY_FIELD] for c in table.get_item.call_args_list}
+        assert sort_keys == {f"{DATABASE_ID}:{ASSET_ID}:{given}"}
+        miris_get.assert_not_called()
+
+    def test_traversal_in_a_full_key_is_400(self):
+        asset_table = _asset_table(root_key=f"assets/{ASSET_ID}/")
+        status, _, table, _ = _invoke(
+            _event(f"/assets/{ASSET_ID}/../asset-2/scene.usd"), asset_table=asset_table
+        )
+        assert status == 400
+        table.get_item.assert_not_called()
+
+    def test_the_root_itself_is_a_folder_and_400(self):
+        status, _, table, _ = _invoke(
+            _event("/projects/site-a/"), asset_table=_asset_table(root_key="projects/site-a/")
+        )
+        assert status == 400
+        table.get_item.assert_not_called()
 
 
 @pytest.mark.unit

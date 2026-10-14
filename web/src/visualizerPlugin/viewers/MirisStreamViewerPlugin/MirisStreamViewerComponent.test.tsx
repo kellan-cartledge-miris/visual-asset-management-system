@@ -1,5 +1,5 @@
 /*
- * Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 import React from "react";
@@ -97,12 +97,14 @@ jest.mock("./dependencies", () => ({
     },
 }));
 
-// --- Mock downloadAsset and getMirisAssetStatus ---
+// --- Mock the stream status and file info calls ---
+const mockGetMirisStreamStatus = jest.fn();
+const mockFetchFileInfo = jest.fn();
 const mockDownloadAsset = jest.fn();
-const mockGetMirisAssetStatus = jest.fn();
 jest.mock("../../../services/APIService", () => ({
+    getMirisStreamStatus: (...args: unknown[]) => mockGetMirisStreamStatus(...args),
+    fetchFileInfo: (...args: unknown[]) => mockFetchFileInfo(...args),
     downloadAsset: (...args: unknown[]) => mockDownloadAsset(...args),
-    getMirisAssetStatus: (...args: unknown[]) => mockGetMirisAssetStatus(...args),
 }));
 
 // --- Mock appCache ---
@@ -113,147 +115,283 @@ jest.mock("../../../services/appCache", () => ({
     },
 }));
 
-// --- Mock global fetch (used to retrieve presigned URL content) ---
-const realFetch = global.fetch;
+const status = (overrides: Record<string, unknown> = {}) => [
+    true,
+    {
+        filePath: "/folder/scene.usd",
+        mirisAssetUuid: VALID_UUID,
+        sourceVersionId: "v1",
+        uploadedAt: "2026-10-14T12:00:00Z",
+        displayName: "Scene stream",
+        state: "streamable",
+        ...overrides,
+    },
+];
+
 beforeEach(() => {
     jest.clearAllMocks();
     mockAppCacheGet.mockReturnValue({ mirisViewerKey: "key-1234567890abcdef" });
-    global.fetch = jest.fn().mockResolvedValue({
-        text: () =>
-            Promise.resolve(
-                JSON.stringify({
-                    schemaVersion: 1,
-                    mirisAssetUuid: VALID_UUID,
-                })
-            ),
-    }) as unknown as typeof fetch;
-    mockDownloadAsset.mockResolvedValue([true, "https://signed.example.com/manifest"]);
-    // Default: asset is already streamable — happy-path tests don't need the overlay.
-    mockGetMirisAssetStatus.mockResolvedValue([true, { state: "streamable", isStreamable: true }]);
-});
-afterAll(() => {
-    global.fetch = realFetch;
+    mockGetMirisStreamStatus.mockResolvedValue(status());
+    mockFetchFileInfo.mockResolvedValue([
+        true,
+        { versions: [{ versionId: "v1", isLatest: true }] },
+    ]);
 });
 
 const baseProps = {
     assetId: "asset-1",
     databaseId: "db-1",
-    assetKey: "model.mrx",
+    assetKey: "asset-1/folder/scene.usd",
     versionId: "v1",
     viewerMode: "wide",
     onViewerModeChange: jest.fn(),
 };
 
+const STALE_TEXT = /built from a different version of this file/i;
+
 describe("MirisStreamViewerComponent", () => {
-    it("renders the not-configured banner when mirisViewerKey is missing", async () => {
-        mockAppCacheGet.mockReturnValue({});
-        render(<MirisStreamViewerComponent {...baseProps} />);
-        await waitFor(() => expect(screen.getByText(/not configured/i)).toBeInTheDocument());
-        expect(mockSceneCtor).not.toHaveBeenCalled();
-    });
-
-    it("renders an error overlay when manifest fails to parse", async () => {
-        global.fetch = jest.fn().mockResolvedValue({
-            text: () => Promise.resolve("not json {{"),
-        }) as unknown as typeof fetch;
-
-        render(<MirisStreamViewerComponent {...baseProps} />);
-        await waitFor(() => expect(screen.getByText(/malformed|invalid/i)).toBeInTheDocument());
-        expect(mockSceneCtor).not.toHaveBeenCalled();
-    });
-
-    it("instantiates MirisScene and MirisStream on the happy path", async () => {
-        render(<MirisStreamViewerComponent {...baseProps} />);
-        await waitFor(() => expect(mockSceneCtor).toHaveBeenCalledTimes(1));
-        expect(mockSceneCtor).toHaveBeenCalledWith({
-            viewerKey: "key-1234567890abcdef",
+    describe("status request", () => {
+        it("asks for the status of the viewed file by its object key", async () => {
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() => expect(mockGetMirisStreamStatus).toHaveBeenCalledTimes(1));
+            expect(mockGetMirisStreamStatus).toHaveBeenCalledWith({
+                databaseId: "db-1",
+                assetId: "asset-1",
+                filePath: "/asset-1/folder/scene.usd",
+            });
         });
-        expect(mockStreamCtor).toHaveBeenCalledWith({ uuid: VALID_UUID });
-    });
 
-    it("disposes controls, stream, renderer on unmount", async () => {
-        const { unmount } = render(<MirisStreamViewerComponent {...baseProps} />);
-        await waitFor(() => expect(mockSceneCtor).toHaveBeenCalledTimes(1));
-
-        await act(async () => {
-            unmount();
+        it("sends a key under a bucket prefix unchanged for the server to reduce", async () => {
+            render(
+                <MirisStreamViewerComponent
+                    {...baseProps}
+                    assetKey="projects/site-a/sub/scene.usd"
+                />
+            );
+            await waitFor(() => expect(mockGetMirisStreamStatus).toHaveBeenCalledTimes(1));
+            expect(mockGetMirisStreamStatus.mock.calls[0][0].filePath).toBe(
+                "/projects/site-a/sub/scene.usd"
+            );
         });
-        // OrbitControls.dispose is now what the component calls (replaced MirisControls).
-        expect(mockOrbitDispose).toHaveBeenCalledTimes(1);
-        expect(mockStreamRemoveFromParent).toHaveBeenCalledTimes(1);
+
+        it("never downloads the file", async () => {
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() => expect(mockSceneCtor).toHaveBeenCalledTimes(1));
+            expect(mockDownloadAsset).not.toHaveBeenCalled();
+        });
     });
 
-    it("registers a sceneloaded handler for camera framing", async () => {
-        render(<MirisStreamViewerComponent {...baseProps} />);
-        await waitFor(() => expect(mockSceneCtor).toHaveBeenCalledTimes(1));
-        // streamloaded (for timeout-clear) AND sceneloaded (for bounds-fit) should both be wired.
-        const events = mockStreamAddEventListener.mock.calls.map((c) => c[0]);
-        expect(events).toContain("streamloaded");
-        expect(events).toContain("sceneloaded");
+    describe("streaming", () => {
+        it("constructs MirisStream with exactly the returned UUID", async () => {
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() => expect(mockSceneCtor).toHaveBeenCalledTimes(1));
+            expect(mockSceneCtor).toHaveBeenCalledWith({ viewerKey: "key-1234567890abcdef" });
+            expect(mockStreamCtor).toHaveBeenCalledTimes(1);
+            expect(mockStreamCtor).toHaveBeenCalledWith({ uuid: VALID_UUID });
+        });
+
+        it("labels the stream with the returned display name", async () => {
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() => expect(screen.getByText("Scene stream")).toBeInTheDocument());
+        });
+
+        it("streams when Miris could not be queried (state unknown)", async () => {
+            mockGetMirisStreamStatus.mockResolvedValue(status({ state: "unknown" }));
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() => expect(mockSceneCtor).toHaveBeenCalledTimes(1));
+            expect(mockStreamCtor).toHaveBeenCalledWith({ uuid: VALID_UUID });
+            expect(screen.queryByText(/preparing this asset/i)).not.toBeInTheDocument();
+        });
+
+        it("renders the not-configured banner when mirisViewerKey is missing", async () => {
+            mockAppCacheGet.mockReturnValue({});
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() => expect(screen.getByText(/not configured/i)).toBeInTheDocument());
+            expect(mockSceneCtor).not.toHaveBeenCalled();
+        });
+
+        it("disposes controls, stream, renderer on unmount", async () => {
+            const { unmount } = render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() => expect(mockSceneCtor).toHaveBeenCalledTimes(1));
+
+            await act(async () => {
+                unmount();
+            });
+            expect(mockOrbitDispose).toHaveBeenCalledTimes(1);
+            expect(mockStreamRemoveFromParent).toHaveBeenCalledTimes(1);
+        });
+
+        it("registers a sceneloaded handler for camera framing", async () => {
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() => expect(mockSceneCtor).toHaveBeenCalledTimes(1));
+            // streamloaded (for timeout-clear) AND sceneloaded (for bounds-fit) should both be wired.
+            const events = mockStreamAddEventListener.mock.calls.map((c) => c[0]);
+            expect(events).toContain("streamloaded");
+            expect(events).toContain("sceneloaded");
+        });
     });
 
-    it("shows the processing overlay when Miris is still preparing the asset", async () => {
-        mockGetMirisAssetStatus.mockResolvedValue([
-            true,
-            { state: "preview", isStreamable: false },
-        ]);
-        render(<MirisStreamViewerComponent {...baseProps} />);
-        await waitFor(() => expect(screen.getByText(/preparing this asset/i)).toBeInTheDocument());
-        // Renderer should NOT be initialized while we're showing the overlay.
-        expect(mockSceneCtor).not.toHaveBeenCalled();
+    describe("not streamed", () => {
+        it("shows the Not yet streamed guidance and does not touch the SDK", async () => {
+            mockGetMirisStreamStatus.mockResolvedValue(
+                status({
+                    mirisAssetUuid: null,
+                    sourceVersionId: null,
+                    uploadedAt: null,
+                    displayName: null,
+                    state: "notStreamed",
+                })
+            );
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() =>
+                expect(screen.getByText(/not yet streamed with miris/i)).toBeInTheDocument()
+            );
+            expect(screen.getByText("Stream with Miris")).toBeInTheDocument();
+            expect(screen.queryByRole("button")).not.toBeInTheDocument();
+            expect(mockSceneCtor).not.toHaveBeenCalled();
+            expect(mockStreamCtor).not.toHaveBeenCalled();
+        });
     });
 
-    it("renders normally when the status check fails (endpoint not deployed)", async () => {
-        // Simulate the endpoint not being deployed: throw synchronously.
-        mockGetMirisAssetStatus.mockRejectedValue(new Error("network"));
-        render(<MirisStreamViewerComponent {...baseProps} />);
-        await waitFor(() => expect(mockSceneCtor).toHaveBeenCalledTimes(1));
+    describe("errors", () => {
+        it("shows an error for an invalid UUID without constructing the SDK", async () => {
+            mockGetMirisStreamStatus.mockResolvedValue(
+                status({ mirisAssetUuid: "not-a-uuid", state: "invalidUuid" })
+            );
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() => expect(screen.getByText(/not a valid UUID/i)).toBeInTheDocument());
+            expect(mockSceneCtor).not.toHaveBeenCalled();
+            expect(mockStreamCtor).not.toHaveBeenCalled();
+        });
+
+        it("shows an error when the status request fails", async () => {
+            mockGetMirisStreamStatus.mockResolvedValue([false, "Not Authorized"]);
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() =>
+                expect(
+                    screen.getByText(/could not load the miris stream status/i)
+                ).toBeInTheDocument()
+            );
+            expect(mockStreamCtor).not.toHaveBeenCalled();
+        });
+
+        it("shows an error when the status request throws", async () => {
+            mockGetMirisStreamStatus.mockRejectedValue(new Error("network"));
+            const consoleError = jest.spyOn(console, "error").mockImplementation(() => undefined);
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() =>
+                expect(screen.getByText(/miris viewer failed to load/i)).toBeInTheDocument()
+            );
+            expect(mockStreamCtor).not.toHaveBeenCalled();
+            consoleError.mockRestore();
+        });
+
+        it("surfaces a definitive Miris processing failure", async () => {
+            mockGetMirisStreamStatus.mockResolvedValue(status({ state: "failed" }));
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() =>
+                expect(screen.getByText(/miris processing failed/i)).toBeInTheDocument()
+            );
+            expect(mockSceneCtor).not.toHaveBeenCalled();
+        });
     });
 
-    it("surfaces a Miris-side error when status returns errorMessage", async () => {
-        mockGetMirisAssetStatus.mockResolvedValue([
-            true,
-            {
-                state: "failed",
-                isStreamable: false,
-                errorMessage: "Miris processing failed. Check this asset in app.miris.com.",
-            },
-        ]);
-        render(<MirisStreamViewerComponent {...baseProps} />);
-        await waitFor(() =>
-            expect(screen.getByText(/miris processing failed/i)).toBeInTheDocument()
+    describe("processing", () => {
+        afterEach(() => {
+            jest.useRealTimers();
+        });
+
+        it("shows the processing overlay while Miris is still preparing the asset", async () => {
+            mockGetMirisStreamStatus.mockResolvedValue(status({ state: "preview" }));
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() =>
+                expect(screen.getByText(/preparing this asset/i)).toBeInTheDocument()
+            );
+            expect(screen.getByText(/current state: preview/i)).toBeInTheDocument();
+            expect(mockSceneCtor).not.toHaveBeenCalled();
+        });
+
+        it("starts streaming once the poll reports the asset streamable", async () => {
+            jest.useFakeTimers();
+            mockGetMirisStreamStatus
+                .mockResolvedValueOnce(status({ state: "preview" }))
+                .mockResolvedValue(status({ state: "streamable" }));
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() =>
+                expect(screen.getByText(/preparing this asset/i)).toBeInTheDocument()
+            );
+
+            await act(async () => {
+                jest.advanceTimersByTime(90_000);
+            });
+
+            await waitFor(() => expect(mockStreamCtor).toHaveBeenCalledWith({ uuid: VALID_UUID }));
+            expect(screen.queryByText(/preparing this asset/i)).not.toBeInTheDocument();
+        });
+    });
+
+    describe("stale banner", () => {
+        it("shows the banner when the stream was built from a different version", async () => {
+            mockGetMirisStreamStatus.mockResolvedValue(status({ sourceVersionId: "v0" }));
+            render(<MirisStreamViewerComponent {...baseProps} versionId="v1" />);
+            await waitFor(() => expect(screen.getByText(STALE_TEXT)).toBeInTheDocument());
+            // Still streaming.
+            expect(mockStreamCtor).toHaveBeenCalledWith({ uuid: VALID_UUID });
+            expect(mockFetchFileInfo).not.toHaveBeenCalled();
+        });
+
+        it("shows no banner when the versions match", async () => {
+            render(<MirisStreamViewerComponent {...baseProps} versionId="v1" />);
+            await waitFor(() => expect(mockSceneCtor).toHaveBeenCalledTimes(1));
+            expect(screen.queryByText(STALE_TEXT)).not.toBeInTheDocument();
+        });
+
+        it.each([[""], [null]])(
+            "shows no banner when the source version is %p",
+            async (sourceVersionId) => {
+                mockGetMirisStreamStatus.mockResolvedValue(status({ sourceVersionId }));
+                render(<MirisStreamViewerComponent {...baseProps} versionId="v1" />);
+                await waitFor(() => expect(mockSceneCtor).toHaveBeenCalledTimes(1));
+                expect(screen.queryByText(STALE_TEXT)).not.toBeInTheDocument();
+                expect(mockFetchFileInfo).not.toHaveBeenCalled();
+            }
         );
-        expect(mockSceneCtor).not.toHaveBeenCalled();
-    });
 
-    it("attempts the stream when the status check is indeterminate", async () => {
-        // The status probe is advisory. When the backend cannot establish state it
-        // reports `indeterminate` and we must still attempt to stream rather than
-        // blocking or showing an overlay we cannot substantiate.
-        mockGetMirisAssetStatus.mockResolvedValue([
-            true,
-            { state: "unknown", isStreamable: false, indeterminate: true },
-        ]);
-        render(<MirisStreamViewerComponent {...baseProps} />);
-        await waitFor(() => expect(mockSceneCtor).toHaveBeenCalledTimes(1));
-        expect(mockStreamCtor).toHaveBeenCalledWith({ uuid: VALID_UUID });
-        expect(screen.queryByText(/preparing this asset/i)).not.toBeInTheDocument();
-    });
+        it("compares against the file's current version when no versionId is passed", async () => {
+            mockGetMirisStreamStatus.mockResolvedValue(status({ sourceVersionId: "v1" }));
+            mockFetchFileInfo.mockResolvedValue([
+                true,
+                {
+                    versions: [
+                        { versionId: "v1", isLatest: false },
+                        { versionId: "v2", isLatest: true },
+                    ],
+                },
+            ]);
+            render(<MirisStreamViewerComponent {...baseProps} versionId={undefined} />);
+            await waitFor(() => expect(screen.getByText(STALE_TEXT)).toBeInTheDocument());
+            expect(mockFetchFileInfo).toHaveBeenCalledWith({
+                databaseId: "db-1",
+                assetId: "asset-1",
+                fileKey: "asset-1/folder/scene.usd",
+                includeVersions: true,
+            });
+        });
 
-    it("does not block streaming even if indeterminate arrives with an errorMessage", async () => {
-        // Defensive: `indeterminate` must win over `errorMessage` so a status-check
-        // problem can never take down streaming.
-        mockGetMirisAssetStatus.mockResolvedValue([
-            true,
-            {
-                state: "unknown",
-                isStreamable: false,
-                indeterminate: true,
-                errorMessage: "should not block",
-            },
-        ]);
-        render(<MirisStreamViewerComponent {...baseProps} />);
-        await waitFor(() => expect(mockSceneCtor).toHaveBeenCalledTimes(1));
-        expect(screen.queryByText(/should not block/i)).not.toBeInTheDocument();
+        it("shows no banner when the current version matches the source", async () => {
+            render(<MirisStreamViewerComponent {...baseProps} versionId={undefined} />);
+            await waitFor(() => expect(mockFetchFileInfo).toHaveBeenCalledTimes(1));
+            await waitFor(() => expect(mockSceneCtor).toHaveBeenCalledTimes(1));
+            expect(screen.queryByText(STALE_TEXT)).not.toBeInTheDocument();
+        });
+
+        it("keeps streaming without a banner when the file info lookup fails", async () => {
+            mockGetMirisStreamStatus.mockResolvedValue(status({ sourceVersionId: "v0" }));
+            mockFetchFileInfo.mockResolvedValue([false, "Not Authorized"]);
+            render(<MirisStreamViewerComponent {...baseProps} versionId={undefined} />);
+            await waitFor(() => expect(mockFetchFileInfo).toHaveBeenCalledTimes(1));
+            await waitFor(() => expect(mockSceneCtor).toHaveBeenCalledTimes(1));
+            expect(screen.queryByText(STALE_TEXT)).not.toBeInTheDocument();
+        });
     });
 });

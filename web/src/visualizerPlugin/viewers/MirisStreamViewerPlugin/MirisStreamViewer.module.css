@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Miris Streaming Viewer styles. Canvas sizing is handled by Three.js /
- * parent layout. Add module-scoped overlay / banner styles here as needed.
+ * parent layout.
  */
 
 .container {
@@ -31,4 +31,35 @@
     color: #fff;
     text-align: center;
     padding: 1rem;
+}
+
+.topOverlay {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    right: 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.label {
+    color: #fff;
+}
+
+.guidance {
+    width: 100%;
+    height: 100%;
+    min-height: 320px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 24px;
+    box-sizing: border-box;
+}
+
+.guidanceContent {
+    max-width: 420px;
 }

@@ -14,6 +14,7 @@
 import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import { DynamicViewer } from "./DynamicViewer";
+import viewerConfig from "../config/viewerConfig.json";
 
 // Built inside the factory (which is hoisted) and read back through require().
 jest.mock("../core/PluginRegistry", () => {
@@ -159,6 +160,32 @@ describe("DynamicViewer", () => {
 
         await waitFor(() => expect(screen.getByText(/viewer:threejs-viewer/)).toBeInTheDocument());
         expect(registry().switchToPlugin.mock.calls.length).toBe(switchCalls);
+    });
+
+    it("auto-selects the Miris viewer over the Needle USD viewer for a USD file", async () => {
+        // Both entries come from the real registry config, so this fails if their priorities
+        // stop giving the Miris viewer a strict lead.
+        const fromConfig = (id: string) => ({
+            config: (viewerConfig as any).viewers.find((viewer: any) => viewer.id === id),
+            isLoaded: false,
+        });
+        const usdViewers = [
+            fromConfig("needletools-usd-viewer"),
+            fromConfig("miris-stream-viewer"),
+        ].sort((a, b) => a.config.priority - b.config.priority);
+        registry().getCompatibleViewers.mockReturnValue(usdViewers);
+        registry().switchToPlugin.mockImplementation(async (id: string) => ({
+            config: usdViewers.find((m) => m.config.id === id)?.config,
+            component: () => <div>{`viewer:${id}`}</div>,
+            isLoaded: true,
+        }));
+
+        render(view([file("scene.usd")]));
+
+        await waitFor(() =>
+            expect(screen.getByText("viewer:miris-stream-viewer")).toBeInTheDocument()
+        );
+        expect(registry().switchToPlugin).not.toHaveBeenCalledWith("needletools-usd-viewer");
     });
 
     it("clears a no-compatible-viewer error once the user moves to a viewable file", async () => {

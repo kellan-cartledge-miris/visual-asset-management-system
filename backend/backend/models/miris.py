@@ -41,9 +41,9 @@ STATE_UNKNOWN = "unknown"
 class GetMirisAssetStatusRequestModel(BaseModel, extra="ignore"):
     """Path and query parameters of the status request.
 
-    ``filePath`` is normalized the same way the file-metadata API normalizes it, so both
-    ``scene.usd`` and ``/scene.usd`` (and the ``/{assetId}/scene.usd`` form the web derives
-    from S3 keys) address the same metadata row.
+    ``filePath`` is validated and given a leading slash here. Mapping a full object key onto
+    the asset-relative path needs the asset's root key, so it happens in the handler after the
+    asset is loaded (see ``asset_relative_file_path``).
     """
 
     databaseId: str = Field(min_length=1, max_length=256)
@@ -72,12 +72,28 @@ class GetMirisAssetStatusRequestModel(BaseModel, extra="ignore"):
         if file_path.endswith("/"):
             raise ValueError("filePath cannot be a folder (must not end with /)")
 
-        asset_prefix = f"/{values.get('assetId')}/"
-        if file_path.startswith(asset_prefix):
-            file_path = file_path[len(asset_prefix) - 1:]
-
         values["filePath"] = file_path
         return values
+
+
+def asset_relative_file_path(file_path: str, asset_id: str, asset_root_key: Optional[str]) -> str:
+    """Map a validated ``filePath`` onto the asset-relative path file metadata is stored under.
+
+    The metadata service resolves a relative path to its object key as
+    ``{assetLocation.Key}/{path without leading slash}``, so a full object key is turned back
+    into that relative path by removing this asset's root key. The ``{assetId}/`` form is
+    also accepted. At most one prefix is removed; a path under neither prefix is already
+    relative and is returned unchanged. Only the given asset's own root is ever removed.
+    """
+    key = file_path.lstrip("/")
+    roots = []
+    if isinstance(asset_root_key, str) and asset_root_key.strip("/"):
+        roots.append(asset_root_key.lstrip("/").rstrip("/") + "/")
+    roots.append(f"{asset_id}/")
+    for root in roots:
+        if key.startswith(root) and len(key) > len(root):
+            return "/" + key[len(root):]
+    return file_path
 
 
 class MirisAssetStatusResponseModel(BaseModel):

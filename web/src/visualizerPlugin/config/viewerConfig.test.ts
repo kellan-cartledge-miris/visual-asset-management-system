@@ -82,6 +82,34 @@ describe("viewerConfig vs the browser's media element", () => {
     });
 });
 
+describe("the Miris stream viewer", () => {
+    const USD_EXTENSIONS = [".usd", ".usda", ".usdc", ".usdz"];
+
+    it("is the only Miris viewer, registered for USD files under MIRIS_STREAMING", () => {
+        expect(viewers.filter((viewer) => viewer.id.startsWith("miris")).map((v) => v.id)).toEqual([
+            "miris-stream-viewer",
+        ]);
+        const miris = byId("miris-stream-viewer");
+        expect([...miris.supportedExtensions].sort()).toEqual(USD_EXTENSIONS);
+        expect(miris.featuresEnabledRestriction).toEqual(["MIRIS_STREAMING"]);
+        expect(miris.priority).toBe(0);
+    });
+
+    it("ranks strictly ahead of every other viewer of a USD extension", () => {
+        // DynamicViewer auto-selects only a strict priority winner.
+        const others = viewers.filter(
+            (viewer) =>
+                viewer.id !== "miris-stream-viewer" &&
+                !viewer.isPreviewViewer &&
+                (viewer.supportedExtensions as string[]).some((ext) => USD_EXTENSIONS.includes(ext))
+        );
+        expect(others.length).toBeGreaterThan(0);
+        others.forEach((viewer) =>
+            expect(viewer.priority).toBeGreaterThan(byId("miris-stream-viewer").priority)
+        );
+    });
+});
+
 describe("visualizerPlugin/CLAUDE.md catalog", () => {
     const claudeMd = fs.readFileSync(path.join(__dirname, "..", "CLAUDE.md"), "utf8");
 

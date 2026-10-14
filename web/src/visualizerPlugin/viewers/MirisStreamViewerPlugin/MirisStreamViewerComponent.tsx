@@ -3,24 +3,40 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 import React, { useEffect, useRef, useState } from "react";
+import Alert from "@cloudscape-design/components/alert";
+import Box from "@cloudscape-design/components/box";
+import SpaceBetween from "@cloudscape-design/components/space-between";
 import { MirisScene, MirisStream } from "@miris-inc/three";
 import { PerspectiveCamera, Vector3, WebGLRenderer } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { ViewerPluginProps } from "../../core/types";
-import { downloadAsset, getMirisAssetStatus } from "../../../services/APIService";
+import { fetchFileInfo, getMirisStreamStatus } from "../../../services/APIService";
 import { appCache } from "../../../services/appCache";
-import { parseMirisManifest, MirisManifest, MirisManifestErrorReason } from "./manifestParser";
+import {
+    isKnownVersionId,
+    isStaleStream,
+    latestVersionIdFromFileInfo,
+    streamDisposition,
+    toStatusFilePath,
+} from "./streamStatus";
 import styles from "./MirisStreamViewer.module.css";
 
 type ViewerError =
     | { kind: "NOT_CONFIGURED" }
-    | { kind: "MANIFEST_PARSE"; reason: MirisManifestErrorReason }
-    | { kind: "MANIFEST_FETCH" }
+    | { kind: "STATUS_FETCH" }
+    | { kind: "INVALID_UUID" }
+    | { kind: "LOAD_FAILED" }
     | { kind: "STREAM_TIMEOUT"; uuid: string }
     | { kind: "WEBGL_UNAVAILABLE" }
-    | { kind: "MIRIS_PROCESSING_ERROR"; message: string };
+    | { kind: "MIRIS_PROCESSING_ERROR" };
 
 type ProcessingState = { state: string };
+
+type StreamInfo = {
+    uuid: string;
+    displayName: string | null;
+    sourceVersionId: string | null;
+};
 
 // Poll Miris status every 90s while an asset is still being prepared on the
 // Miris side. Typical promotion to streamable takes 1–2 hours.
@@ -67,24 +83,12 @@ function errorMessage(err: ViewerError): string {
     switch (err.kind) {
         case "NOT_CONFIGURED":
             return "Miris streaming is not configured for this deployment. Contact your administrator.";
-        case "MANIFEST_PARSE":
-            switch (err.reason) {
-                case MirisManifestErrorReason.INVALID_JSON:
-                    return "This .mrx file is malformed: invalid JSON.";
-                case MirisManifestErrorReason.TOO_LARGE:
-                    return "This .mrx file is malformed: file exceeds 16 KB.";
-                case MirisManifestErrorReason.INVALID_SCHEMA:
-                    return "This .mrx file is malformed: schemaVersion is missing or invalid.";
-                case MirisManifestErrorReason.UNSUPPORTED_SCHEMA:
-                    return "This .mrx file was created for a newer version of the Miris viewer plugin. Update VAMS to view this asset.";
-                case MirisManifestErrorReason.MISSING_UUID:
-                    return "This .mrx file is malformed: mirisAssetUuid is missing.";
-                case MirisManifestErrorReason.INVALID_UUID:
-                    return "This .mrx file is malformed: mirisAssetUuid is not a valid UUID.";
-            }
-            return "This .mrx file is malformed.";
-        case "MANIFEST_FETCH":
-            return "Could not download the manifest file. Try again.";
+        case "STATUS_FETCH":
+            return "Could not load the Miris stream status for this file. Try again.";
+        case "INVALID_UUID":
+            return "This file's miris_asset_uuid metadata is not a valid UUID. Correct it in the file's metadata, or run Stream with Miris again.";
+        case "LOAD_FAILED":
+            return "The Miris viewer failed to load. Try again.";
         case "STREAM_TIMEOUT":
             return (
                 `Timed out waiting for Miris to start streaming asset ${err.uuid}. ` +
@@ -94,22 +98,35 @@ function errorMessage(err: ViewerError): string {
         case "WEBGL_UNAVAILABLE":
             return "Your browser does not support WebGL 2.0. Required browsers: Chrome 90+, Firefox 88+, Safari 14+, Edge 90+.";
         case "MIRIS_PROCESSING_ERROR":
-            return err.message;
+            return "Miris processing failed. Check this asset in app.miris.com.";
     }
 }
 
+/**
+ * Viewer for USD source files (.usd/.usda/.usdc/.usdz) that streams the Miris asset recorded
+ * in the file's `miris_*` metadata. The stream status endpoint resolves that metadata server
+ * side, so the viewer sends only the file path:
+ *   - notStreamed  -> "Not yet streamed" guidance
+ *   - invalidUuid  -> error
+ *   - Miris still preparing the asset -> processing overlay, polled until it is streamable
+ *   - otherwise    -> stream the returned UUID, with a stale banner when the stream was
+ *                     built from a different version of the file than the one viewed
+ */
 const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
     assetId,
     databaseId,
     assetKey,
     versionId,
+    assetVersionId,
 }) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<ViewerError | null>(null);
-    const [manifest, setManifest] = useState<MirisManifest | null>(null);
+    const [notStreamed, setNotStreamed] = useState(false);
+    const [streamInfo, setStreamInfo] = useState<StreamInfo | null>(null);
+    const [staleStream, setStaleStream] = useState(false);
     const [processingState, setProcessingState] = useState<ProcessingState | null>(null);
-    // Bumped when the status poll detects streamable so the main effect re-runs and
+    // Bumped when the status poll detects a state change so the main effect re-runs and
     // sets up the renderer. The dep on this var is what triggers re-entry into load().
     const [statusFlipTrigger, setStatusFlipTrigger] = useState(0);
 
@@ -132,127 +149,77 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                 if (!assetKey) return;
                 setLoading(true);
                 setError(null);
+                setNotStreamed(false);
 
-                // 1. Download manifest
-                const dl = await downloadAsset({
-                    assetId,
-                    databaseId,
-                    key: assetKey,
-                    versionId: versionId || "",
-                    downloadType: "assetFile",
-                });
-                if (!Array.isArray(dl) || dl[0] !== true) {
-                    if (!cancelled) setError({ kind: "MANIFEST_FETCH" });
-                    return;
-                }
-                const presignedUrl = dl[1] as string;
-
-                // 2. Fetch and parse
-                const response = await fetch(presignedUrl);
-                const text = await response.text();
-                const parsed = parseMirisManifest(text);
-                if (!parsed.ok) {
-                    if (!cancelled) setError({ kind: "MANIFEST_PARSE", reason: parsed.reason });
-                    return;
-                }
+                // 1. Stream status of the viewed file
+                const filePath = toStatusFilePath(assetKey);
+                const statusResult = await getMirisStreamStatus({ databaseId, assetId, filePath });
                 if (cancelled) return;
-                setManifest(parsed.manifest);
+                if (statusResult[0] !== true) {
+                    setError({ kind: "STATUS_FETCH" });
+                    return;
+                }
+                const status = statusResult[1];
 
-                // 2b. Ask the backend whether the Miris asset is streamable yet. This
-                // is ADVISORY ONLY — it drives the "preparing" overlay and must never
-                // prevent a stream attempt. The endpoint is only deployed when the
-                // upload pipeline is enabled, and it reports `indeterminate` whenever
-                // it cannot establish state; in both cases, and on any transport
-                // failure, we proceed optimistically and let the Miris SDK decide.
-                let isStreamable = true;
-                try {
-                    const statusResult = await getMirisAssetStatus({
-                        databaseId,
-                        assetId,
-                        mirisAssetUuid: parsed.manifest.mirisAssetUuid,
-                    });
-                    if (Array.isArray(statusResult) && statusResult[0] === true) {
-                        const status = statusResult[1] as {
-                            state: string;
-                            isStreamable: boolean;
-                            errorMessage?: string;
-                            indeterminate?: boolean;
-                        };
-                        // Only a definitive Miris processing failure blocks rendering.
-                        // `indeterminate` is never accompanied by errorMessage, but the
-                        // guard keeps this fail-open even if that ever changes.
-                        if (status.errorMessage && !status.indeterminate) {
-                            if (!cancelled) {
-                                setError({
-                                    kind: "MIRIS_PROCESSING_ERROR",
-                                    message: status.errorMessage,
-                                });
+                const disposition = streamDisposition(status.state);
+                if (disposition === "notStreamed") {
+                    setStreamInfo(null);
+                    setProcessingState(null);
+                    setNotStreamed(true);
+                    setLoading(false);
+                    return;
+                }
+                if (disposition === "invalidUuid") {
+                    setError({ kind: "INVALID_UUID" });
+                    return;
+                }
+                if (disposition === "failed") {
+                    setError({ kind: "MIRIS_PROCESSING_ERROR" });
+                    return;
+                }
+                if (!status.mirisAssetUuid) {
+                    setError({ kind: "STATUS_FETCH" });
+                    return;
+                }
+                const uuid = status.mirisAssetUuid;
+                setStreamInfo({
+                    uuid,
+                    displayName: status.displayName,
+                    sourceVersionId: status.sourceVersionId,
+                });
+
+                // 2. Miris is still preparing the asset: overlay + poll. Any other
+                // disposition re-runs load(), which handles it from the top.
+                if (disposition === "processing") {
+                    setProcessingState({ state: status.state });
+                    setLoading(false);
+                    if (pollIntervalRef.current) {
+                        clearInterval(pollIntervalRef.current);
+                    }
+                    pollIntervalRef.current = setInterval(async () => {
+                        try {
+                            const r = await getMirisStreamStatus({
+                                databaseId,
+                                assetId,
+                                filePath,
+                            });
+                            if (cancelled || r[0] !== true) return;
+                            if (streamDisposition(r[1].state) === "processing") {
+                                setProcessingState({ state: r[1].state });
+                                return;
                             }
-                            return;
-                        }
-                        // Indeterminate => attempt the stream rather than showing an
-                        // overlay we cannot substantiate.
-                        isStreamable = status.indeterminate ? true : status.isStreamable === true;
-                        if (!isStreamable) {
-                            if (cancelled) return;
-                            setProcessingState({ state: status.state });
-                            setLoading(false);
-                            // Start polling. Cleared by the unmount cleanup or when
-                            // the state flips and triggers a re-render.
                             if (pollIntervalRef.current) {
                                 clearInterval(pollIntervalRef.current);
+                                pollIntervalRef.current = null;
                             }
-                            pollIntervalRef.current = setInterval(async () => {
-                                try {
-                                    const r = await getMirisAssetStatus({
-                                        databaseId,
-                                        assetId,
-                                        mirisAssetUuid: parsed.manifest.mirisAssetUuid,
-                                    });
-                                    if (cancelled) return;
-                                    if (Array.isArray(r) && r[0] === true) {
-                                        const s = r[1] as {
-                                            state: string;
-                                            isStreamable: boolean;
-                                            errorMessage?: string;
-                                            indeterminate?: boolean;
-                                        };
-                                        if (s.errorMessage && !s.indeterminate) {
-                                            if (pollIntervalRef.current) {
-                                                clearInterval(pollIntervalRef.current);
-                                                pollIntervalRef.current = null;
-                                            }
-                                            setError({
-                                                kind: "MIRIS_PROCESSING_ERROR",
-                                                message: s.errorMessage,
-                                            });
-                                        } else if (s.isStreamable || s.indeterminate) {
-                                            // Streamable, or state can no longer be
-                                            // established — stop polling and attempt
-                                            // the stream instead of overlaying forever.
-                                            if (pollIntervalRef.current) {
-                                                clearInterval(pollIntervalRef.current);
-                                                pollIntervalRef.current = null;
-                                            }
-                                            setProcessingState(null);
-                                            // Trigger effect re-run to set up the renderer
-                                            setStatusFlipTrigger((c) => c + 1);
-                                        } else {
-                                            setProcessingState({ state: s.state });
-                                        }
-                                    }
-                                } catch (_pollErr) {
-                                    // Swallow transient poll errors; the next tick will retry.
-                                }
-                            }, PROCESSING_POLL_INTERVAL_MS);
-                            return;
+                            setProcessingState(null);
+                            setStatusFlipTrigger((c) => c + 1);
+                        } catch (_pollErr) {
+                            // Swallow transient poll errors; the next tick will retry.
                         }
-                    }
-                } catch (_statusErr) {
-                    // Endpoint may not be deployed; render optimistically.
+                    }, PROCESSING_POLL_INTERVAL_MS);
+                    return;
                 }
-
-                if (cancelled) return;
                 setProcessingState(null);
 
                 // 3. Viewer key check
@@ -261,7 +228,7 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                     | undefined;
                 const viewerKey = appConfig?.mirisViewerKey;
                 if (!viewerKey) {
-                    if (!cancelled) setError({ kind: "NOT_CONFIGURED" });
+                    setError({ kind: "NOT_CONFIGURED" });
                     return;
                 }
 
@@ -279,7 +246,7 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                 const scene = new MirisScene({ viewerKey });
                 sceneRef.current = scene;
 
-                const stream = new MirisStream({ uuid: parsed.manifest.mirisAssetUuid });
+                const stream = new MirisStream({ uuid });
                 streamRef.current = stream;
                 scene.add(stream as any);
 
@@ -324,11 +291,7 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                 // initial octree fetch from the content CDN; 60s gives cold connections
                 // headroom while still failing fast on a genuinely unreachable asset.
                 const loadTimer = setTimeout(() => {
-                    if (!cancelled)
-                        setError({
-                            kind: "STREAM_TIMEOUT",
-                            uuid: parsed.manifest.mirisAssetUuid,
-                        });
+                    if (!cancelled) setError({ kind: "STREAM_TIMEOUT", uuid });
                 }, 60_000);
                 loadTimerRef.current = loadTimer;
                 stream.addEventListener("streamloaded", () => clearTimeout(loadTimer));
@@ -374,7 +337,7 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                     assetKey,
                     error: e,
                 });
-                if (!cancelled) setError({ kind: "MANIFEST_FETCH" });
+                if (!cancelled) setError({ kind: "LOAD_FAILED" });
             }
         }
 
@@ -407,6 +370,62 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
         };
     }, [assetId, databaseId, assetKey, versionId, statusFlipTrigger]);
 
+    // Stale-stream check. The host passes the viewed file version as `versionId`, but it can
+    // be absent for the current version (e.g. a basic-mode listing, or before the host has
+    // resolved it), so the file's current S3 version is looked up instead. A historical asset
+    // version without a file version id is not compared. Never blocks streaming.
+    const sourceVersionId = streamInfo?.sourceVersionId;
+    useEffect(() => {
+        let cancelled = false;
+        setStaleStream(false);
+        if (!isKnownVersionId(sourceVersionId) || !assetKey) return;
+
+        async function checkStale() {
+            let viewedVersionId: string | undefined = isKnownVersionId(versionId)
+                ? versionId
+                : undefined;
+            if (!viewedVersionId && !assetVersionId) {
+                try {
+                    const [ok, fileInfo] = await fetchFileInfo({
+                        databaseId,
+                        assetId,
+                        fileKey: assetKey,
+                        includeVersions: true,
+                    });
+                    if (ok) viewedVersionId = latestVersionIdFromFileInfo(fileInfo);
+                } catch (_fileInfoErr) {
+                    // Advisory only: without the current version there is nothing to compare.
+                }
+            }
+            if (!cancelled) setStaleStream(isStaleStream(sourceVersionId, viewedVersionId));
+        }
+
+        void checkStale();
+        return () => {
+            cancelled = true;
+        };
+    }, [sourceVersionId, assetId, databaseId, assetKey, versionId, assetVersionId]);
+
+    if (notStreamed && !error) {
+        return (
+            <div className={styles.guidance}>
+                <div className={styles.guidanceContent}>
+                    <SpaceBetween size="m">
+                        <Box variant="h3">Not yet streamed with Miris</Box>
+                        <Box variant="p" color="text-body-secondary">
+                            This USD file has not been uploaded to Miris Spatial Streaming. Use the
+                            file manager&apos;s <strong>Automation</strong> action to run{" "}
+                            <strong>Stream with Miris</strong> on it; once processing completes, you
+                            can stream it here.
+                        </Box>
+                    </SpaceBetween>
+                </div>
+            </div>
+        );
+    }
+
+    const streaming = !!streamInfo && !error && !loading && !processingState;
+
     return (
         <div ref={containerRef} className={styles.container}>
             {error && <div className={styles.errorOverlay}>{errorMessage(error)}</div>}
@@ -427,9 +446,17 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
             {loading && !error && !processingState && (
                 <div className={styles.errorOverlay}>Loading…</div>
             )}
-            {manifest?.displayName && !error && !loading && !processingState && (
-                <div style={{ position: "absolute", top: 8, left: 8, color: "#fff" }}>
-                    {manifest.displayName}
+            {streaming && (streamInfo?.displayName || staleStream) && (
+                <div className={styles.topOverlay}>
+                    {streamInfo?.displayName && (
+                        <div className={styles.label}>{streamInfo.displayName}</div>
+                    )}
+                    {staleStream && (
+                        <Alert type="warning" statusIconAriaLabel="Warning">
+                            This stream was built from a different version of this file. Run Stream
+                            with Miris again to update it.
+                        </Alert>
+                    )}
                 </div>
             )}
         </div>

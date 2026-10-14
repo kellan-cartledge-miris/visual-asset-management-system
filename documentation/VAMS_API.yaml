@@ -9024,7 +9024,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                     $ref: "#/components/schemas/id_regex"
               - name: "filePath"
                 in: "query"
-                description: "Asset-relative path of the file, such as `/scene.usd`. A missing leading slash is added, and a leading `/{assetId}/` segment is removed. Must not contain `..` or end with `/`."
+                description: "Asset-relative path of the file, such as `/scene.usd`, or the file's full object key, such as `/assets/{assetId}/scene.usd`. A missing leading slash is added. A key under the asset's root location (`assetLocation.Key`) or under `{assetId}/` is reduced to the asset-relative path. Must not contain `..` or end with `/`."
                 required: true
                 schema:
                     type: string

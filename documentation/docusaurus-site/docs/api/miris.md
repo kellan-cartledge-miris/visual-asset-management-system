@@ -25,11 +25,11 @@ Each field is the stored value, or `null` when the key is absent. `mirisAssetUui
 
 #### Request parameters
 
-| Parameter    | Location | Required | Description                                                                                                                                                       |
-| ------------ | -------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `databaseId` | path     | Yes      | Database identifier.                                                                                                                                              |
-| `assetId`    | path     | Yes      | Asset identifier.                                                                                                                                                 |
-| `filePath`   | query    | Yes      | Asset-relative path of the file, such as `/scene.usd`. A missing leading slash is added and a leading `/{assetId}/` segment is removed. Maximum 1,024 characters. |
+| Parameter    | Location | Required | Description                                                                                                                                                                                                                                                                                 |
+| ------------ | -------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `databaseId` | path     | Yes      | Database identifier.                                                                                                                                                                                                                                                                        |
+| `assetId`    | path     | Yes      | Asset identifier.                                                                                                                                                                                                                                                                           |
+| `filePath`   | query    | Yes      | Asset-relative path of the file, such as `/scene.usd`, or the file's full object key, such as `/assets/{assetId}/scene.usd`. A missing leading slash is added. A key under the asset's root location or under `{assetId}/` is reduced to the asset-relative path. Maximum 1,024 characters. |
 
 A `filePath` that is missing, empty, contains `..`, or ends with `/` returns `400`.
 
