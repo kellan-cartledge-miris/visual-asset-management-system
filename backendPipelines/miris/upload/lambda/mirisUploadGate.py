@@ -24,13 +24,16 @@ import json
 import os
 
 import boto3
+from botocore.config import Config
 from customLogging.logger import safeLogger
 
 from mirisClaim import claim_location
 
 logger = safeLogger(service="MirisUploadGate")
+retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
+# TODO(sync-2.6.4): choose the retry behavior for the claim's conditional put (see PR notes).
 s3_client = boto3.client("s3", region_name=os.environ.get("AWS_REGION"))
-sfn_client = boto3.client("stepfunctions", region_name=os.environ.get("AWS_REGION"))
+sfn_client = boto3.client("stepfunctions", region_name=os.environ.get("AWS_REGION"), config=retry_config)
 
 
 def _parse_body(event):

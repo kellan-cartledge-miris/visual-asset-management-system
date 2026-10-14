@@ -8,16 +8,18 @@ import json
 import os
 
 import boto3
+from botocore.config import Config
 from customLogging.logger import safeLogger
 
 import manifestHelper
 import mirisClaim
 
 logger = safeLogger(service="VamsExecuteMirisUpload")
-lambda_client = boto3.client("lambda")
-s3_client = boto3.client("s3")
-sfn_client = boto3.client("stepfunctions", region_name=os.environ.get("AWS_REGION", "us-east-1"))
-dynamodb = boto3.resource("dynamodb")
+retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
+lambda_client = boto3.client("lambda", config=retry_config)
+s3_client = boto3.client("s3", config=retry_config)
+sfn_client = boto3.client("stepfunctions", region_name=os.environ.get("AWS_REGION", "us-east-1"), config=retry_config)
+dynamodb = boto3.resource("dynamodb", config=retry_config)
 
 OPEN_PIPELINE_FUNCTION_NAME = os.environ["OPEN_PIPELINE_FUNCTION_NAME"]
 MIRIS_UPLOAD_GATE_FUNCTION_NAME = os.environ.get("MIRIS_UPLOAD_GATE_FUNCTION_NAME", "")

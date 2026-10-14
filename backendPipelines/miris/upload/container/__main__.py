@@ -11,6 +11,7 @@ import json
 import os
 import sys
 import boto3
+from botocore.config import Config
 
 from miris_uploader import MirisClient, _redact_response
 from upload_config import resolve_upload_config
@@ -21,6 +22,8 @@ from usd_packager import (
     should_skip_packaging,
 )
 from utils.secrets import get_miris_integration_key
+
+retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
 
 _USD_MEDIA_TYPES = {
     ".usd": "model/vnd.usd",
@@ -105,7 +108,7 @@ def main():
         sys.exit(3)
     filename = os.path.basename(trigger_key)
 
-    s3 = boto3.client("s3")
+    s3 = boto3.client("s3", config=retry_config)
     os.makedirs("/workdir", exist_ok=True)
     name_no_ext = os.path.splitext(filename)[0]
 
@@ -208,6 +211,7 @@ def main():
         aws_access_key_id=start["access_key_id"],
         aws_secret_access_key=start["secret_key"],
         aws_session_token=start["session_token"],
+        config=retry_config,
     )
     with open(upload_local, "rb") as f:
         temp_s3.put_object(

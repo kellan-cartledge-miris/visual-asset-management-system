@@ -6,6 +6,7 @@ import json
 import os
 
 import boto3
+from botocore.config import Config
 from customLogging.logger import safeLogger
 
 import manifestHelper
@@ -13,9 +14,10 @@ import mirisClaim
 
 logger = safeLogger(service="OpenMirisUploadPipeline")
 
-sfn = boto3.client("stepfunctions", region_name=os.environ["AWS_REGION"])
-events_client = boto3.client("events", region_name=os.environ["AWS_REGION"])
-s3_client = boto3.client("s3", region_name=os.environ["AWS_REGION"])
+retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
+sfn = boto3.client("stepfunctions", region_name=os.environ["AWS_REGION"], config=retry_config)
+events_client = boto3.client("events", region_name=os.environ["AWS_REGION"], config=retry_config)
+s3_client = boto3.client("s3", region_name=os.environ["AWS_REGION"], config=retry_config)
 
 STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
 ALLOWED_INPUT_FILEEXTENSIONS = os.environ["ALLOWED_INPUT_FILEEXTENSIONS"]
