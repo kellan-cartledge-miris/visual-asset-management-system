@@ -17,6 +17,7 @@ import { NagSuppressions } from "cdk-nag";
 import * as Config from "../../../../../../config/config";
 import { LAMBDA_PYTHON_RUNTIME } from "../../../../../../config/config";
 import { storageResources } from "../../../../storage/storageBuilder-nestedStack";
+import * as ServiceHelper from "../../../../../helper/service-helper";
 import {
     grantReadPermissionsToAllAssetBuckets,
     kmsKeyLambdaPermissionAddToResourcePolicy,
@@ -76,7 +77,11 @@ export function buildMirisUploadGateFunction(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["states:SendTaskSuccess"],
-            resources: ["*"],
+            resources: [
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:*`,
+            ],
         })
     );
     // The gate writes nothing but claim objects, so the grant is scoped to that prefix.
@@ -127,7 +132,11 @@ export function buildVamsExecuteMirisUploadFunction(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["states:SendTaskFailure"],
-            resources: ["*"],
+            resources: [
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:*`,
+            ],
         })
     );
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
@@ -175,7 +184,11 @@ export function buildOpenMirisUploadPipelineFunction(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["states:StartExecution", "states:SendTaskFailure"],
-            resources: ["*"],
+            resources: [
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:*`,
+            ],
         })
     );
     // Releases the claim the gate wrote when the input is rejected or the state machine cannot start.
@@ -234,7 +247,11 @@ export function buildMirisUploadPipelineEndFunction(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
-            resources: ["*"],
+            resources: [
+                `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
+                    config.env.account
+                }:*`,
+            ],
         })
     );
     // A run that does not succeed releases its claim here, so the asset version can be retried.

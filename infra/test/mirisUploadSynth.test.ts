@@ -18,6 +18,7 @@ import * as Infra from "../lib/core-stack";
 import * as Config from "../config/config";
 import * as Service from "../lib/helper/service-helper";
 import commercialTemplate from "../config/config.template.commercial.json";
+import { newTestApp } from "./support/testApp";
 
 const createMirisMockConfig = (): Config.Config => {
     const config = JSON.parse(JSON.stringify(commercialTemplate)) as Config.Config;
@@ -73,7 +74,7 @@ const createMirisMockConfig = (): Config.Config => {
 };
 
 test("Core stack synthesizes with the Miris upload pipeline enabled", () => {
-    const app = new cdk.App({
+    const app = newTestApp({
         context: {
             environments: {
                 common: { SolutionName: "AWSVisualAssetManagementSystem" },

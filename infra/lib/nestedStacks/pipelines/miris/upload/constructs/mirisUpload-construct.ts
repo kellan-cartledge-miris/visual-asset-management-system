@@ -23,6 +23,7 @@ import * as ServiceHelper from "../../../../../helper/service-helper";
 import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
 import { Service } from "../../../../../helper/service-helper";
 import {
+    NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
     generateUniqueNameHash,
     kmsKeyPolicyStatementGenerator,
 } from "../../../../../helper/security";
@@ -307,7 +308,7 @@ export class MirisUploadConstruct extends Construct {
                     "MirisUploadStateMachineLogGroup",
                     10
                 ),
-            retention: logs.RetentionDays.TEN_YEARS,
+            retention: logs.RetentionDays.ONE_YEAR,
             removalPolicy: cdk.RemovalPolicy.DESTROY,
         });
 
@@ -416,7 +417,7 @@ export class MirisUploadConstruct extends Construct {
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for ECS Container execution uses AWS Managed Policies (AmazonECSTaskExecutionRolePolicy + AWSXrayWriteOnlyAccess).",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",
@@ -431,7 +432,7 @@ export class MirisUploadConstruct extends Construct {
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: "The IAM role for ECS Container job uses AWS Managed Policies (AmazonECSTaskExecutionRolePolicy + AWSXrayWriteOnlyAccess).",
+                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
                 },
                 {
                     id: "AwsSolutions-IAM5",
@@ -449,7 +450,7 @@ export class MirisUploadConstruct extends Construct {
                     reason: nagReason,
                     appliesTo: [
                         {
-                            regex: "^Resource::.*MirisUploadContainerExecutionRole/.*/g",
+                            regex: "/^Resource::.*MirisUploadContainerExecutionRole/.*/g",
                         },
                     ],
                 },
@@ -465,7 +466,7 @@ export class MirisUploadConstruct extends Construct {
                     reason: nagReason,
                     appliesTo: [
                         {
-                            regex: "^Resource::.*MirisUploadContainerJobRole/.*/g",
+                            regex: "/^Resource::.*MirisUploadContainerJobRole/.*/g",
                         },
                     ],
                 },
@@ -481,7 +482,7 @@ export class MirisUploadConstruct extends Construct {
                     reason: nagReason,
                     appliesTo: [
                         {
-                            regex: "^Resource::.*MirisUploadInnerStateMachine/Role/.*/g",
+                            regex: "/^Resource::.*MirisUploadInnerStateMachine/Role/.*/g",
                         },
                     ],
                 },

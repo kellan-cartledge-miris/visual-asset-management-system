@@ -300,6 +300,7 @@ describe("deploy-time trigger enable across the pipeline constructs", () => {
             "cosmosReason-construct.ts",
             "cosmosTransfer-construct.ts",
             "metadata3dLabeling-construct.ts",
+            "mirisUpload-construct.ts",
             "pcPotreeViewer-construct.ts",
             "preview3dThumbnail-construct.ts",
         ]);
