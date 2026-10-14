@@ -63,8 +63,8 @@ export class MirisUploadConstruct extends Construct {
          * The container needs: read from all VAMS asset buckets, Secrets Manager for the API key,
          * and Step Functions task token callbacks.
          */
-        // Asset-bucket policy: read the source file AND write the .mrx manifest to
-        // outputS3AssetFilesPath (which lives in the asset bucket). Same pattern as
+        // Asset-bucket policy: read the source file AND write the stream metadata file to
+        // outputS3AssetMetadataPath (which lives in the asset bucket). Same pattern as
         // splatToolbox — "input" is a misnomer; this policy covers both directions.
         const inputBucketPolicy = new iam.PolicyDocument({
             statements: [

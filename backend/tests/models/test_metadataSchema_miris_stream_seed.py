@@ -201,7 +201,7 @@ class TestTheSeededItem:
             assert aggregated[key]["metadataFieldValueType"] == value_type
             assert aggregated[key]["required"] is False
 
-    @pytest.mark.parametrize("file_path", ["model.glb", "model.obj", "notes.txt", "model.mrx"])
+    @pytest.mark.parametrize("file_path", ["model.glb", "model.obj", "notes.txt", "model.fbx"])
     def test_it_does_not_apply_to_other_files(self, definition, file_path):
         aggregated = _aggregate(definition, file_path)
         assert set(CONTRACT).isdisjoint(aggregated), sorted(aggregated)

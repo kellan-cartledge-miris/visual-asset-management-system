@@ -288,11 +288,12 @@ def test_main_writes_an_empty_source_version_for_an_unversioned_object(container
     assert _entries(body)["miris_source_version_id"]["metadataValue"] == ""
 
 
-def test_main_writes_no_mrx_object(container, monkeypatch):
+def test_main_writes_only_the_metadata_file(container, monkeypatch):
     _run(container, monkeypatch, _definition(f"{ASSET_ID}/pump.usdz"))
 
     written = [c.kwargs["Key"] for c in container.s3.put_object.call_args_list]
-    assert written and not any(key.endswith(".mrx") for key in written)
+    assert written == [f"{METADATA_PREFIX}pump.usdz.metadata.json"]
+    container.s3.upload_file.assert_not_called()
 
 
 def test_main_fails_before_uploading_when_the_metadata_path_is_missing(container, monkeypatch):

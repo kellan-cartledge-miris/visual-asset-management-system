@@ -279,26 +279,14 @@ def normalize_s3_path(base_path, relative_path):
 # Core Download Logic
 #######################
 
-def get_distributable_asset_context(databaseId, assetId, requested_key=None):
-    """Get the asset's bucket and base key, verifying the asset is downloadable.
-
-    requested_key: when downloading a single specific file, its key. Miris
-    streaming manifests (.mrx) are exempt from the isDistributable check: they
-    are small VAMS-generated pointers (a Miris asset UUID + tags), not the
-    asset's raw geometry, which lives on Miris and is never downloaded through
-    VAMS. The Miris stream viewer must fetch the .mrx to begin streaming, and
-    Miris-streamable assets are commonly marked non-distributable (stream, don't
-    download). Per-asset GET authorization is already enforced upstream in
-    lambda_handler, so this only lets users who can already access the asset read
-    its streaming pointer.
-    """
+def get_distributable_asset_context(databaseId, assetId):
+    """Get the asset's bucket and base key, verifying the asset is downloadable"""
     asset = get_asset_details(databaseId, assetId)
     if not asset:
         raise VAMSGeneralErrorResponse("Asset not found in database")
 
-    # Check if asset is distributable (Miris .mrx manifests exempt, see docstring)
-    is_mrx_manifest = bool(requested_key) and requested_key.endswith('.mrx')
-    if not is_mrx_manifest and not asset.get('isDistributable', False):
+    # Check if asset is distributable
+    if not asset.get('isDistributable', False):
         raise VAMSGeneralErrorResponse("Asset not distributable")
 
     # Get asset location
@@ -421,7 +409,7 @@ def download_asset_file(databaseId, assetId, request_model):
     Returns:
         DownloadAssetResponseModel instance
     """
-    asset_bucket, asset_base_key = get_distributable_asset_context(databaseId, assetId, request_model.key)
+    asset_bucket, asset_base_key = get_distributable_asset_context(databaseId, assetId)
 
     url, version_id = resolve_and_sign_file_key(
         databaseId, assetId, asset_bucket, asset_base_key, request_model.key,

@@ -43,15 +43,18 @@ trigger should be enabled when `autoRegisterAutoTriggerOnFileUpload: true`.
         (POST /v1/content), `sigv4_put_complete`, `upload_marked_complete`
         (PUT /v1/content/{id}), `terminal_state_reached` with `state=preview`
         (or already `streamable`), `generate_triggered` OR `generate_skipped`
-        (best-effort streamable promotion), `manifest_written`.
--   [ ] Within `taskTimeoutSeconds`, a `model.usdz.mrx` file appears in the asset's
-        file list.
+        (best-effort streamable promotion), `stream_metadata_written`.
+-   [ ] Within `taskTimeoutSeconds`, `model.usdz` carries the file metadata keys
+        `miris_asset_uuid`, `miris_source_version_id` (the file's current S3
+        version ID), `miris_uploaded_at`, and `miris_display_name`, and no new
+        file appears in the asset's file list.
 -   [ ] In the Miris Portal, the asset shows up at state `preview`. If the
         best-effort `generate` call worked it will move on to `streamable` over
         the next few hours. If `generate_skipped` was logged, manually click
         "Generate streamable" in the Portal for that asset (one credit).
--   [ ] Once the Miris asset reaches `streamable`, open the `.mrx` (or the USD
-        source file) in the VAMS web UI — the Miris viewer streams the asset.
+-   [ ] Once the Miris asset reaches `streamable`, open `model.usdz` in the VAMS
+        web UI. The Miris viewer streams the asset, with no "different version"
+        banner.
 
 ### 4. Multi-file USD asset produces exactly ONE Miris upload
 
@@ -66,8 +69,9 @@ out to one execution per layer before the gate collapses them.
         and every other execution triggered by the same upload reports a
         `{"status": "skipped", ...}` output and completes immediately (no
         Batch job).
--   [ ] Exactly one `.mrx` manifest is written, and the Miris Portal shows
-        exactly one asset for this upload — not one per `.usd` layer.
+-   [ ] Exactly one layer (the one whose execution won the claim) carries the
+        `miris_*` metadata keys, and the Miris Portal shows exactly one asset for
+        this upload, not one per `.usd` layer.
 
 ### 5. Upload to a database not covered by the workflow
 
@@ -76,7 +80,7 @@ pipeline-level allow-list: the auto-registered `miris-upload` workflow is
 GLOBAL, so its trigger fires for uploads in every database. To test scoping,
 register a database-scoped copy of the workflow (or disable the global
 trigger) and confirm an upload to a database the workflow does not cover
-produces no execution — no Batch job, no `.mrx`.
+produces no execution: no Batch job and no `miris_*` metadata on the file.
 
 ### 6. Manual trigger via Automation, and forcing a re-run
 
@@ -93,7 +97,9 @@ produces no execution — no Batch job, no `.mrx`.
 -   [ ] Delete the claim object at
         `s3://<auxiliary-bucket>/locks/miris-upload/<assetId>/<currentVersionId>.claim`
         and run the workflow again from **Automation -> Execute Workflow**.
-        The pipeline runs to completion and the `.mrx` is rewritten.
+        The pipeline runs to completion, `miris_asset_uuid` on the file holds
+        the new Miris asset's UUID, and the previous Miris asset is still
+        listed in the Miris Portal.
 -   [ ] Creating a new **asset version** (the _Create Asset Version_ action)
         also re-runs the pipeline, since the claim key includes the version
         id. Re-uploading files into the same asset does **not** create an

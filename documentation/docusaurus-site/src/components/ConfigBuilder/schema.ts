@@ -1563,7 +1563,7 @@ export const FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "addons",
         advanced: true,
-        help: "Uploads USD source assets to Miris and writes a .mrx manifest so they become streamable. Requires Miris Spatial Streaming to be enabled.",
+        help: "Uploads USD source assets to Miris and records the Miris asset UUID in the USD file's metadata so they become streamable. Requires Miris Spatial Streaming to be enabled.",
         visibleWhen: miris,
     },
     {

@@ -50,11 +50,11 @@ For the end-to-end integration (viewer plugins, configuration, architecture), se
 
     - `POST /v1/content` to start the upload and obtain a Miris asset UUID + short-lived STS credentials.
     - SigV4-signed S3 `PUT` to the Miris temp endpoint (object key matches the declared `content_path` verbatim).
-    - `PUT /v1/content/{id}` to mark the upload complete, then trigger streamable processing.
+    - `PUT /v1/content/{id}` to mark the upload complete.
 
 5. **Poll and emit**
 
-    - Polls until Miris reaches a terminal preview/streamable state.
+    - Polls until Miris reaches a terminal preview/streamable state, then requests streamable processing (`POST /v1/asset/{id}/generate`, best effort).
     - Writes `{outputS3AssetMetadataPath}<relativeFilePath>.metadata.json`, where `<relativeFilePath>` is the source USD file's path within the asset (for example `scenes/pump.usda`). The workflow's process-output step applies it to that file as an `update`, so other file metadata is kept.
 
 ## Output
@@ -76,7 +76,7 @@ Configured under `app.miris.upload.*` in `infra/config/config.json`:
 
 -   `enabled` - Deploys the pipeline and enables the `MIRIS_UPLOAD` feature
 -   `apiKeySecretArn` - AWS Secrets Manager ARN holding the Miris Integration Key
--   `mirisApiBaseUrl` - Miris content API base URL (default `https://app.miris.com`)
+-   `mirisApiBaseUrl` - Miris content API base URL (default `https://api.miris.com`)
 -   `triggerExtensions` - Auto-trigger extensions (default `.usd,.usda,.usdc,.usdz`)
 -   `taskTimeoutSeconds` - Maximum time the container waits for Miris processing
 -   `maxAssetSizeBytes` - Maximum source asset size accepted

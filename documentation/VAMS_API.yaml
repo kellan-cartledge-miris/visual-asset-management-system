@@ -9008,7 +9008,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /database/{databaseId}/assets/{assetId}/miris/asset-status:
         get:
             summary: "Get the Miris stream status of a file."
-            description: "Returns the Miris stream recorded on one asset file and the stream's processing state. The Miris asset UUID is read server side from the file's metadata (`miris_asset_uuid`); the request carries no UUID. The handler enforces GET on the asset before reading any metadata, then reads the `miris_asset_uuid`, `miris_source_version_id`, `miris_uploaded_at`, and `miris_display_name` keys of the file. When `miris_asset_uuid` holds a UUID and a Miris viewer key is configured, the handler asks the Miris viewer API for the asset's processing state. This route is only deployed when `app.miris.enabled` is `true`."
+            description: "Returns the Miris stream recorded on one asset file and the stream's processing state. The Miris asset UUID is read server side from the file's metadata (`miris_asset_uuid`); the request carries no UUID. The handler enforces GET on the asset before reading any metadata, then reads the `miris_asset_uuid`, `miris_source_version_id`, `miris_uploaded_at`, and `miris_display_name` keys of the file. The keys are read from the file's current metadata, including when the caller is viewing a historical asset version. When `miris_asset_uuid` holds a UUID and a Miris viewer key and API base URL are configured, the handler asks the Miris viewer API for the asset's processing state. This route is only deployed when `app.miris.enabled` is `true`."
             parameters:
               - name: "databaseId"
                 in: "path"
@@ -9024,7 +9024,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                     $ref: "#/components/schemas/id_regex"
               - name: "filePath"
                 in: "query"
-                description: "Asset-relative path of the file, such as `/scene.usd`, or the file's full object key, such as `/assets/{assetId}/scene.usd`. A missing leading slash is added. A key under the asset's root location (`assetLocation.Key`) or under `{assetId}/` is reduced to the asset-relative path. Must not contain `..` or end with `/`."
+                description: "Asset-relative path of the file, such as `/scene.usd`, or the file's full object key, such as `/assets/{assetId}/scene.usd`. A missing leading slash is added. A key under the asset's root location (`assetLocation.Key`) or under `{assetId}/` is reduced to the asset-relative path, so an asset-relative path that itself begins with the asset's root key or with `{assetId}/` is ambiguous; the full object key is always unambiguous. Must not contain `..` or end with `/`."
                 required: true
                 schema:
                     type: string

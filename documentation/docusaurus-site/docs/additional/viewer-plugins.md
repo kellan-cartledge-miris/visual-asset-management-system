@@ -29,17 +29,16 @@ Viewer plugins are configured in `web/src/visualizerPlugin/config/viewerConfig.j
 
 ---
 
-## Miris Spatial Streaming Viewers
+## Miris Spatial Streaming Viewer
 
-VAMS includes two Miris viewer plugins that let a user stream a Miris-hosted asset by selecting either the generated `.mrx` manifest or the original USD source file.
+VAMS includes one Miris viewer plugin, which streams the Miris asset recorded in a USD file's stream metadata.
 
-| Plugin ID             | Extensions                        | Priority | Feature flag      | Role                                                                                     |
-| --------------------- | --------------------------------- | -------- | ----------------- | ---------------------------------------------------------------------------------------- |
-| `miris-stream-viewer` | `.mrx`                            | 1        | `MIRIS_STREAMING` | Streams a Miris-hosted asset referenced by a `.mrx` manifest.                            |
-| `miris-upload-viewer` | `.usd`, `.usda`, `.usdc`, `.usdz` | 0        | `MIRIS_UPLOAD`    | Streams a USD asset already on Miris, or shows its upload status. Auto-selected for USD. |
+| Plugin ID             | Extensions                        | Priority | Feature flag      | Role                                                                                                                          |
+| --------------------- | --------------------------------- | -------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `miris-stream-viewer` | `.usd`, `.usda`, `.usdc`, `.usdz` | 0        | `MIRIS_STREAMING` | Streams the Miris asset recorded in the file's `miris_asset_uuid` metadata, or shows how to stream it. Auto-selected for USD. |
 
 :::note
-For configuration, the upload/stream flow, architecture, and requirements, see the dedicated [Miris Spatial Streaming Integration](../developer/external-integrations/miris-spatial-streaming.md) guide. Both viewers require a viewer key configured via `app.miris.viewerKey`.
+For configuration, the stream metadata, the upload flow, architecture, and requirements, see the dedicated [Miris Spatial Streaming Integration](../developer/external-integrations/miris-spatial-streaming.md) guide. The viewer requires a viewer key configured via `app.miris.viewerKey`.
 :::
 
 ---

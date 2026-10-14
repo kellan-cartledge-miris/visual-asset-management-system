@@ -23,6 +23,8 @@ The Miris asset UUID is read server side from the file's metadata. The request c
 
 Each field is the stored value, or `null` when the key is absent. `mirisAssetUuid` is also `null` when the stored value is empty.
 
+The keys are read from the file's current metadata, even when the caller is viewing a historical asset version: the endpoint does not read the metadata snapshot saved with an asset version, so it returns the stream recorded on the file now. See [Stream metadata](../developer/external-integrations/miris-spatial-streaming.md#stream-metadata) for how the keys are written and edited.
+
 #### Request parameters
 
 | Parameter    | Location | Required | Description                                                                                                                                                                                                                                                                                 |
@@ -33,16 +35,18 @@ Each field is the stored value, or `null` when the key is absent. `mirisAssetUui
 
 A `filePath` that is missing, empty, contains `..`, or ends with `/` returns `400`.
 
+At most one prefix is removed, so an asset-relative path whose first segments match the asset's root key or `{assetId}/` is ambiguous: for an asset with ID `turbine-v2`, the asset-relative path `/turbine-v2/scene.usd` is read as the full key and reduced to `/scene.usd`. The full object key is always unambiguous; the streaming viewer sends it.
+
 #### States
 
-| `state`           | Meaning                                                                                                                                                                                                  |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `notStreamed`     | `miris_asset_uuid` is absent or empty. Miris is not called.                                                                                                                                              |
-| `invalidUuid`     | `miris_asset_uuid` is set but is not a UUID. Miris is not called.                                                                                                                                        |
-| `unknown`         | The processing state could not be established: no Miris viewer key is configured (Miris is not called), or Miris was unreachable, did not show the asset to the viewer key, or returned no usable state. |
-| `preview`         | Miris is still preparing the asset.                                                                                                                                                                      |
-| `streamable`      | The asset can be streamed.                                                                                                                                                                               |
-| `error`, `failed` | Miris reported a definitive processing failure.                                                                                                                                                          |
+| `state`           | Meaning                                                                                                                                                                                                                        |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `notStreamed`     | `miris_asset_uuid` is absent or empty. Miris is not called.                                                                                                                                                                    |
+| `invalidUuid`     | `miris_asset_uuid` is set but is not a UUID. Miris is not called.                                                                                                                                                              |
+| `unknown`         | The processing state could not be established: no Miris viewer key or Miris API base URL is configured (Miris is not called), or Miris was unreachable, did not show the asset to the viewer key, or returned no usable state. |
+| `preview`         | Miris is still preparing the asset.                                                                                                                                                                                            |
+| `streamable`      | The asset can be streamed.                                                                                                                                                                                                     |
+| `error`, `failed` | Miris reported a definitive processing failure.                                                                                                                                                                                |
 
 Any other state Miris reports is returned as is. The status probe is advisory: the response carries the stored UUID whatever Miris reports, and only `error` and `failed` indicate that the stream cannot play, so the viewer attempts the stream in every other case where a UUID is present. The probe authenticates with the deployment's Miris viewer key (`app.miris.viewerKey`), the same credential the viewer streams with, so it sees exactly the assets the viewer can stream.
 

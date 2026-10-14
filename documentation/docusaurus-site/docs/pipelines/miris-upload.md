@@ -1,13 +1,13 @@
 # Miris Auto-Upload Pipeline
 
-The Miris Auto-Upload pipeline streams supported source assets into the Miris Spatial Streaming platform and emits a `.mrx` manifest back to the asset's file list. Once the asset is on Miris, users can stream it from the VAMS viewer by selecting either the generated `.mrx` manifest or the original USD source file.
+The Miris Auto-Upload pipeline streams supported source assets into the Miris Spatial Streaming platform and records the resulting Miris asset as [stream metadata](../developer/external-integrations/miris-spatial-streaming.md#stream-metadata) on the source USD file. Once the asset is on Miris, users can stream it from the VAMS viewer by opening the USD file.
 
 ## When it fires
 
 The pipeline auto-registers as a GLOBAL VAMS workflow (`miris-upload`) with a `fileUpload` trigger, and runs in two ways:
 
 -   **Automatically** — when a file with a supported extension is uploaded to a VAMS asset, provided `app.miris.upload.autoRegisterAutoTriggerOnFileUpload` is enabled. The trigger is GLOBAL, so it fires for uploads in any database; restricting it to specific databases is a matter of registering a database-scoped copy of the workflow instead of relying on the global one.
--   **On demand** — select the asset's root USD source file in the file manager and choose **Automation -> Execute Workflow**, then pick the **Miris Spatial Streaming Upload** workflow and its **Stream with Miris** template. See [Viewer Plugins Reference](../additional/viewer-plugins.md#miris-spatial-streaming-viewers).
+-   **On demand** — select the asset's root USD source file in the file manager and choose **Automation -> Execute Workflow**, then pick the **Miris Spatial Streaming Upload** workflow and its **Stream with Miris** template. See [Viewer Plugins Reference](../additional/viewer-plugins.md#miris-spatial-streaming-viewer).
 
 Either trigger invokes the pipeline's workflow with the asset's **root USD file** as input. The workflow takes exactly one file: selecting the whole asset (`/`) blocks **Continue** in the execute wizard with "Workflow does not allow whole-asset ('/') selection", and folders are rejected for the same reason. A `fileUpload` trigger fires once per matching file, so a multi-file USD asset made up of several standalone USD layers can fan out to one execution per layer; the upload gate claims the asset's current version and lets only the first execution proceed, so the asset is uploaded to Miris exactly once regardless of how many files triggered it.
 
@@ -31,9 +31,20 @@ For multi-layer assets, launch the pipeline explicitly from **Automation -> Exec
 
 ## Viewing the result
 
-After upload, Miris processes the asset (typically 1–2 hours) before it becomes streamable. In the meantime the viewer shows a "preparing" overlay and refreshes automatically when the asset is ready. Selecting either the `.mrx` manifest or the USD source file opens the same Miris stream viewer.
+After upload, Miris processes the asset (typically 1–2 hours) before it becomes streamable. Once the pipeline has written the stream metadata, opening the USD file shows the Miris viewer, which displays a "preparing" overlay until the asset is ready and then streams it. See [Viewer plugin](../developer/external-integrations/miris-spatial-streaming.md#viewer-plugin) for the viewer's states and the banner it shows when the file has changed since it was streamed.
 
-The viewer downloads the small `.mrx` manifest to obtain the Miris asset UUID. This manifest download is permitted even when the asset is marked non-distributable, since the `.mrx` is only a streaming pointer (the geometry is hosted on Miris and is never downloaded through VAMS). Per-asset access authorization still applies.
+## What the pipeline writes
+
+The pipeline adds no files to the asset. It writes one `.metadata.json` file to the run's metadata output path, at `{outputS3AssetMetadataPath}<relativeFilePath>.metadata.json`, where `<relativeFilePath>` is the USD file's path within the asset (for example `scenes/pump.usda`). The workflow's process-output step applies it to that file as `SYSTEM_USER` with `updateType: update`, so the file's other metadata keys are kept. The file carries the four stream metadata keys described in [Stream metadata](../developer/external-integrations/miris-spatial-streaming.md#stream-metadata): the Miris asset UUID, the Amazon S3 version ID of the USD object the container downloaded, the upload completion time, and the Miris asset name.
+
+When the run's metadata output path is missing, the pipeline fails before it submits the AWS Batch job, so nothing is uploaded to Miris without a place to record the result.
+
+-   **Re-running.** Running **Stream with Miris** again on the same file uploads a new Miris asset and overwrites the four keys with it. The previous Miris asset is not deleted; remove it in the Miris Portal if it is no longer needed.
+-   **Output path extension.** The metadata file is applied to the path it is written at, relative to the run's output folder. The registered `miris-upload` workflow uses the default output path extension (`/`). A custom workflow that runs this pipeline with a `defaultOutputFileBaseExecutionPathExtension` (see [Pipelines and workflows](../concepts/pipelines-and-workflows.md)) shifts the path the metadata is applied to, so the keys do not land on the source USD file.
+
+### Known limitation: assets created on an existing bucket folder
+
+The pipeline derives the USD file's path within the asset from the position of the asset ID in the file's object key. An asset created on an existing bucket folder (`bucketExistingKey`) has no asset ID in its keys, so for a USD file in a subfolder of such an asset the metadata is written against the wrong path, and automatic streaming does not work for that file. Setting the stream metadata on the file by hand still works; see [Editing the stream metadata](../developer/external-integrations/miris-spatial-streaming.md#editing-the-stream-metadata).
 
 ## Supported source formats
 
@@ -41,12 +52,12 @@ The viewer downloads the small `.mrx` manifest to obtain the Miris asset UUID. T
 
 ## What the container does
 
-1. POST /v1/asset to start the upload, get a Miris asset ID and short-lived S3 STS credentials.
+1. POST /v1/content to start the upload, get a Miris asset ID and short-lived S3 STS credentials.
 2. SigV4-signed PUT to the Miris temp S3 endpoint.
-3. PUT /v1/asset/upload/{id} `{status: "completed"}` to mark upload complete.
-4. POST /v1/asset/{id}/generate to trigger streamable processing.
-5. Poll GET /v1/asset/{id} until the state field indicates streamable-ready.
-6. Write a `.mrx` manifest with `mirisAssetUuid = <id>` to the asset's output files path.
+3. PUT /v1/content/\{id\} `{status: "completed"}` to mark upload complete.
+4. Poll GET /v1/asset/\{id\} until the state field reaches a preview or streamable state.
+5. POST /v1/asset/\{id\}/generate to trigger streamable processing.
+6. Write the stream metadata file for the source USD file to the run's metadata output path (see [What the pipeline writes](#what-the-pipeline-writes)).
 
 ## Multi-file USD assets
 

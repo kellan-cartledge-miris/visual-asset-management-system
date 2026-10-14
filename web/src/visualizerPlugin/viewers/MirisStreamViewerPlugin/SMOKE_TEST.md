@@ -1,15 +1,18 @@
-# Miris Viewer — Phase 1 Manual Smoke Test
+# Miris Stream Viewer: Manual Smoke Test
 
-Run once against a real Miris account before merging this branch. Unit tests cover the parser and component lifecycle with mocked SDK; this checklist is the only verification of the live `*.miris.com` streaming path.
+Run once against a real Miris account before merging changes to this viewer. Unit tests cover the status handling and component lifecycle with a mocked SDK and API; this checklist is the only verification of the live `*.miris.com` streaming path.
+
+The viewer streams the Miris asset recorded in a USD file's `miris_asset_uuid` file metadata, which it reads through `GET /database/{databaseId}/assets/{assetId}/miris/asset-status?filePath=`. This checklist sets that metadata by hand, so it does not need the upload pipeline. The pipeline path is covered by `backendPipelines/miris/upload/SMOKE_TEST.md`.
 
 ## Prerequisites
 
--   A Miris account with at least one uploaded asset (recommend a small USD or GLB).
--   A valid Miris viewer key (16+ chars). Generate via the Miris Portal or `miris viewerkey create`.
--   A VAMS dev stack you can deploy to (commercial region — GovCloud is blocked by `getConfig()`).
--   Browser DevTools handy for the Network → WS tab.
+-   A Miris account with at least one streamable asset, and its asset UUID. A second streamable asset UUID is needed for step 5.
+-   A valid Miris viewer key (16+ chars) from the same Miris workspace as those assets. Generate one in the Miris Portal or with `miris viewerkey create`.
+-   A small USD file (`.usdz` recommended) to upload to VAMS. Its geometry does not matter; the viewer streams the Miris asset, not the file.
+-   A VAMS dev stack you can deploy to (commercial region; GovCloud is blocked by `getConfig()`).
+-   Browser DevTools open on the Network tab (WS and Fetch/XHR filters).
 -   Docker Desktop with the **containerd image store disabled** (Settings → General → uncheck "Use containerd for pulling and storing images"). With it enabled, CDK Lambda layer bundling fails because BuildKit-built images aren't visible to `docker run`.
--   CDK bootstrap in **two regions**: your primary region (e.g. `us-west-2`) AND `us-east-1` — the CloudFront WAF stack lives in us-east-1 regardless of where the main stack deploys.
+-   CDK bootstrap in **two regions**: your primary region (e.g. `us-west-2`) AND `us-east-1`. The CloudFront WAF stack lives in us-east-1 regardless of where the main stack deploys.
 
 ## Steps
 
@@ -27,7 +30,7 @@ In `infra/config/config.json` (or your deployment-specific config), set both blo
 }
 ```
 
-`allowUnsafeEvalFeatures: true` is required — `getConfig()` rejects `miris.enabled` without it. The `@miris-inc/three` SDK calls `eval()` at runtime, so it lives on the same opt-in trust boundary as Cesium and Needle USD.
+`allowUnsafeEvalFeatures: true` is required: `getConfig()` rejects `miris.enabled` without it. The `@miris-inc/three` SDK calls `eval()` at runtime, so it lives on the same opt-in trust boundary as Cesium and Needle USD. The upload pipeline (`miris.upload.enabled`) is not needed for this checklist.
 
 Bootstrap CDK in both regions if you haven't already:
 
@@ -44,7 +47,7 @@ cd infra && npx cdk deploy --all --require-approval never
 
 Wait for the stack update to complete.
 
-### 2. Confirm the feature flag and viewer key propagated
+### 2. Confirm the feature flag, viewer key, and schema
 
 Hit the deployed `/secure-config` endpoint directly (you'll need your auth token):
 
@@ -57,46 +60,80 @@ Expected response includes:
 -   `"featuresEnabled": "...,MIRIS_STREAMING,..."` (somewhere in the comma-separated list)
 -   `"mirisViewerKey": "<your-real-miris-viewer-key>"` (verbatim)
 
-### 3. Create and upload a `.mrx` file
+Then:
 
-Locally, create `smoke-test.mrx`:
+-   [ ] The metadata schema list (`vamscli metadata-schema list -d GLOBAL`) shows a `fileMetadata` schema named **Miris stream**, restricted to `.usd,.usda,.usdc,.usdz`, with the optional fields `miris_asset_uuid`, `miris_source_version_id`, `miris_uploaded_at` (date), and `miris_display_name`.
 
-```json
-{
-    "schemaVersion": 1,
-    "mirisAssetUuid": "<your-known-good-miris-asset-uuid>",
-    "displayName": "Phase 1 Smoke Test"
-}
-```
+### 3. Open a USD file that has not been streamed
 
-Upload to an existing VAMS asset, either through the web UI or:
+Upload the USD file to an existing VAMS asset, through the web UI or:
 
 ```bash
-vamscli asset upload ./smoke-test.mrx --asset-id <existing-asset-id> --database-id <database-id>
+vamscli file upload -d <database-id> -a <asset-id> ./smoke-test.usdz
 ```
 
-### 4. Open the file in the VAMS web UI
+Navigate to the asset and click `smoke-test.usdz`. Verify:
 
-Navigate to the asset, click `smoke-test.mrx`. Verify:
+-   [ ] The **Miris Spatial Streaming** viewer is selected by default, and the Needle USD Viewer is still offered in the viewer selector.
+-   [ ] The viewer shows **Not yet streamed with Miris**, pointing to the file manager's **Automation** action and **Stream with Miris**.
+-   [ ] The Network tab shows a `miris/asset-status?filePath=...` request returning `"state": "notStreamed"`, and no download request for the file.
 
--   [ ] The Miris viewer loads (no other viewer is offered for `.mrx`).
+### 4. Point the USD file at an existing Miris asset by hand
+
+Open the file's metadata in the web UI. Verify:
+
+-   [ ] The four **Miris stream** fields are listed for the USD file even though they have no values.
+
+Set `miris_asset_uuid` to your known-good Miris asset UUID and `miris_display_name` to `Smoke Test`. Leave `miris_source_version_id` and `miris_uploaded_at` empty. The same edit from the CLI:
+
+```bash
+vamscli metadata file update -d <database-id> -a <asset-id> --file-path "/smoke-test.usdz" --type metadata \
+  --json-input '{"metadata":[{"metadataKey":"miris_asset_uuid","metadataValue":"<miris-asset-uuid>","metadataValueType":"string"},{"metadataKey":"miris_display_name","metadataValue":"Smoke Test","metadataValueType":"string"}]}'
+```
+
+Reopen `smoke-test.usdz`. Verify:
+
+-   [ ] `miris/asset-status` returns the UUID you set and `"state": "streamable"` (or `unknown`; the viewer streams in both cases).
 -   [ ] 3D content begins to stream within a few seconds.
+-   [ ] `Smoke Test` appears as the overlay label.
+-   [ ] No "different version" banner is shown (no source version is recorded).
 -   [ ] **Camera framing:** asset is centered in view at a 3/4 diagonal angle, not at the origin inside the asset. (On `sceneloaded`, the component calls `stream.getBounds()` and fits the camera to the asset's bounding box.)
 -   [ ] **Drag to orbit:** left-click drag orbits the camera around the asset center. The asset itself stays fixed; the camera moves.
 -   [ ] **Scroll to zoom:** mouse wheel / pinch zooms toward the orbit target.
 -   [ ] **Right-click drag to pan:** moves the orbit target through space.
 -   [ ] **Damping:** motion has a small inertial smoothing (release-and-keep-moving).
 -   [ ] Fullscreen toggle works (button in the viewer toolbar).
--   [ ] The `displayName` from the manifest appears as the viewer title.
 
-### 5. Verify clean teardown on viewer switch
+### 5. Switch and clear the stream
 
-In DevTools → Network → WS, note the open WebSocket to `*.miris.com`. Navigate away to another file in the same asset. Verify:
+-   [ ] Change `miris_asset_uuid` to your second Miris asset UUID and reopen the file. The second asset streams.
+-   [ ] Clear `miris_asset_uuid` (empty value) and reopen the file. The viewer shows **Not yet streamed with Miris** again.
+
+### 6. Verify the different-version banner
+
+Set `miris_asset_uuid` back to a streamable UUID, and set `miris_source_version_id` to the file's current S3 version ID (from `vamscli file info -d <database-id> -a <asset-id> -p "/smoke-test.usdz" --include-versions`). Reopen the file:
+
+-   [ ] The asset streams with no banner.
+
+Upload a new version of `smoke-test.usdz` (any change to the file) without touching its metadata, then reopen it:
+
+-   [ ] The asset still streams, with the banner "This stream was built from a different version of this file. Run Stream with Miris again to update it."
+
+### 7. Verify the invalid-UUID error path
+
+Set `miris_asset_uuid` to `not-a-uuid` and reopen the file. Verify:
+
+-   [ ] `miris/asset-status` returns `"state": "invalidUuid"`.
+-   [ ] An error overlay shows: "This file's miris_asset_uuid metadata is not a valid UUID. Correct it in the file's metadata, or run Stream with Miris again."
+
+### 8. Verify clean teardown on viewer switch
+
+Restore a valid UUID and open the file. In DevTools → Network → WS, note the open WebSocket to `*.miris.com`. Navigate away to another file in the same asset. Verify:
 
 -   [ ] WebSocket transitions from "Pending" to "Closed" within ~1 second.
 -   [ ] Console shows no "Miris viewer load failed" errors related to the teardown.
 
-### 6. Verify the disable path
+### 9. Verify the disable path
 
 Redeploy with `app.miris.enabled: false` (you may also revert `allowUnsafeEvalFeatures` if it was only set for Miris):
 
@@ -114,29 +151,17 @@ Redeploy with `app.miris.enabled: false` (you may also revert `allowUnsafeEvalFe
 cd infra && npx cdk deploy --all --require-approval never
 ```
 
-Reload the web UI. Open the same `.mrx` file. Verify:
+Reload the web UI. Open the same USD file. Verify:
 
 -   [ ] The Miris viewer no longer appears in the viewer selector.
--   [ ] The fallback Preview viewer takes over (or shows "no viewer available").
--   [ ] `/secure-config` no longer includes `mirisViewerKey`.
+-   [ ] `/secure-config` no longer includes the viewer key.
+-   [ ] The **Miris stream** schema and the file's `miris_*` metadata are still present (the schema is not removed when Miris is disabled).
 
-### 6b. Verify the validation gate (optional)
+### 9b. Verify the validation gate (optional)
 
 To confirm the security gate works, try to deploy with `miris.enabled: true` but `allowUnsafeEvalFeatures: false`. `getConfig()` should reject the deployment at synth time with: `Configuration Error: app.miris.enabled requires app.webUi.allowUnsafeEvalFeatures = true...`
 
 -   [ ] CDK synth fails with the expected error message.
-
-### 7. Verify the malformed-manifest error path
-
-With Miris enabled again, upload a deliberately broken `.mrx`:
-
-```json
-{ "schemaVersion": 1, "mirisAssetUuid": "not-a-uuid" }
-```
-
-Open the file. Verify:
-
--   [ ] An error overlay shows: "This .mrx file is malformed: mirisAssetUuid is not a valid UUID."
 
 ## Sign-off
 

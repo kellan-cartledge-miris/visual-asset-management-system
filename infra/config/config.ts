@@ -1055,9 +1055,10 @@ export function getConfig(app: cdk.App): Config {
         if (!config.app.miris.enabled) {
             throw new Error(
                 "Configuration Error: app.miris.upload.enabled requires " +
-                    "app.miris.enabled = true. The upload pipeline produces .mrx " +
-                    "files that the Phase 1 viewer renders; enabling upload without " +
-                    "the viewer means assets get uploaded but cannot be viewed."
+                    "app.miris.enabled = true. The upload pipeline records the Miris " +
+                    "asset UUID in USD file metadata that the Miris viewer streams; " +
+                    "enabling upload without the viewer means assets get uploaded but " +
+                    "cannot be viewed."
             );
         }
         if (!config.app.webUi.allowUnsafeEvalFeatures) {

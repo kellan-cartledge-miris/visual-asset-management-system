@@ -8,8 +8,8 @@ Implements the production upload flow as verified against
   1. POST /v1/content                  -> start_upload (returns id + temp S3 creds)
   2. (caller does the SigV4 S3 PUT to those temp creds out-of-band)
   3. PUT  /v1/content/{id}             -> mark_upload_complete (status=completed)
-  4. POST /v1/asset/{id}/generate      -> trigger_generate_best_effort (optional)
-  5. GET  /v1/asset/{id}               -> poll_until_terminal
+  4. GET  /v1/asset/{id}               -> poll_until_terminal
+  5. POST /v1/asset/{id}/generate      -> trigger_generate_best_effort (optional)
 
 Auth uses the `Miris-Integration-Key` header (NOT `Authorization: Bearer`),
 matching the OpenAPI ApiKeyHeader scheme.
