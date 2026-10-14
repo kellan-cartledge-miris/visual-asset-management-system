@@ -14,6 +14,7 @@ COPY __main__.py .
 COPY entrypoint.sh .
 COPY config.json .
 COPY miris_uploader.py .
+COPY stream_metadata.py .
 COPY upload_config.py .
 COPY usd_packager.py .
 COPY utils/ utils/

@@ -1,7 +1,7 @@
 {
     "pipelineName": "Miris Spatial Streaming Upload",
     "category": "Conversion",
-    "description": "Packages a USD asset and uploads it to Miris Spatial Streaming, emitting a .mrx manifest so the asset becomes streamable in the VAMS Miris viewer.",
+    "description": "Packages a USD asset and uploads it to Miris Spatial Streaming, then writes the Miris stream metadata (asset UUID, source version, upload time, display name) to the USD file so it becomes streamable in the VAMS Miris viewer.",
     "executionConfig": {
         "executionType": "Lambda",
         "waitForCallback": "Enabled",

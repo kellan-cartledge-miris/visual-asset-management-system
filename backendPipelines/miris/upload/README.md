@@ -1,6 +1,6 @@
 # Miris Auto-Upload Pipeline
 
-The Miris Auto-Upload Pipeline streams supported USD source assets into the [Miris Spatial Streaming](https://miris.com) platform and emits a `.mrx` manifest back to the asset's file list, so the asset becomes streamable in the VAMS Miris viewer. It auto-registers as a standard VAMS pipeline and GLOBAL workflow (`miris-upload`) with a `fileUpload` trigger, so it runs automatically when a matching USD file is uploaded, or on demand from the file manager's **Automation -> Execute Workflow** action against the asset's root USD source file.
+The Miris Auto-Upload Pipeline streams supported USD source assets into the [Miris Spatial Streaming](https://miris.com) platform and records the resulting Miris asset as file metadata on the source USD file, so the file becomes streamable in the VAMS Miris viewer. It auto-registers as a standard VAMS pipeline and GLOBAL workflow (`miris-upload`) with a `fileUpload` trigger, so it runs automatically when a matching USD file is uploaded, or on demand from the file manager's **Automation -> Execute Workflow** action against the asset's root USD source file.
 
 For the end-to-end integration (viewer plugins, configuration, architecture), see the [Miris Spatial Streaming Integration](../../../documentation/docusaurus-site/docs/developer/external-integrations/miris-spatial-streaming.md) guide.
 
@@ -8,7 +8,8 @@ For the end-to-end integration (viewer plugins, configuration, architecture), se
 
 ### Container (`container/`)
 
--   **`__main__.py`** - Entrypoint; runs the 6-step Miris upload flow and writes the `.mrx` manifest
+-   **`__main__.py`** - Entrypoint; runs the 6-step Miris upload flow and writes the stream metadata for the source USD file
+-   **`stream_metadata.py`** - Builds the stream metadata body and its `.metadata.json` key under the run's metadata output path
 -   **`usd_packager.py`** - USD dependency resolution and `.usdz` packaging via OpenUSD (`UsdUtils.ComputeAllDependencies`)
 -   **`miris_uploader.py`** - Miris content API client (`MirisClient`): start upload, mark complete, poll, generate
 -   **`utils/secrets.py`** - Retrieves the Miris Integration Key from AWS Secrets Manager
@@ -20,7 +21,7 @@ For the end-to-end integration (viewer plugins, configuration, architecture), se
 -   **`mirisClaim.py`** - Claim-key derivation and release, shared by the gate and every path that releases a claim
 -   **`vamsExecuteMirisUpload.py`** - VAMS API integration; invokes the gate, then the pipeline
 -   **`openMirisUploadPipeline.py`** - Starts the inner Step Functions execution; rejects folder inputs (requires a single file)
--   **`constructMirisUploadPipeline.py`** - Builds the AWS Batch job definition from the pipeline payload
+-   **`constructMirisUploadPipeline.py`** - Builds the AWS Batch job definition from the pipeline payload; fails the run before the job is submitted when `outputS3AssetMetadataPath` is missing
 -   **`pipelineEnd.py`** - Reports the workflow callback (`SendTaskSuccess` / `SendTaskFailure`) and releases the claim when the run did not succeed
 
 ### CDK Infrastructure (`../../../infra/lib/nestedStacks/pipelines/miris/upload/`)
@@ -54,7 +55,20 @@ For the end-to-end integration (viewer plugins, configuration, architecture), se
 5. **Poll and emit**
 
     - Polls until Miris reaches a terminal preview/streamable state.
-    - Writes a `.mrx` manifest (`mirisAssetUuid = <id>`) to the asset's output files path.
+    - Writes `{outputS3AssetMetadataPath}<relativeFilePath>.metadata.json`, where `<relativeFilePath>` is the source USD file's path within the asset (for example `scenes/pump.usda`). The workflow's process-output step applies it to that file as an `update`, so other file metadata is kept.
+
+## Output
+
+The pipeline writes no asset files. It sets four file metadata keys on the USD file it was triggered for (the root layer for a multi-file USD):
+
+| Key                       | Type     | Value                                                                                     |
+| ------------------------- | -------- | ----------------------------------------------------------------------------------------- |
+| `miris_asset_uuid`        | `string` | The Miris asset UUID to stream                                                            |
+| `miris_source_version_id` | `string` | S3 `VersionId` of the USD object the container downloaded; empty when the bucket has none |
+| `miris_uploaded_at`       | `date`   | ISO 8601 UTC time the upload completed, for example `2026-10-14T09:30:00Z`                |
+| `miris_display_name`      | `string` | Display name used for the Miris asset                                                     |
+
+Running the pipeline again on the same file overwrites the four keys with the new Miris asset; the previous Miris asset is not deleted.
 
 ## Configuration Parameters
 
@@ -73,7 +87,7 @@ Configured under `app.miris.upload.*` in `infra/config/config.json`:
 -   **AWS Batch** (Fargate) - Runs the upload container
 -   **Step Functions** - Pipeline orchestration
 -   **Lambda** - Gate, execute, construct, open, and end handlers
--   **Amazon S3** - Asset input and `.mrx` output storage
+-   **Amazon S3** - Asset input and stream metadata output storage
 -   **AWS Secrets Manager** - Miris Integration Key
 -   **Amazon ECR** - Container image storage
 
@@ -81,8 +95,8 @@ Configured under `app.miris.upload.*` in `infra/config/config.json`:
 
 1. Upload a USD asset (`.usd`, `.usda`, `.usdc`, `.usdz`) to a VAMS asset — the auto-registered trigger fires and the pipeline starts. A multi-file asset made up of several standalone `.usd`/`.usda`/`.usdc` layers can fire the trigger once per layer; the gate collapses that fan-out so the asset is uploaded exactly once. To launch the pipeline on demand instead, select the asset's root USD source file in the file manager and choose **Automation -> Execute Workflow**, then pick the **Miris Spatial Streaming Upload** workflow and the **Stream with Miris** template. The workflow takes a single file, so a whole-asset (`/`) selection is rejected in the execute wizard.
 2. The pipeline uploads the asset to Miris and waits for processing (typically 1–2 hours).
-3. When processing completes, a `.mrx` manifest appears in the asset's file list.
-4. Open the `.mrx` or the USD source file in the Miris viewer to stream the asset.
+3. When processing completes, the `miris_*` keys appear in the USD file's metadata.
+4. Open the USD source file in the Miris viewer to stream the asset.
 
 See `SMOKE_TEST.md` in this directory for manual verification steps.
 

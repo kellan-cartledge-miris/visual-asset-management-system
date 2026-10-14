@@ -3,7 +3,8 @@
 """Miris upload pipeline container entry point.
 
 Reads the pipeline definition (single JSON arg from constructMirisUploadPipeline),
-runs the 6-step Miris upload flow, writes the .mrx manifest, and exits 0/non-0.
+runs the 6-step Miris upload flow, writes the Miris stream metadata for the source
+USD file to the run's metadata output path, and exits 0/non-0.
 """
 import datetime
 import hashlib
@@ -14,6 +15,11 @@ import boto3
 from botocore.config import Config
 
 from miris_uploader import MirisClient, _redact_response
+from stream_metadata import (
+    build_stream_metadata_body,
+    metadata_object_key,
+    metadata_output_location,
+)
 from upload_config import resolve_upload_config
 from usd_packager import (
     compute_dependencies,
@@ -47,17 +53,6 @@ def _sha256_of_file(path: str) -> str:
     return h.hexdigest()
 
 
-def _relative_subdir(trigger_object_key: str, asset_id: str) -> str:
-    """Compute the relative subdir between assetId/ and the trigger file's basename,
-    per VAMS Rule on pipeline state. Returns '' if the file is at asset root."""
-    parts = trigger_object_key.split("/")
-    try:
-        idx = parts.index(asset_id)
-    except ValueError:
-        return ""
-    return "/".join(parts[idx + 1 : -1])
-
-
 def _stripped_upload_path(upload_path: str) -> tuple[str, str]:
     """Parse 's3://bucket/prefix' → ('bucket', 'prefix') (no trailing /)."""
     assert upload_path.startswith("s3://"), upload_path
@@ -66,21 +61,36 @@ def _stripped_upload_path(upload_path: str) -> tuple[str, str]:
     return bucket, prefix.rstrip("/")
 
 
-def _download_asset_folder(s3, bucket: str, asset_id: str, dest_dir: str) -> int:
+def _download_version(s3, bucket: str, key: str, local: str, version_id: str) -> None:
+    """Download one object, pinned to version_id when the bucket reports one."""
+    extra_args = {"VersionId": version_id} if version_id else None
+    s3.download_file(bucket, key, local, ExtraArgs=extra_args)
+
+
+def _download_asset_folder(
+    s3, bucket: str, asset_id: str, dest_dir: str, root_key: str
+) -> tuple[int, str]:
     """Download every object under '{asset_id}/' into dest_dir, preserving the
-    relative layout so USD relative references resolve. Returns total bytes."""
+    relative layout so USD relative references resolve. The root USD is pinned to
+    the version it reports. Returns (total bytes, root USD VersionId or '')."""
     paginator = s3.get_paginator("list_objects_v2")
     keys = []
     for page in paginator.paginate(Bucket=bucket, Prefix=f"{asset_id}/"):
         for obj in page.get("Contents", []):
             keys.append(obj["Key"])
     total = 0
+    root_version_id = ""
     for key, rel in local_download_plan(keys, asset_id):
         local = os.path.join(dest_dir, rel)
         os.makedirs(os.path.dirname(local), exist_ok=True)
-        s3.download_file(bucket, key, local)
+        if key == root_key:
+            head = s3.head_object(Bucket=bucket, Key=key)
+            root_version_id = head.get("VersionId") or ""
+            _download_version(s3, bucket, key, local, root_version_id)
+        else:
+            s3.download_file(bucket, key, local)
         total += os.path.getsize(local)
-    return total
+    return total, root_version_id
 
 
 def main():
@@ -94,7 +104,6 @@ def main():
     # that don't include it by defaulting to "".
     database_id = stage.get("databaseId", "")
     trigger = stage["triggerInput"]
-    output_files = stage["outputFiles"]
     miris_base = stage["mirisApiBaseUrl"]
     secret_arn = stage["mirisApiKeySecretArn"]
     task_timeout = int(stage["taskTimeoutSeconds"])
@@ -108,6 +117,14 @@ def main():
         sys.exit(3)
     filename = os.path.basename(trigger_key)
 
+    # The stream metadata is the pipeline's only output, so a run without somewhere
+    # to write it fails before anything is uploaded to Miris.
+    try:
+        metadata_bucket, metadata_prefix = metadata_output_location(stage)
+    except ValueError as e:
+        _log("metadata_output_path_missing", error=str(e))
+        sys.exit(7)
+
     s3 = boto3.client("s3", config=retry_config)
     os.makedirs("/workdir", exist_ok=True)
     name_no_ext = os.path.splitext(filename)[0]
@@ -120,13 +137,16 @@ def main():
             _log("file_too_large", size=int(head["ContentLength"]), max_bytes=max_bytes)
             sys.exit(4)
         upload_local = f"/workdir/{filename}"
-        s3.download_file(trigger_bucket, trigger_key, upload_local)
+        source_version_id = head.get("VersionId") or ""
+        _download_version(s3, trigger_bucket, trigger_key, upload_local, source_version_id)
         upload_filename = filename
         upload_content_type = _USD_MEDIA_TYPES[".usdz"]
     else:
         # Text/binary USD root: download the whole asset folder, resolve deps.
         asset_dir = "/workdir/asset"
-        total = _download_asset_folder(s3, trigger_bucket, asset_id, asset_dir)
+        total, source_version_id = _download_asset_folder(
+            s3, trigger_bucket, asset_id, asset_dir, trigger_key
+        )
         if total > max_bytes:
             _log("file_too_large", size=total, max_bytes=max_bytes)
             sys.exit(4)
@@ -237,39 +257,26 @@ def main():
     else:
         _log("generate_triggered", state=gen.get("state"))
 
-    # 9. Write the .mrx manifest
-    manifest_tags = ["vams", f"vams-asset-{asset_id}", "vams-pipeline"] + cfg.tags
-    if database_id:
-        manifest_tags.append(f"vams-database-{database_id}")
-    manifest = {
-        "schemaVersion": 1,
-        "mirisAssetUuid": asset_uuid,
-        "displayName": cfg.asset_name,
-        "tags": manifest_tags,
-        "uploadedAt": datetime.datetime.utcnow()
-        .replace(microsecond=0)
-        .isoformat()
-        + "Z",
-        "uploadedBy": "vams-miris-upload-pipeline",
-    }
-    rel_subdir = _relative_subdir(trigger_key, asset_id)
-    mrx_filename = f"{filename}.mrx"
-    out_key = (
-        f"{output_files['objectDir']}{rel_subdir}/{mrx_filename}"
-        if rel_subdir
-        else f"{output_files['objectDir']}{mrx_filename}"
+    # 9. Write the stream metadata for the source USD file
+    body = build_stream_metadata_body(
+        asset_uuid=asset_uuid,
+        source_version_id=source_version_id,
+        display_name=cfg.asset_name,
+        uploaded_at=datetime.datetime.now(datetime.timezone.utc),
     )
+    metadata_key = metadata_object_key(metadata_prefix, trigger_key, asset_id)
     s3.put_object(
-        Bucket=output_files["bucketName"],
-        Key=out_key,
-        Body=json.dumps(manifest, indent=2).encode("utf-8"),
+        Bucket=metadata_bucket,
+        Key=metadata_key,
+        Body=json.dumps(body, indent=2).encode("utf-8"),
         ContentType="application/json",
     )
     _log(
-        "manifest_written",
-        bucket=output_files["bucketName"],
-        key=out_key,
+        "stream_metadata_written",
+        bucket=metadata_bucket,
+        key=metadata_key,
         asset_uuid=asset_uuid,
+        source_version_id=source_version_id,
     )
 
 

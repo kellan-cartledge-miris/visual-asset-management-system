@@ -24,7 +24,8 @@ def _event(**overrides):
         "jobName": "job-1",
         "inputS3AssetFilePath": "s3://assets/a1/sub/model.usd",
         "inputOutputS3AssetAuxiliaryFilesPath": "s3://aux/a1",
-        "outputS3AssetFilesPath": "s3://assets/a1/",
+        "outputS3AssetFilesPath": "s3://assets/pipelines/p/job/output/E1/files/",
+        "outputS3AssetMetadataPath": "s3://assets/pipelines/p/job/output/E1/metadata/",
         "inputConfigurationS3Location": "s3://assets/cfg.json",
         "assetId": "a1",
         "databaseId": "db1",
@@ -73,3 +74,41 @@ def test_claim_fields_are_present_when_the_version_is_unknown(construct):
     result = construct.lambda_handler(_event(), None)
 
     assert result["assetVersionId"] == ""
+
+
+def test_definition_carries_the_metadata_output_path(construct):
+    result = construct.lambda_handler(_event(), None)
+    stage = json.loads(result["definition"][0])["stages"][0]
+
+    assert stage["outputMetadataFiles"] == {
+        "bucketName": "assets",
+        "objectDir": "pipelines/p/job/output/E1/metadata/",
+    }
+    # The container writes nothing to the files output path.
+    assert "outputFiles" not in stage
+
+
+def test_metadata_output_prefix_is_normalized_to_a_folder(construct):
+    result = construct.lambda_handler(
+        _event(outputS3AssetMetadataPath="s3://assets/pipelines/p/job/output/E1/metadata"), None)
+    stage = json.loads(result["definition"][0])["stages"][0]
+
+    assert stage["outputMetadataFiles"]["objectDir"] == "pipelines/p/job/output/E1/metadata/"
+
+
+@pytest.mark.parametrize("metadata_path", [
+    None,
+    "",
+    "s3://assets",
+    "s3://assets/",
+    "assets/pipelines/p/job/output/E1/metadata/",
+])
+def test_missing_or_unusable_metadata_output_path_fails_before_batch_submit(construct, metadata_path):
+    event = _event()
+    if metadata_path is None:
+        del event["outputS3AssetMetadataPath"]
+    else:
+        event["outputS3AssetMetadataPath"] = metadata_path
+
+    with pytest.raises(ValueError, match="outputS3AssetMetadataPath"):
+        construct.lambda_handler(event, None)

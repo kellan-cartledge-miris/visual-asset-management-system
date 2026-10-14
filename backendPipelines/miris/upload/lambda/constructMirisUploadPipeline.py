@@ -18,13 +18,31 @@ MIRIS_UPLOAD_MAX_ASSET_SIZE_BYTES = int(
 )
 
 
+def _metadata_output_location(metadata_uri):
+    """Split the run's metadata output path into (bucket, prefix ending in '/').
+
+    The container writes the Miris stream metadata for the source USD file there; without
+    it a completed Miris upload would leave nothing on the file, so the run fails here,
+    before the Batch job is submitted."""
+    bucket, _, prefix = metadata_uri.replace("s3://", "", 1).partition("/")
+    if not metadata_uri.startswith("s3://") or not bucket or not prefix:
+        raise ValueError(
+            "outputS3AssetMetadataPath is missing or not an s3://bucket/prefix URI "
+            f"(got {metadata_uri!r}); the Miris upload pipeline writes its stream "
+            "metadata for the source USD file there"
+        )
+    if not prefix.endswith("/"):
+        prefix += "/"
+    return bucket, prefix
+
+
 def lambda_handler(event, context):
     logger.info("ConstructMirisUploadPipeline received event")
 
     job_name = event.get("jobName")
     input_s3_uri = event.get("inputS3AssetFilePath", "")
     aux_uri = event.get("inputOutputS3AssetAuxiliaryFilesPath", "")
-    output_files_uri = event.get("outputS3AssetFilesPath", "")
+    metadata_uri = event.get("outputS3AssetMetadataPath", "")
     asset_id = event.get("assetId", "")
     database_id = event.get("databaseId", "")
     asset_version_id = event.get("assetVersionId", "")
@@ -37,13 +55,7 @@ def lambda_handler(event, context):
         aux_bucket, aux_key = aux_uri.replace("s3://", "").split("/", 1)
 
     input_bucket, input_key = input_s3_uri.replace("s3://", "").split("/", 1)
-    if output_files_uri:
-        out_bucket, out_key = output_files_uri.replace("s3://", "").split("/", 1)
-        if not out_key.endswith("/"):
-            out_key += "/"
-    else:
-        out_bucket = input_bucket
-        out_key = f"{os.path.dirname(input_key)}/miris-upload/"
+    metadata_bucket, metadata_key = _metadata_output_location(metadata_uri)
 
     _, extension = os.path.splitext(input_key)
 
@@ -59,9 +71,9 @@ def lambda_handler(event, context):
                     "objectKey": input_key,
                     "fileExtension": extension,
                 },
-                "outputFiles": {
-                    "bucketName": out_bucket,
-                    "objectDir": out_key,
+                "outputMetadataFiles": {
+                    "bucketName": metadata_bucket,
+                    "objectDir": metadata_key,
                 },
                 "temporaryFiles": {
                     "bucketName": aux_bucket,
