@@ -42,7 +42,7 @@ VAMS ships with viewer plugins across five categories: 3D, Media, Document, Data
 For the complete list of all viewers, supported extensions, priority resolution, and extension-to-viewer mapping, see [File Viewers](../concepts/viewers.md).
 
 :::info[Miris Spatial Streaming Viewer]
-VAMS includes one Miris viewer plugin, `miris-stream-viewer` (USD files, `MIRIS_STREAMING`, priority `0`), which streams the Miris asset recorded in the file's stream metadata. For the full integration — viewer behavior, the upload pipeline's auto-trigger and Automation launch, configuration, and architecture — see the dedicated [Miris Spatial Streaming Integration](external-integrations/miris-spatial-streaming.md) guide and the [Miris Auto-Upload Pipeline](../pipelines/miris-upload.md).
+VAMS includes one Miris viewer plugin, `miris-stream-viewer` (USD files, `MIRIS_STREAMING`, priority `0`), which streams the Miris asset recorded in the file's stream metadata with a deployment viewer key or, in `perView` mode, a short-lived key minted for each viewer open. For the full integration — viewer behavior, the upload pipeline's auto-trigger and Automation launch, configuration, and architecture — see the dedicated [Miris Spatial Streaming Integration](external-integrations/miris-spatial-streaming.md) guide and the [Miris Auto-Upload Pipeline](../pipelines/miris-upload.md).
 :::
 
 :::info[Priority System]
@@ -317,11 +317,12 @@ To enable this viewer, set `app.webUi.allowUnsafeEvalFeatures` to `true` in the 
 
 ### Available Feature Flags
 
-| Flag               | Effect on Viewers                                                                                                                                    |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ALLOWUNSAFEEVAL`  | Enables the Needle USD, SuperSplat Editor, and ThatOpen IFC BIM viewers, plus the Three.js CAD formats (all require the `unsafe-eval` CSP directive) |
-| `LOCATIONSERVICES` | Can be used to gate geospatial viewers                                                                                                               |
-| `MIRIS_STREAMING`  | Enables the Miris stream viewer (`miris-stream-viewer`) for USD files                                                                                |
+| Flag                  | Effect on Viewers                                                                                                                                    |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ALLOWUNSAFEEVAL`     | Enables the Needle USD, SuperSplat Editor, and ThatOpen IFC BIM viewers, plus the Three.js CAD formats (all require the `unsafe-eval` CSP directive) |
+| `LOCATIONSERVICES`    | Can be used to gate geospatial viewers                                                                                                               |
+| `MIRIS_STREAMING`     | Enables the Miris stream viewer (`miris-stream-viewer`) for USD files                                                                                |
+| `MIRIS_PER_VIEW_KEYS` | The Miris stream viewer requests a short-lived viewer key from VAMS for each stream                                                                  |
 
 ### Multiple Requirements
 

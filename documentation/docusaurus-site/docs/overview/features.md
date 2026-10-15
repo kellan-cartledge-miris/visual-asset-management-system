@@ -12,7 +12,7 @@ The VAMS web interface is a React 18 application built with Vite and the AWS Clo
 
 VAMS includes built-in viewer plugins across five categories (3D, Media, Document, Data, and Preview), covering 3D meshes, CAD, point clouds, Gaussian splats, USD, and IFC/BIM models. The plugin-based architecture supports lazy loading, per-plugin dependency management, automatic viewer selection based on file extension, and fullscreen mode. Two additional licensed viewers (VNTANA and VEERUM) provide commercial-grade rendering for GLB models and point clouds.
 
--   **Miris Spatial Streaming** — Stream 3D assets at progressive levels of detail via the Miris platform. Opening a USD file streams the Miris asset recorded in the file's metadata.
+-   **Miris Spatial Streaming** — Stream 3D assets at progressive levels of detail via the Miris platform. Opening a USD file streams the Miris asset recorded in the file's metadata, with a deployment viewer key or, optionally, a short-lived key minted for each view.
 -   **Miris Auto-Upload Pipeline** — Uploads supported USD source assets to the Miris Spatial Streaming platform and records the Miris asset in the USD file's metadata, so assets become streamable in the VAMS viewer. Runs automatically on upload, or on demand via the file manager's **Automation** action.
 
 For the complete list of supported file viewers and extensions, see [File Viewers](../concepts/viewers.md).
@@ -268,6 +268,7 @@ VAMS uses a feature flag system to conditionally enable capabilities at deployme
 | `LOCATIONSERVICES`              | Enables Amazon Location Service integration for map views                                                                                                            |
 | `MIRIS_STREAMING`               | Enables the Miris Spatial Streaming viewer for USD files                                                                                                             |
 | `MIRIS_UPLOAD`                  | Indicates that the Miris auto-upload pipeline is deployed                                                                                                            |
+| `MIRIS_PER_VIEW_KEYS`           | VAMS mints a short-lived, single-asset Miris viewer key for each viewer open                                                                                         |
 | `ALBDEPLOY`                     | Indicates Application Load Balancer web distribution                                                                                                                 |
 | `CLOUDFRONTDEPLOY`              | Indicates Amazon CloudFront web distribution                                                                                                                         |
 | `NOOPENSEARCH`                  | Indicates Amazon OpenSearch is disabled                                                                                                                              |

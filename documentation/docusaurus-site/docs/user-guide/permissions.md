@@ -31,10 +31,10 @@ A role is a named collection of constraints that can be assigned to users. Roles
 
 VAMS is deployed with two default roles:
 
-| Role            | Description                                                                                                                                         |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `admin`         | Full access to all features, all databases, and all administrative functions including user management, role management, and constraint management. |
-| `basicReadOnly` | Read-only access to view assets, databases, pipelines, and workflows across all databases. Cannot create, modify, or delete any data.               |
+| Role            | Description                                                                                                                                                                                                         |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `admin`         | Full access to all features, all databases, and all administrative functions including user management, role management, and constraint management.                                                                 |
+| `basicReadOnly` | Read-only access to view assets, databases, pipelines, and workflows across all databases. Cannot create, modify, or delete any data, except that it can request per-view Miris viewer keys for assets it can view. |
 
 The deployment assigns the administrator account named by `app.adminUserId` to `admin`. The reserved
 `SYSTEM_USER` identity is also assigned to `admin` so system processes pass both authorization tiers.
@@ -46,6 +46,8 @@ administrative routes that `admin` holds: detailed execution logs
 (`DELETE /workflows/executions/{executionId}/permanent`). Because read access is granted through
 broad path prefixes such as `/workflows`, those two routes are withheld by explicit `deny` constraints,
 which override a matching `allow`.
+
+When Miris per-view viewer keys are enabled, `basicReadOnly` may also `POST` to the Miris viewer key route (`/database/{databaseId}/assets/{assetId}/miris/viewer-key`) so that it can stream the assets it can view. The route mints a streaming-only key and creates no VAMS data.
 
 In the web interface a user without execution-log access still sees the **Logs** tab on an execution,
 and the tab reports that the logs are not viewable.

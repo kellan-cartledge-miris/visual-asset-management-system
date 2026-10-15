@@ -144,13 +144,13 @@ The response carries `Cache-Control: no-cache, no-store`.
 
 #### Error responses
 
-| Status | Description                                                                                                                                                                      |
-| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid or missing `filePath`, invalid path parameters, or the asset does not exist. Also returned with `state: "invalidUuid"` when the file's `miris_asset_uuid` is not a UUID. |
-| `403`  | The caller lacks API-tier access to `POST` on the route or `GET` access to the asset.                                                                                            |
-| `404`  | The file records no Miris stream (`state: "notStreamed"`).                                                                                                                       |
-| `500`  | Internal server error, including a key that could not be recorded. VAMS deletes such a key from Miris before responding.                                                         |
-| `502`  | Miris did not create a usable key. A key Miris created without key material is deleted from Miris. The Miris response is not passed through.                                     |
+| Status | Description                                                                                                                                                                                                                                                                                 |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid or missing `filePath`, invalid path parameters, or the asset does not exist. Also returned with `state: "invalidUuid"` when the file's `miris_asset_uuid` is not a UUID.                                                                                                            |
+| `403`  | The caller lacks API-tier access to `POST` on the route or `GET` access to the asset.                                                                                                                                                                                                       |
+| `404`  | The file records no Miris stream (`state: "notStreamed"`).                                                                                                                                                                                                                                  |
+| `500`  | Internal server error, including a key that could not be recorded. VAMS deletes such a key from Miris before responding.                                                                                                                                                                    |
+| `502`  | Miris did not create a usable key: it returned a status other than `200` or `201`, was unreachable, or returned a response without a key ID and key material. When Miris returned a key ID but no key material, VAMS deletes that key from Miris. The Miris response is not passed through. |
 
 #### Authorization
 

@@ -9118,7 +9118,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "502":
-                    description: "Miris did not create a usable viewer key. A key Miris created without key material is deleted from Miris. The Miris response is not returned."
+                    description: "Miris did not create a usable viewer key: it returned a status other than 200 or 201, was unreachable, or returned a response without a key ID and key material. When Miris returned a key ID but no key material, VAMS deletes that key from Miris. The Miris response is not returned."
                     content:
                         application/json:
                             schema:

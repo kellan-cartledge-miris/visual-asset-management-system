@@ -54,7 +54,7 @@ CoreVAMSStack (root)
   +-- LambdaLayers
   +-- StorageResourcesBuilder (foundation: DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch)
   |     |
-  |     +-- ResourceNamesBuilder (publishes 64 SSM resource-name parameters)
+  |     +-- ResourceNamesBuilder (publishes 64 SSM resource-name parameters, 65 with Miris per-view viewer keys)
   |     +-- AuthBuilder                                     -> storage, resourceNames
   |     +-- ApiBuilder (primary API route Lambda wiring)     -> storage, resourceNames
   |     +-- ApiBuilder2 (secondary API stack: Tags, Tag Types, Auth Constraints, asset history,
@@ -186,6 +186,8 @@ interface authResources {
     };
 }
 ```
+
+**Miris per-view viewer keys** (`app.miris.viewerKeyMode: "perView"`, feature `MIRIS_PER_VIEW_KEYS`): `storageBuilder-nestedStack.ts` creates `MirisViewerKeyStorageTable` (TTL attribute `ttl`, `KEYS_ONLY` stream; optional member of `storageResources.dynamo`) and publishes its name parameter; `apiBuilder-nestedStack.ts` attaches the mint Lambda (`buildMintMirisViewerKeyFunction`, POST `.../miris/viewer-key`), builds the cleanup Lambda (`buildMirisViewerKeyCleanupFunction`), its `MirisViewerKeyCleanupDLQ`, and a stream mapping filtered to DynamoDB TTL `REMOVE` records. All four exist only in `perView` mode. The status Lambda reads the asset with the Integration Key in that mode, and the config Lambda's `MIRIS_VIEWER_KEY` is empty so `/secure-config` carries no shared key. Each Miris Lambda that reads `app.miris.apiKeySecretArn` is granted `secretsmanager:GetSecretValue` on that one ARN; a secret under a customer managed KMS key also needs a key policy that lets those Lambda roles decrypt it.
 
 ### **Workflow Execution Storage (V2 data model)**
 
