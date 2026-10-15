@@ -13758,7 +13758,7 @@ components:
                     description: "Value of `miris_display_name`."
                 state:
                     type: string
-                    description: "`notStreamed` when `miris_asset_uuid` is absent or empty; `invalidUuid` when it is not a UUID; `unknown` when the processing state could not be established (no viewer key configured, or Miris unreachable, not visible to the viewer key, or returning no usable state); otherwise the Miris processing state as reported, such as `preview`, `streamable`, `error`, or `failed`."
+                    description: "`notStreamed` when `miris_asset_uuid` is absent or empty; `invalidUuid` when it is not a UUID; `unknown` when the processing state could not be established (no viewer key configured, or Miris unreachable, not visible to the viewer key, or returning no usable state); `processing` when Miris is still preparing the asset (its viewer API returned HTTP 400); otherwise the Miris processing state as reported, such as `preview`, `streamable`, `error`, or `failed`."
             required:
                 - filePath
                 - mirisAssetUuid

@@ -108,6 +108,9 @@ asset_file_metadata_table = dynamodb.Table(asset_file_metadata_table_name)
 # A Miris `state` is passed through only when it looks like a state token.
 _MIRIS_STATE_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
 
+# The viewer API answers 400 for an asset Miris is still preparing.
+STATE_PROCESSING = "processing"
+
 
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     global claims_and_roles
@@ -248,6 +251,10 @@ def _miris_processing_state(miris_asset_uuid: str) -> str:
         # an asset still being ingested and any workspace-visibility drift.
         logger.warning(f"Miris viewer API returned 404 for {miris_asset_uuid}")
         return STATE_UNKNOWN
+    if r.status_code == 400:
+        # Miris answers 400 until a freshly uploaded asset has finished processing.
+        logger.info(f"Miris viewer API returned 400 for {miris_asset_uuid}, asset is processing")
+        return STATE_PROCESSING
     if r.status_code >= 300:
         logger.error(
             f"Miris API returned {r.status_code} for {miris_asset_uuid}: {r.text[:200]}"

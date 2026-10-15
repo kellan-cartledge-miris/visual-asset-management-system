@@ -200,6 +200,23 @@ class TestResponseShapeAndStates:
 
 
 @pytest.mark.unit
+class TestMirisBadRequestIsProcessing:
+    """The viewer API answers 400 while Miris is still preparing a fresh asset."""
+
+    def test_400_is_processing_and_the_uuid_is_returned(self):
+        table = _metadata_table({f"{DATABASE_ID}:{ASSET_ID}:/scene.usd": _stream_row()})
+        miris_get = MagicMock(
+            return_value=_miris_response(
+                status_code=400, body={"type": "about:blank", "status": 400, "title": "Invalid Request"}
+            )
+        )
+        status, body, _, _ = _invoke(_event(), metadata_table=table, miris_get=miris_get)
+        assert status == 200
+        assert body["state"] == "processing"
+        assert body["mirisAssetUuid"] == STORED_UUID
+
+
+@pytest.mark.unit
 class TestMirisFailuresAreUnknown:
     """Anything short of a definitive processing failure is `unknown`, and the UUID is still returned."""
 
@@ -207,13 +224,15 @@ class TestMirisFailuresAreUnknown:
         "miris_get",
         [
             MagicMock(return_value=_miris_response(status_code=404, body={"message": "not found"})),
+            MagicMock(return_value=_miris_response(status_code=401, body={"message": "unauthorized"})),
+            MagicMock(return_value=_miris_response(status_code=403, body={"message": "forbidden"})),
             MagicMock(return_value=_miris_response(status_code=500, body={"message": "boom"})),
             MagicMock(return_value=_miris_response(status_code=200, text="<html>")),
             MagicMock(return_value=_miris_response(status_code=200, body={"name": "no state"})),
             MagicMock(return_value=_miris_response(status_code=200, body={"state": "x" * 200})),
             MagicMock(side_effect=requests.ConnectionError("unreachable")),
         ],
-        ids=["404", "500", "non-json", "no-state", "malformed-state", "connection-error"],
+        ids=["404", "401", "403", "500", "non-json", "no-state", "malformed-state", "connection-error"],
     )
     def test_indeterminate_miris_outcomes(self, miris_get):
         table = _metadata_table({f"{DATABASE_ID}:{ASSET_ID}:/scene.usd": _stream_row()})
