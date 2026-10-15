@@ -82,7 +82,7 @@ In deployments with Amazon OpenSearch Service, file metadata is indexed under th
 
 ## Configuration
 
-Enable Miris by setting `app.miris.enabled` to `true` and providing a viewer key. To also enable the auto-upload pipeline, configure `app.miris.upload`.
+Enable Miris by setting `app.miris.enabled` to `true` and providing a viewer key. To also enable the auto-upload pipeline, set `app.miris.apiKeySecretArn` and configure `app.miris.upload`.
 
 ```json
 {
@@ -92,14 +92,18 @@ Enable Miris by setting `app.miris.enabled` to `true` and providing a viewer key
         },
         "miris": {
             "enabled": true,
+            "viewerKeyMode": "static",
             "viewerKey": "your-miris-viewer-key",
+            "apiKeySecretArn": "arn:aws:secretsmanager:REGION:ACCOUNT:secret:miris-integration-key-XXXX",
+            "mirisApiBaseUrl": "https://app.miris.com",
+            "perViewKey": {
+                "ttlMinutes": 15
+            },
             "upload": {
                 "enabled": true,
                 "autoRegisterWithVAMS": true,
                 "autoRegisterAutoTriggerOnFileUpload": true,
                 "triggerExtensions": ".usd,.usda,.usdc,.usdz",
-                "apiKeySecretArn": "arn:aws:secretsmanager:REGION:ACCOUNT:secret:miris-integration-key-XXXX",
-                "mirisApiBaseUrl": "https://api.miris.com",
                 "taskTimeoutSeconds": 1800,
                 "maxAssetSizeBytes": 5000000000
             }
@@ -108,17 +112,21 @@ Enable Miris by setting `app.miris.enabled` to `true` and providing a viewer key
 }
 ```
 
-| Field                             | Required   | Description                                                                                                                 |
-| --------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `miris.enabled`                   | Yes        | Enables the Miris integration, the viewer key in `/secure-config`, the stream status endpoint, and the Miris stream schema. |
-| `miris.viewerKey`                 | Yes        | Miris viewer key used by the stream viewer for authentication. Treat as a secret; only shown once at creation in Miris.     |
-| `miris.upload.enabled`            | For upload | Deploys the auto-upload pipeline (the `MIRIS_UPLOAD` feature).                                                              |
-| `miris.upload.apiKeySecretArn`    | For upload | AWS Secrets Manager ARN holding the Miris Integration Key used by the upload pipeline.                                      |
-| `miris.upload.triggerExtensions`  | For upload | Comma-separated extensions that auto-trigger the pipeline (default `.usd,.usda,.usdc,.usdz`).                               |
-| `miris.upload.mirisApiBaseUrl`    | For upload | Miris content API base URL (default `https://api.miris.com`).                                                               |
-| `miris.upload.taskTimeoutSeconds` | For upload | Maximum time the upload container waits for Miris processing.                                                               |
-| `miris.upload.maxAssetSizeBytes`  | For upload | Maximum source asset size accepted for upload.                                                                              |
-| `webUi.allowUnsafeEvalFeatures`   | Yes        | Must be `true`; the Miris SDK requires the `unsafe-eval` CSP directive.                                                     |
+| Field                             | Required                | Description                                                                                                                                                   |
+| --------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `miris.enabled`                   | Yes                     | Enables the Miris integration, the viewer key in `/secure-config`, the stream status endpoint, and the Miris stream schema.                                   |
+| `miris.viewerKeyMode`             | No                      | `"static"` (default) streams with `viewerKey`. `"perView"` mints a short-lived viewer key per viewer open with the Integration Key, and needs no `viewerKey`. |
+| `miris.viewerKey`                 | In `static` mode        | Miris viewer key used by the stream viewer for authentication. Treat as a secret; only shown once at creation in Miris. Ignored in `perView` mode.            |
+| `miris.apiKeySecretArn`           | For upload or `perView` | AWS Secrets Manager ARN holding the Miris Integration Key used by the upload pipeline and to mint per-view viewer keys.                                       |
+| `miris.mirisApiBaseUrl`           | No                      | Miris API base URL (default `https://app.miris.com`).                                                                                                         |
+| `miris.perViewKey.ttlMinutes`     | No                      | Lifetime of a per-view viewer key, in whole minutes from 1 to 60 (default 15).                                                                                |
+| `miris.upload.enabled`            | For upload              | Deploys the auto-upload pipeline (the `MIRIS_UPLOAD` feature).                                                                                                |
+| `miris.upload.triggerExtensions`  | For upload              | Comma-separated extensions that auto-trigger the pipeline (default `.usd,.usda,.usdc,.usdz`).                                                                 |
+| `miris.upload.taskTimeoutSeconds` | For upload              | Maximum time the upload container waits for Miris processing.                                                                                                 |
+| `miris.upload.maxAssetSizeBytes`  | For upload              | Maximum source asset size accepted for upload.                                                                                                                |
+| `webUi.allowUnsafeEvalFeatures`   | Yes                     | Must be `true`; the Miris SDK requires the `unsafe-eval` CSP directive.                                                                                       |
+
+`miris.upload.apiKeySecretArn` and `miris.upload.mirisApiBaseUrl` are accepted as deprecated aliases of `miris.apiKeySecretArn` and `miris.mirisApiBaseUrl`; see the [Configuration Reference](../../deployment/configuration-reference.md#miris-auto-upload-pipeline-appmirisupload).
 
 Database scope for the auto-trigger is a property of the workflow that owns it, not a pipeline-level setting. The upload pipeline auto-registers a GLOBAL workflow (`miris-upload`) whose `fileUpload` trigger fires for a matching USD upload in any database. To restrict auto-uploads to specific databases, disable the global trigger and register a database-scoped copy of the workflow for each database that should auto-trigger — VAMS resolves database scope natively when it matches an uploaded file against workflow triggers.
 
@@ -176,9 +184,9 @@ Because a `fileUpload` trigger fires once per matching file, a multi-file USD as
 
 ## Requirements and limitations
 
--   `app.miris.enabled` must be `true`, with a valid `app.miris.viewerKey`.
+-   `app.miris.enabled` must be `true`, with a valid `app.miris.viewerKey` in the default `static` viewer key mode.
 -   `app.webUi.allowUnsafeEvalFeatures` must be `true` — the Miris SDK uses WebAssembly and requires the `unsafe-eval` CSP directive. Review this with your security team.
--   The upload pipeline requires a Miris Integration Key stored in AWS Secrets Manager, referenced by `app.miris.upload.apiKeySecretArn`.
+-   The upload pipeline requires a Miris Integration Key stored in AWS Secrets Manager, referenced by `app.miris.apiKeySecretArn`.
 -   Browser support: Chrome 90+, Firefox 88+, Safari 14+, Edge 90+, with WebGL 2.0 and WebSocket support. HTTPS is mandatory.
 -   After upload, Miris processes an asset (typically 1–2 hours) before it is streamable.
 -   Cannot be enabled in GovCloud or air-gapped deployments.

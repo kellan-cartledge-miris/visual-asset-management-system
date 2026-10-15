@@ -14,7 +14,11 @@
 
 import * as cdk from "aws-cdk-lib";
 import { Template } from "aws-cdk-lib/assertions";
-import { MIRIS_TEST_APP_CONTEXT, newMirisCoreStack } from "./support/mirisCoreStack";
+import {
+    MIRIS_TEST_APP_CONTEXT,
+    createMirisMockConfig,
+    newMirisCoreStack,
+} from "./support/mirisCoreStack";
 import { newTestApp } from "./support/testApp";
 
 test("Core stack synthesizes with the Miris upload pipeline enabled", () => {
@@ -84,4 +88,27 @@ test("Core stack synthesizes with the Miris upload pipeline enabled", () => {
     const definition = JSON.stringify(stateMachine.Properties.DefinitionString);
     expect(definition).toContain("MirisUploadEndFailure");
     expect(definition).toContain("States.JsonToString($.error)");
+
+    // The pipeline reads the Integration Key secret and the API base URL from app.miris.
+    const secretArn = createMirisMockConfig().app.miris.apiKeySecretArn;
+    const constructFunction = Object.values(resources).find(
+        (r: any) =>
+            r.Type === "AWS::Lambda::Function" &&
+            r.Properties.Handler === "constructMirisUploadPipeline.lambda_handler"
+    ) as any;
+    expect(constructFunction.Properties.Environment.Variables).toMatchObject({
+        MIRIS_API_KEY_SECRET_ARN: secretArn,
+        MIRIS_API_BASE_URL: "https://app.miris.com",
+    });
+    const secretResources = Object.values(resources)
+        .filter((r: any) => r.Type === "AWS::IAM::Role" || r.Type === "AWS::IAM::Policy")
+        .flatMap((r: any) => [
+            ...(r.Properties.Policies ?? []).flatMap((p: any) => p.PolicyDocument.Statement),
+            ...(r.Properties.PolicyDocument?.Statement ?? []),
+        ])
+        .filter((statement: any) =>
+            [statement.Action].flat().includes("secretsmanager:GetSecretValue")
+        )
+        .map((statement: any) => statement.Resource);
+    expect(secretResources).toContain(secretArn);
 });

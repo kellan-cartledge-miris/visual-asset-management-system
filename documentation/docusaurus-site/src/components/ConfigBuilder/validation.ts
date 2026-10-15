@@ -19,9 +19,10 @@
  * condition is active (warnings).
  *
  * Note on ordering: the builder runs `applyDerived()` before evaluating rules.
- * `applyDerived()` forces nothing (see `derived.ts`), so the config these rules read
- * is exactly what the operator entered and exactly what the serialized config.json
- * carries. Where config.ts rejects a configuration rather than adjusting it — the
+ * `applyDerived()` only resolves the legacy `app.miris.upload.*` aliases (see
+ * `derived.ts`), so the config these rules read is what the operator entered with
+ * those aliases resolved, and exactly what the serialized config.json carries.
+ * Where config.ts rejects a configuration rather than adjusting it — the
  * VPC requirement is the worked example (config.ts: "Features that require a VPC") —
  * the rejection is mirrored here as an error rule, not applied as a mutation there.
  */
@@ -176,6 +177,17 @@ function isValidUrl(value: unknown): boolean {
     } catch {
         return false;
     }
+}
+
+/** Viewer key modes accepted by `app.miris.viewerKeyMode` (config.ts: `MIRIS_VIEWER_KEY_MODES`). */
+const MIRIS_VIEWER_KEY_MODES = ["static", "perView"];
+
+/** Settings read from `app.miris` whose legacy location is `app.miris.upload` (config.ts: `resolveMirisLegacyAlias`). */
+const MIRIS_LEGACY_ALIAS_FIELDS = ["apiKeySecretArn", "mirisApiBaseUrl"];
+
+/** Miris enabled in per-view viewer key mode. An absent mode is filled with "static". */
+function mirisPerView(cfg: ConfigShape): boolean {
+    return !!g(cfg, "app.miris.enabled") && g(cfg, "app.miris.viewerKeyMode") === "perView";
 }
 
 /** Physna credentials supplied via an operator-managed secret ARN (config.ts: `hasSecretArn`). */
@@ -2087,7 +2099,126 @@ export const RULES: Rule[] = [
         message: "Physna Sync credentialsSecretArn must be a valid AWS Secrets Manager secret ARN.",
     },
 
+    // ----- Miris Spatial Streaming (config.ts: "app.miris.upload.apiKeySecretArn and app.miris.upload.mirisApiBaseUrl are legacy aliases") -----
+    ...MIRIS_LEGACY_ALIAS_FIELDS.map(
+        (field): Rule => ({
+            id: `miris-legacy-${field.toLowerCase()}-conflict`,
+            severity: "error",
+            fieldPaths: [`app.miris.${field}`, `app.miris.upload.${field}`],
+            appliesWhen: (c) => {
+                const legacy = g(c, `app.miris.upload.${field}`);
+                const current = g(c, `app.miris.${field}`);
+                return !isUnset(legacy) && !isUnset(current) && legacy !== current;
+            },
+            message: `app.miris.${field} and the deprecated app.miris.upload.${field} are both set and differ. Remove app.miris.upload.${field} and keep the intended value in app.miris.${field}.`,
+        })
+    ),
+    {
+        id: "miris-viewerkeymode",
+        severity: "error",
+        fieldPaths: ["app.miris.viewerKeyMode"],
+        appliesWhen: (c) => {
+            const mode = g(c, "app.miris.viewerKeyMode");
+            return !isAbsent(mode) && !MIRIS_VIEWER_KEY_MODES.includes(mode);
+        },
+        message: 'app.miris.viewerKeyMode must be "static" or "perView".',
+    },
+    {
+        id: "miris-perviewkey-ttl",
+        severity: "error",
+        fieldPaths: ["app.miris.perViewKey.ttlMinutes"],
+        appliesWhen: (c) => {
+            const ttl = g(c, "app.miris.perViewKey.ttlMinutes");
+            if (isAbsent(ttl)) return false; // getConfig() fills 15
+            return typeof ttl !== "number" || !Number.isInteger(ttl) || ttl < 1 || ttl > 60;
+        },
+        message: "app.miris.perViewKey.ttlMinutes must be a whole number of minutes from 1 to 60.",
+    },
+    {
+        id: "miris-upload-requires-miris",
+        severity: "error",
+        fieldPaths: ["app.miris.upload.enabled", "app.miris.enabled"],
+        appliesWhen: (c) => g(c, "app.miris.upload.enabled") && !g(c, "app.miris.enabled"),
+        message:
+            "The Miris auto-upload pipeline requires Miris Spatial Streaming (app.miris.enabled). It records the Miris asset UUID in USD file metadata that the viewer streams.",
+    },
+    {
+        id: "miris-upload-unsafe-eval",
+        severity: "error",
+        fieldPaths: ["app.miris.upload.enabled", "app.webUi.allowUnsafeEvalFeatures"],
+        appliesWhen: (c) =>
+            g(c, "app.miris.upload.enabled") && !g(c, "app.webUi.allowUnsafeEvalFeatures"),
+        message:
+            "The Miris auto-upload pipeline requires app.webUi.allowUnsafeEvalFeatures = true.",
+    },
+    {
+        id: "miris-upload-secret-required",
+        severity: "error",
+        fieldPaths: ["app.miris.apiKeySecretArn"],
+        appliesWhen: (c) =>
+            g(c, "app.miris.upload.enabled") && isUnset(g(c, "app.miris.apiKeySecretArn")),
+        message:
+            "The Miris auto-upload pipeline requires app.miris.apiKeySecretArn, the Secrets Manager ARN of the Miris Integration Key.",
+    },
+    {
+        id: "miris-upload-baseurl-required",
+        severity: "error",
+        fieldPaths: ["app.miris.mirisApiBaseUrl"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.miris.upload.enabled")) return false;
+            const url = g(c, "app.miris.mirisApiBaseUrl");
+            return !isAbsent(url) && !url; // an absent value is filled with https://app.miris.com
+        },
+        message:
+            "The Miris auto-upload pipeline requires app.miris.mirisApiBaseUrl (default https://app.miris.com).",
+    },
+    {
+        id: "miris-govcloud",
+        severity: "error",
+        fieldPaths: ["app.miris.enabled", "app.govCloud.enabled"],
+        appliesWhen: (c) => g(c, "app.miris.enabled") && g(c, "app.govCloud.enabled"),
+        message:
+            "Miris Spatial Streaming cannot be enabled with GovCloud. Miris SaaS endpoints (*.miris.com) are not reachable from GovCloud deployments.",
+    },
+    {
+        id: "miris-viewerkey-required",
+        severity: "error",
+        fieldPaths: ["app.miris.viewerKey"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.miris.enabled") || mirisPerView(c)) return false; // perView needs no viewer key
+            const key = g(c, "app.miris.viewerKey");
+            return isUnset(key) || String(key).length < 16;
+        },
+        message:
+            "Miris Spatial Streaming in static viewer key mode requires app.miris.viewerKey. Generate one in the Miris Portal or via `miris viewerkey create`.",
+    },
+    {
+        id: "miris-perview-secret-required",
+        severity: "error",
+        fieldPaths: ["app.miris.apiKeySecretArn", "app.miris.viewerKeyMode"],
+        appliesWhen: (c) => mirisPerView(c) && isUnset(g(c, "app.miris.apiKeySecretArn")),
+        message:
+            'app.miris.viewerKeyMode "perView" requires app.miris.apiKeySecretArn, the Secrets Manager ARN of the Miris Integration Key that mints the per-view viewer keys.',
+    },
+    {
+        id: "miris-unsafe-eval",
+        severity: "error",
+        fieldPaths: ["app.miris.enabled", "app.webUi.allowUnsafeEvalFeatures"],
+        appliesWhen: (c) => g(c, "app.miris.enabled") && !g(c, "app.webUi.allowUnsafeEvalFeatures"),
+        message:
+            "Miris Spatial Streaming requires app.webUi.allowUnsafeEvalFeatures = true. The @miris-inc/three SDK uses eval() at runtime.",
+    },
+
     // ===== Warnings (config.ts console.warn advisories) =====
+    {
+        id: "miris-perview-viewerkey-ignored-warn",
+        severity: "warning",
+        fieldPaths: ["app.miris.viewerKey"],
+        // config.ts: "app.miris.viewerKey is ignored when"
+        appliesWhen: (c) => mirisPerView(c) && !isUnset(g(c, "app.miris.viewerKey")),
+        message:
+            'app.miris.viewerKey is ignored when app.miris.viewerKeyMode is "perView". Remove it from config.json.',
+    },
     {
         id: "waf-disabled-warn",
         severity: "warning",

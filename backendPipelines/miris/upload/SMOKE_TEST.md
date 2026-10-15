@@ -7,7 +7,7 @@ Run once against a real Miris account before merging changes to this pipeline.
 -   The Miris viewer (`app.miris.enabled` + `app.miris.viewerKey`) deployed and working (smoke-tested per its own checklist).
 -   A Miris account with a valid Integration Key stored as a Secrets Manager
     plaintext secret. Capture the ARN.
--   `app.miris.upload.enabled: true` and `apiKeySecretArn` pointing at that ARN.
+-   `app.miris.upload.enabled: true` and `app.miris.apiKeySecretArn` pointing at that ARN.
 -   `app.webUi.allowUnsafeEvalFeatures: true` (inherited gate).
 -   A known good `.usdz` file, and a multi-file USD asset (a root `.usda` plus
     at least one additional standalone `.usd`/`.usda`/`.usdc` layer as a

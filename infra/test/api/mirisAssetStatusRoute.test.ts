@@ -31,7 +31,7 @@ function enableMirisWithUpload(c: any) {
     c.app.useGlobalVpc.enabled = true;
     c.app.miris.upload.enabled = true;
     c.app.miris.upload.autoRegisterAutoTriggerOnFileUpload = false;
-    c.app.miris.upload.apiKeySecretArn =
+    c.app.miris.apiKeySecretArn =
         "arn:aws:secretsmanager:us-east-1:123456789012:secret:test-miris-api-key-AbCdEf";
 }
 
@@ -102,6 +102,7 @@ describe.each([
         expect(fns).toHaveLength(1);
         const variables = fns[0].properties.Environment?.Variables ?? {};
         expect(variables.MIRIS_VIEWER_KEY).toBe(PLACEHOLDER_VIEWER_KEY);
+        expect(variables.MIRIS_API_BASE_URL).toBe("https://app.miris.com");
         expect(Object.keys(variables).filter((k) => /SECRET/i.test(k))).toEqual([]);
         // Table names resolve through SSM, not per-table environment variables.
         expect(variables.VAMS_RESOURCE_PARAM_PREFIX).toBeDefined();

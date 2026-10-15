@@ -15,7 +15,7 @@ already ships (React, `clsx`, `prism-react-renderer`).
 | `defaults.ts`       | Commercial, GovCloud & EU Sovereign Cloud presets — literal copies of the three template JSONs. |
 | `serialize.ts`      | `toConfigJson()` — strict JSON (4-space), normalizes `"UNDEFINED"` → `null`.                    |
 | `validation.ts`     | `RULES` ported rule-by-rule from `getConfig()` + `evaluateRules()`.                             |
-| `derived.ts`        | `applyDerived()` pass-through (forces nothing today) + GovCloud-safe defaults helper.           |
+| `derived.ts`        | `applyDerived()` legacy Miris alias resolution + GovCloud-safe defaults helper.                 |
 | `schema.ts`         | `SECTIONS` + `FIELDS` declarative metadata; `makeModelFields()` GPU factory.                    |
 | `fields/`           | Input primitives mapped to `FieldMeta.input`.                                                   |
 | `panels/`           | Section, validation summary, output (preview/download/copy), profile switcher.                  |
@@ -45,8 +45,10 @@ changes, update the corresponding files here:
    operator's config, so it must contain nothing `getConfig()` does not itself
    do: a mutation `getConfig()` **stops** performing has to be deleted from
    `derived.ts`, or the builder keeps silently rewriting the downloaded
-   `config.json`. `getConfig()` performs no such mutation today, so
-   `applyDerived()` is a pass-through; where `getConfig()` rejects a feature
+   `config.json`. The only such mutation today is the legacy
+   `app.miris.upload.apiKeySecretArn` / `app.miris.upload.mirisApiBaseUrl`
+   alias resolution (config.ts: `resolveMirisLegacyAlias`), which
+   `applyDerived()` mirrors; where `getConfig()` rejects a feature
    combination instead, the mirror belongs in `validation.ts` as an error rule
    (step 3), not here.
 5. **New/changed feature in a `getConfig()` constraint list** — for example a

@@ -29,8 +29,8 @@
  * the ConfigBuilder mirrors the rejection as a validation.ts error rule and derives
  * nothing. The VPC requirement is the worked example: getConfig() collects the 15
  * VPC-requiring features and throws when app.useGlobalVpc.enabled is false, and
- * validation.ts carries one error rule per feature. derived.ts performs no config
- * mutation at all, so nothing here needs to reconcile the two lists — but a feature
+ * validation.ts carries one error rule per feature. derived.ts mirrors only the legacy
+ * Miris alias resolution, so nothing here needs to reconcile the two lists — but a feature
  * added to the getConfig() collection does need adding to validation.ts, which no
  * test enforces.
  */
@@ -67,6 +67,10 @@ import { FIELDS } from "../../../documentation/docusaurus-site/src/components/Co
 const KNOWN_NON_FORM_PATHS: ReadonlySet<string> = new Set([
     "env.partition", // Derived from the deployment region/partition at synth time.
     "env.coreStackName", // "Will get overwritten always when generated" (see config.ts).
+    // Legacy aliases of app.miris.apiKeySecretArn and app.miris.mirisApiBaseUrl. Accepted in an existing
+    // config.json and resolved by getConfig() and derived.ts, but never offered as form fields.
+    "app.miris.upload.apiKeySecretArn",
+    "app.miris.upload.mirisApiBaseUrl",
     // The fields below are edited through a COMPOSITE ConfigBuilder component rather than one input
     // per field, so schema.ts carries the parent path only. They are listed individually so that
     // adding a field to either interface fails this test until both this list and the component are

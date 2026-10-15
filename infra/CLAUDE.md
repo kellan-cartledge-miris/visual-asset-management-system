@@ -548,7 +548,7 @@ CLASSIC's managed endpoint is not an EC2 interface endpoint and is always create
     - **Removed** auto-mutation (replaced by a `throw`) → **delete** it from `derived.ts`. Leaving it behind means the builder keeps silently rewriting the downloaded `config.json` in a way the deployment does not — exactly the silent topology change the `throw` exists to prevent.
     - **A `getConfig()` constraint LIST that gains a feature** — the VPC-requiring set is the worked example → extend the matching table in `validation.ts` (`VPC_REQUIRING_FEATURES`). `getConfig()` rejects rather than assigns for these, so the mirror is an error rule, not a derivation; omitting the feature means the builder approves a config that then fails at `cdk synth`.
 
-    `getConfig()` performs no auto-mutation today, so `applyDerived()` is a pass-through. Keep the function and its `DerivedResult` contract regardless — `ConfigBuilder.commitConfig()` routes every field edit through it, and it is where a future mutation would be mirrored.
+    The only `getConfig()` auto-mutation today is the legacy Miris alias resolution (`resolveMirisLegacyAlias`: a value at `app.miris.upload.apiKeySecretArn` or `app.miris.upload.mirisApiBaseUrl` fills the unset `app.miris` setting of the same name and the legacy key is removed), and `applyDerived()` mirrors exactly that. `ConfigBuilder.commitConfig()` routes every field edit through it, so it is where any further mutation is mirrored.
 
 ### 2. Adding a New Lambda Function
 

@@ -97,7 +97,7 @@ def _stream_row(uuid=STORED_UUID, **overrides):
 
 
 def _invoke(event, metadata_table=None, asset_table=None, enforcer=None, miris_get=None,
-            viewer_key="viewer-key-0000000000", base_url="https://api.miris.com"):
+            viewer_key="viewer-key-0000000000", base_url="https://app.miris.com"):
     metadata_table = metadata_table if metadata_table is not None else _metadata_table()
     asset_table = asset_table if asset_table is not None else _asset_table()
     enforcer = enforcer if enforcer is not None else _enforcer()
@@ -134,7 +134,7 @@ class TestResponseShapeAndStates:
         }
         miris_get.assert_called_once()
         args, kwargs = miris_get.call_args
-        assert args[0] == f"https://api.miris.com/viewer/v1/asset/{STORED_UUID}"
+        assert args[0] == f"https://app.miris.com/viewer/v1/asset/{STORED_UUID}"
         assert kwargs["headers"] == {"Miris-Viewer-Key": "viewer-key-0000000000"}
 
     @pytest.mark.parametrize("miris_state", ["preview", "error", "failed"])
@@ -187,7 +187,7 @@ class TestResponseShapeAndStates:
         assert body["uploadedAt"] is None
         assert body["displayName"] is None
 
-    @pytest.mark.parametrize("viewer_key, base_url", [("", "https://api.miris.com"), ("viewer-key-0000000000", "")])
+    @pytest.mark.parametrize("viewer_key, base_url", [("", "https://app.miris.com"), ("viewer-key-0000000000", "")])
     def test_no_credential_is_unknown_without_calling_miris(self, viewer_key, base_url):
         table = _metadata_table({f"{DATABASE_ID}:{ASSET_ID}:/scene.usd": _stream_row()})
         status, body, _, miris_get = _invoke(

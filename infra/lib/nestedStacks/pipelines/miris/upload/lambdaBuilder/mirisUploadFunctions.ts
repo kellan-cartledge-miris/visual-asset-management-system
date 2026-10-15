@@ -243,8 +243,8 @@ export function buildConstructMirisUploadPipelineFunction(
         code: lambda.Code.fromAsset(LAMBDA_SRC),
         handler: "constructMirisUploadPipeline.lambda_handler",
         environment: {
-            MIRIS_API_BASE_URL: config.app.miris.upload.mirisApiBaseUrl,
-            MIRIS_API_KEY_SECRET_ARN: config.app.miris.upload.apiKeySecretArn,
+            MIRIS_API_BASE_URL: config.app.miris.mirisApiBaseUrl,
+            MIRIS_API_KEY_SECRET_ARN: config.app.miris.apiKeySecretArn,
             MIRIS_UPLOAD_TASK_TIMEOUT_SECONDS: String(config.app.miris.upload.taskTimeoutSeconds),
             MIRIS_UPLOAD_MAX_ASSET_SIZE_BYTES: String(config.app.miris.upload.maxAssetSizeBytes),
         },

@@ -50,7 +50,7 @@ export const createMirisMockConfig = (): Config.Config => {
     config.app.miris.viewerKey = "test-placeholder-viewer-key-000000";
     config.app.miris.upload.enabled = true;
     config.app.miris.upload.autoRegisterAutoTriggerOnFileUpload = false;
-    config.app.miris.upload.apiKeySecretArn =
+    config.app.miris.apiKeySecretArn =
         "arn:aws:secretsmanager:us-east-1:123456789012:secret:test-miris-api-key-AbCdEf";
 
     // Internal (non-public) Config fields normally set by getConfig().

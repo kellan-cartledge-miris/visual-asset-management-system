@@ -208,6 +208,49 @@ function resolveConfigBool(name: string, ...sources: unknown[]): boolean {
     return false;
 }
 
+/** Viewer key modes accepted by `app.miris.viewerKeyMode`. */
+const MIRIS_VIEWER_KEY_MODES = ["static", "perView"];
+
+/** A Miris string setting the operator left unset: missing, empty, or the template placeholder. */
+function isMirisValueUnset(value: unknown): boolean {
+    return value === undefined || value === null || value === "" || value === "UNDEFINED";
+}
+
+/**
+ * Resolves `app.miris.upload.<field>`, the legacy location of a setting read from `app.miris.<field>`.
+ *
+ * Runs on the operator's values before any Miris default is applied, so a default never masks or
+ * overrides a value the operator wrote. A legacy value fills an unset `app.miris.<field>` with a
+ * deprecation warning, and a legacy value that differs from a set `app.miris.<field>` is rejected. The
+ * legacy key is then removed, so the resolved config carries the setting in one place only.
+ */
+function resolveMirisLegacyAlias(miris: any, field: "apiKeySecretArn" | "mirisApiBaseUrl") {
+    const upload = miris?.upload;
+    if (upload == undefined || !(field in upload)) return;
+    const legacy = upload[field];
+    if (!isMirisValueUnset(legacy)) {
+        if (isMirisValueUnset(miris[field])) {
+            miris[field] = legacy;
+            console.warn(
+                `Configuration Warning: app.miris.upload.${field} is deprecated and its value is used ` +
+                    `for app.miris.${field}. Move the setting to app.miris.${field}.`
+            );
+        } else if (miris[field] !== legacy) {
+            throw new Error(
+                `Configuration Error: app.miris.${field} ("${miris[field]}") and the deprecated ` +
+                    `app.miris.upload.${field} ("${legacy}") are both set and differ. Remove ` +
+                    `app.miris.upload.${field} and keep the intended value in app.miris.${field}.`
+            );
+        } else {
+            console.warn(
+                `Configuration Warning: app.miris.upload.${field} is deprecated and duplicates ` +
+                    `app.miris.${field}. Remove app.miris.upload.${field}.`
+            );
+        }
+    }
+    delete upload[field];
+}
+
 /**
  * Requires a configured outbound endpoint to be HTTPS and to point somewhere outside the deployment.
  *
@@ -1021,21 +1064,28 @@ export function getConfig(app: cdk.App): Config {
         config.app.webUi.allowUnsafeEvalFeatures = false;
     }
 
+    // app.miris.upload.apiKeySecretArn and app.miris.upload.mirisApiBaseUrl are legacy aliases of the
+    // app.miris settings, resolved on the operator's values before the defaults below fill anything.
+    resolveMirisLegacyAlias(config.app.miris, "apiKeySecretArn");
+    resolveMirisLegacyAlias(config.app.miris, "mirisApiBaseUrl");
+
     if (config.app.miris == undefined) {
-        config.app.miris = {
-            enabled: false,
-            viewerKey: "",
-            upload: {
-                enabled: false,
-                autoRegisterWithVAMS: true,
-                autoRegisterAutoTriggerOnFileUpload: true,
-                triggerExtensions: ".usd,.usda,.usdc,.usdz",
-                apiKeySecretArn: "",
-                mirisApiBaseUrl: "https://api.miris.com",
-                taskTimeoutSeconds: 1800,
-                maxAssetSizeBytes: 5_000_000_000,
-            },
-        };
+        config.app.miris = <ConfigPublic["app"]["miris"]>{ enabled: false, viewerKey: "" };
+    }
+    if (config.app.miris.viewerKeyMode == undefined) {
+        config.app.miris.viewerKeyMode = "static";
+    }
+    if (config.app.miris.apiKeySecretArn == undefined) {
+        config.app.miris.apiKeySecretArn = "";
+    }
+    if (config.app.miris.mirisApiBaseUrl == undefined) {
+        config.app.miris.mirisApiBaseUrl = "https://app.miris.com";
+    }
+    if (config.app.miris.perViewKey == undefined) {
+        config.app.miris.perViewKey = { ttlMinutes: 15 };
+    }
+    if (config.app.miris.perViewKey.ttlMinutes == undefined) {
+        config.app.miris.perViewKey.ttlMinutes = 15;
     }
 
     if (config.app.miris.upload == undefined) {
@@ -1044,11 +1094,29 @@ export function getConfig(app: cdk.App): Config {
             autoRegisterWithVAMS: true,
             autoRegisterAutoTriggerOnFileUpload: true,
             triggerExtensions: ".usd,.usda,.usdc,.usdz",
-            apiKeySecretArn: "",
-            mirisApiBaseUrl: "https://api.miris.com",
             taskTimeoutSeconds: 1800,
             maxAssetSizeBytes: 5_000_000_000,
         };
+    }
+
+    if (!MIRIS_VIEWER_KEY_MODES.includes(config.app.miris.viewerKeyMode)) {
+        throw new Error(
+            `Configuration Error: app.miris.viewerKeyMode must be one of ` +
+                `${MIRIS_VIEWER_KEY_MODES.map((m) => `"${m}"`).join(", ")}; got ` +
+                `"${config.app.miris.viewerKeyMode}".`
+        );
+    }
+    const perViewKeyTtlMinutes: unknown = config.app.miris.perViewKey.ttlMinutes;
+    if (
+        typeof perViewKeyTtlMinutes !== "number" ||
+        !Number.isInteger(perViewKeyTtlMinutes) ||
+        perViewKeyTtlMinutes < 1 ||
+        perViewKeyTtlMinutes > 60
+    ) {
+        throw new Error(
+            "Configuration Error: app.miris.perViewKey.ttlMinutes must be a whole number of " +
+                `minutes from 1 to 60; got ${JSON.stringify(perViewKeyTtlMinutes)}.`
+        );
     }
 
     if (config.app.miris.upload.enabled) {
@@ -1067,24 +1135,17 @@ export function getConfig(app: cdk.App): Config {
                     "app.webUi.allowUnsafeEvalFeatures = true (inherited Phase 1 gate)."
             );
         }
-        if (
-            !config.app.miris.upload.apiKeySecretArn ||
-            config.app.miris.upload.apiKeySecretArn === "UNDEFINED" ||
-            config.app.miris.upload.apiKeySecretArn === ""
-        ) {
+        if (isMirisValueUnset(config.app.miris.apiKeySecretArn)) {
             throw new Error(
                 "Configuration Error: app.miris.upload.enabled requires " +
-                    "app.miris.upload.apiKeySecretArn to be set to the Secrets " +
+                    "app.miris.apiKeySecretArn to be set to the Secrets " +
                     "Manager ARN of the Miris Integration Key."
             );
         }
-        if (
-            !config.app.miris.upload.mirisApiBaseUrl ||
-            config.app.miris.upload.mirisApiBaseUrl === ""
-        ) {
+        if (!config.app.miris.mirisApiBaseUrl || config.app.miris.mirisApiBaseUrl === "") {
             throw new Error(
                 "Configuration Error: app.miris.upload.enabled requires " +
-                    "app.miris.upload.mirisApiBaseUrl (default https://api.miris.com)."
+                    "app.miris.mirisApiBaseUrl (default https://app.miris.com)."
             );
         }
     }
@@ -1097,7 +1158,22 @@ export function getConfig(app: cdk.App): Config {
                     "are not reachable from GovCloud deployments."
             );
         }
-        if (
+        if (config.app.miris.viewerKeyMode === "perView") {
+            // Per-view keys are minted with the Integration Key, and no deployment-wide viewer key is used.
+            if (isMirisValueUnset(config.app.miris.apiKeySecretArn)) {
+                throw new Error(
+                    'Configuration Error: app.miris.viewerKeyMode "perView" requires ' +
+                        "app.miris.apiKeySecretArn to be set to the Secrets Manager ARN of " +
+                        "the Miris Integration Key, which mints the per-view viewer keys."
+                );
+            }
+            if (!isMirisValueUnset(config.app.miris.viewerKey)) {
+                console.warn(
+                    "Configuration Warning: app.miris.viewerKey is ignored when " +
+                        'app.miris.viewerKeyMode is "perView". Remove it from config.json.'
+                );
+            }
+        } else if (
             !config.app.miris.viewerKey ||
             config.app.miris.viewerKey === "UNDEFINED" ||
             config.app.miris.viewerKey === "" ||
@@ -3629,14 +3705,22 @@ export interface ConfigPublic {
         };
         miris: {
             enabled: boolean;
+            viewerKeyMode: "static" | "perView";
             viewerKey: string;
+            apiKeySecretArn: string;
+            mirisApiBaseUrl: string;
+            perViewKey: {
+                ttlMinutes: number;
+            };
             upload: {
                 enabled: boolean;
                 autoRegisterWithVAMS: boolean;
                 autoRegisterAutoTriggerOnFileUpload: boolean;
                 triggerExtensions: string;
-                apiKeySecretArn: string;
-                mirisApiBaseUrl: string;
+                /** Legacy alias of app.miris.apiKeySecretArn; getConfig() resolves and removes it. */
+                apiKeySecretArn?: string;
+                /** Legacy alias of app.miris.mirisApiBaseUrl; getConfig() resolves and removes it. */
+                mirisApiBaseUrl?: string;
                 taskTimeoutSeconds: number;
                 maxAssetSizeBytes: number;
             };

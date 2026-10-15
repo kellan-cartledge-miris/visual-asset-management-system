@@ -329,14 +329,18 @@ const COMMERCIAL: ConfigShape = {
         // validation), so the govcloud and eusovereign presets must leave it off.
         miris: {
             enabled: false,
+            viewerKeyMode: "static",
             viewerKey: "UNDEFINED",
+            apiKeySecretArn: "UNDEFINED",
+            mirisApiBaseUrl: "https://app.miris.com",
+            perViewKey: {
+                ttlMinutes: 15,
+            },
             upload: {
                 enabled: false,
                 autoRegisterWithVAMS: true,
                 autoRegisterAutoTriggerOnFileUpload: true,
                 triggerExtensions: ".usd,.usda,.usdc,.usdz",
-                apiKeySecretArn: "UNDEFINED",
-                mirisApiBaseUrl: "https://api.miris.com",
                 taskTimeoutSeconds: 1800,
                 maxAssetSizeBytes: 5000000000,
             },

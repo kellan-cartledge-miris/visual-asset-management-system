@@ -106,7 +106,7 @@ export class MirisUploadConstruct extends Construct {
                 new iam.PolicyStatement({
                     effect: iam.Effect.ALLOW,
                     actions: ["secretsmanager:GetSecretValue"],
-                    resources: [props.config.app.miris.upload.apiKeySecretArn],
+                    resources: [props.config.app.miris.apiKeySecretArn],
                 }),
             ],
         });

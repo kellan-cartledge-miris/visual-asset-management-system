@@ -45,7 +45,7 @@ export function buildGetMirisAssetStatusFunction(
                 ? { subnets: subnets }
                 : undefined,
         environment: {
-            MIRIS_API_BASE_URL: config.app.miris.upload.mirisApiBaseUrl,
+            MIRIS_API_BASE_URL: config.app.miris.mirisApiBaseUrl,
             // The status probe authenticates with the deployment-wide VIEWER key,
             // the same credential the frontend streams with, so it can only ever
             // see the assets the viewer can play. It deliberately does NOT use the

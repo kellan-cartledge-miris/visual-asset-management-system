@@ -76,11 +76,11 @@ producing a broken asset. Re-export with relative paths and re-upload.
 
 ## Configuration
 
-See `app.miris.upload.*` in the [Configuration Reference](../deployment/configuration-reference.md), and the [Miris Spatial Streaming Integration](../developer/external-integrations/miris-spatial-streaming.md) guide for the end-to-end viewer and upload setup.
+See `app.miris.upload.*`, `app.miris.apiKeySecretArn`, and `app.miris.mirisApiBaseUrl` in the [Configuration Reference](../deployment/configuration-reference.md), and the [Miris Spatial Streaming Integration](../developer/external-integrations/miris-spatial-streaming.md) guide for the end-to-end viewer and upload setup.
 
 ## Requirements
 
 -   `app.miris.enabled` must be true (the viewer that renders the pipeline's output requires it).
 -   `app.webUi.allowUnsafeEvalFeatures` must be true (required by the Miris viewer's CSP gate).
--   Miris Integration Key stored in Secrets Manager; ARN in `app.miris.upload.apiKeySecretArn`.
+-   Miris Integration Key stored in Secrets Manager; ARN in `app.miris.apiKeySecretArn`.
 -   Cannot be enabled in GovCloud or air-gapped deployments.

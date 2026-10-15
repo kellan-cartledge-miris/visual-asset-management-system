@@ -105,6 +105,9 @@ const garnet = (c: ConfigShape) => !!getByPath(c, "app.addons.useGarnetFramework
 const physna = (c: ConfigShape) => !!getByPath(c, "app.addons.usePhysnaSync.enabled");
 const miris = (c: ConfigShape) => !!getByPath(c, "app.miris.enabled");
 const mirisUpload = (c: ConfigShape) => !!getByPath(c, "app.miris.upload.enabled");
+const mirisPerView = (c: ConfigShape) =>
+    miris(c) && getByPath(c, "app.miris.viewerKeyMode") === "perView";
+const mirisIntegrationKey = (c: ConfigShape) => mirisUpload(c) || mirisPerView(c);
 
 /**
  * Factory for a GPU model sub-tree (Cosmos / Gr00t). Each model has enabled,
@@ -1549,12 +1552,55 @@ export const FIELDS: FieldMeta[] = [
         help: "Enables the Miris streaming viewer plugin. Requires allowUnsafeEvalFeatures; incompatible with GovCloud.",
     },
     {
+        path: "app.miris.viewerKeyMode",
+        label: "Miris viewer key mode",
+        input: "select",
+        section: "addons",
+        advanced: true,
+        options: [
+            { value: "static", label: "Static (one deployment-wide viewer key)" },
+            { value: "perView", label: "Per view (a short-lived key minted per viewer open)" },
+        ],
+        help: "static streams every asset with the configured viewer key. perView mints a viewer key scoped to the one Miris asset each time an authorized user opens the viewer, using the Integration Key; no shared viewer key is deployed.",
+        visibleWhen: miris,
+    },
+    {
         path: "app.miris.viewerKey",
         label: "Miris — viewer key",
         input: "text",
         section: "addons",
         advanced: true,
-        help: "Deployment-wide Miris viewer key, served to the frontend via /secure-config and used by the streaming SDK. Treat as a secret; Miris shows it only once at creation.",
+        help: "Deployment-wide Miris viewer key, served to the frontend via /secure-config and used by the streaming SDK. Required in static mode and ignored in perView mode. Treat as a secret; Miris shows it only once at creation.",
+        visibleWhen: miris,
+    },
+    {
+        path: "app.miris.perViewKey.ttlMinutes",
+        label: "Miris per-view key lifetime (minutes)",
+        input: "number",
+        section: "addons",
+        advanced: true,
+        min: 1,
+        help: "How long a minted viewer key can start new streams, from 1 to 60 minutes. A stream that is already open keeps playing after its key expires.",
+        visibleWhen: mirisPerView,
+    },
+    {
+        path: "app.miris.apiKeySecretArn",
+        label: "Miris — Integration Key secret ARN",
+        input: "text",
+        section: "addons",
+        advanced: true,
+        placeholder: "arn:aws:secretsmanager:us-east-1:123456789012:secret:miris-integration-key",
+        help: "Secrets Manager ARN holding the Miris Integration Key. Required by the upload pipeline, which creates assets, and by perView mode, which mints viewer keys. Integration Keys resolve to their owning Miris user's home workspace, so prefer a service account scoped to the shared workspace.",
+        visibleWhen: mirisIntegrationKey,
+    },
+    {
+        path: "app.miris.mirisApiBaseUrl",
+        label: "Miris — API base URL",
+        input: "text",
+        section: "addons",
+        advanced: true,
+        placeholder: "https://app.miris.com",
+        help: "Base URL of the Miris API, used by the stream status check, the upload pipeline, and per-view key minting.",
         visibleWhen: miris,
     },
     {
@@ -1565,25 +1611,6 @@ export const FIELDS: FieldMeta[] = [
         advanced: true,
         help: "Uploads USD source assets to Miris and records the Miris asset UUID in the USD file's metadata so they become streamable. Requires Miris Spatial Streaming to be enabled.",
         visibleWhen: miris,
-    },
-    {
-        path: "app.miris.upload.apiKeySecretArn",
-        label: "Miris — Integration Key secret ARN",
-        input: "text",
-        section: "addons",
-        advanced: true,
-        placeholder: "arn:aws:secretsmanager:us-east-1:123456789012:secret:miris-integration-key",
-        help: "Secrets Manager ARN holding the Miris Integration Key. Used by the upload pipeline to create assets. Note: Integration Keys resolve to their owning Miris user's home workspace, so prefer a service account scoped to the shared workspace.",
-        visibleWhen: mirisUpload,
-    },
-    {
-        path: "app.miris.upload.mirisApiBaseUrl",
-        label: "Miris — API base URL",
-        input: "text",
-        section: "addons",
-        advanced: true,
-        placeholder: "https://api.miris.com",
-        visibleWhen: mirisUpload,
     },
     {
         path: "app.miris.upload.autoRegisterWithVAMS",

@@ -75,12 +75,17 @@ Running the pipeline again on the same file overwrites the four keys with the ne
 Configured under `app.miris.upload.*` in `infra/config/config.json`:
 
 -   `enabled` - Deploys the pipeline and enables the `MIRIS_UPLOAD` feature
--   `apiKeySecretArn` - AWS Secrets Manager ARN holding the Miris Integration Key
--   `mirisApiBaseUrl` - Miris content API base URL (default `https://api.miris.com`)
 -   `triggerExtensions` - Auto-trigger extensions (default `.usd,.usda,.usdc,.usdz`)
 -   `taskTimeoutSeconds` - Maximum time the container waits for Miris processing
 -   `maxAssetSizeBytes` - Maximum source asset size accepted
 -   `autoRegisterWithVAMS` / `autoRegisterAutoTriggerOnFileUpload` - Workflow auto-registration and upload auto-trigger
+
+The pipeline also reads two settings shared with the Miris viewer, under `app.miris.*`:
+
+-   `apiKeySecretArn` - AWS Secrets Manager ARN holding the Miris Integration Key
+-   `mirisApiBaseUrl` - Miris API base URL (default `https://app.miris.com`)
+
+`app.miris.upload.apiKeySecretArn` and `app.miris.upload.mirisApiBaseUrl` are accepted as deprecated aliases of these two settings.
 
 ## AWS Resources
 
@@ -104,5 +109,5 @@ See `SMOKE_TEST.md` in this directory for manual verification steps.
 
 -   `app.miris.enabled` and `app.miris.upload.enabled` set to `true`
 -   `app.webUi.allowUnsafeEvalFeatures` set to `true` (the Miris SDK requires the `unsafe-eval` CSP directive)
--   Miris Integration Key stored in AWS Secrets Manager, referenced by `app.miris.upload.apiKeySecretArn`
+-   Miris Integration Key stored in AWS Secrets Manager, referenced by `app.miris.apiKeySecretArn`
 -   Cannot be enabled in GovCloud or air-gapped deployments
