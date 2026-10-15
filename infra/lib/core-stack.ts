@@ -114,6 +114,10 @@ export class CoreVAMSStack extends cdk.Stack {
             this.enabledFeatures.push(VAMS_APP_FEATURES.MIRIS_STREAMING);
         }
 
+        if (props.config.app.miris.enabled && props.config.app.miris.viewerKeyMode === "perView") {
+            this.enabledFeatures.push(VAMS_APP_FEATURES.MIRIS_PER_VIEW_KEYS);
+        }
+
         if (props.config.app.miris.upload.enabled) {
             this.enabledFeatures.push(VAMS_APP_FEATURES.MIRIS_UPLOAD);
         }
