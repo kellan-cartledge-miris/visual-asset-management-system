@@ -172,7 +172,7 @@ With `app.miris.viewerKeyMode` set to `"perView"`, the viewer asks VAMS for a vi
 -   Expiry or revocation stops new streams from starting within seconds. It does not end a stream that is already open.
 -   The Miris SDK sends the viewer key in the query string of its request, so the key can appear in URL logs of intermediaries. A short lifetime limits that exposure.
 -   Each mint is written to the `AUTHOTHER` audit log (type `mirisViewerKeyMint`) with the user, database, asset, file path, Miris asset UUID, key ID, and expiry, and is recorded in `MirisViewerKeyStorageTable`. Neither holds the key material.
--   A key is unusable from its expiry. VAMS deletes it from Miris when the table row's TTL fires: one hour after expiry, plus DynamoDB's lazy TTL deletion delay (typically within 48 hours), so an expired key can remain in the workspace for that period. Batches that still fail after their retries go to a dead-letter queue.
+-   A key is unusable from its expiry. VAMS deletes it from Miris when the table row's TTL fires: one hour after expiry, plus DynamoDB's lazy TTL deletion delay (typically within a few days, per the DynamoDB TTL documentation), so an expired key can remain in the workspace for that period. Batches that still fail after their retries go to a dead-letter queue.
 -   Users can mint keys at their API request rate, which API Gateway throttling limits.
 
 ### Permissions
