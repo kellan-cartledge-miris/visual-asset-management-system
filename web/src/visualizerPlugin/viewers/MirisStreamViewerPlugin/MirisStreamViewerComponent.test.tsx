@@ -518,6 +518,17 @@ describe("MirisStreamViewerComponent", () => {
             expect(mockSceneCtor).not.toHaveBeenCalled();
         });
 
+        it("falls back to the static path when featuresEnabled is malformed", async () => {
+            mockAppCacheGet.mockReturnValue({
+                featuresEnabled: false,
+                mirisViewerKey: "key-1234567890abcdef",
+            });
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() => expect(mockSceneCtor).toHaveBeenCalledTimes(1));
+            expect(mockMintMirisViewerKey).not.toHaveBeenCalled();
+            expect(mockSceneCtor).toHaveBeenCalledWith({ viewerKey: "key-1234567890abcdef" });
+        });
+
         it("does not mint without the per-view flag", async () => {
             mockAppCacheGet.mockReturnValue({ mirisViewerKey: "key-1234567890abcdef" });
             render(<MirisStreamViewerComponent {...baseProps} />);

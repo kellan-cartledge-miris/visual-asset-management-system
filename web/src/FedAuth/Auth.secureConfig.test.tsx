@@ -215,6 +215,54 @@ describe("Auth secure-config fetch", () => {
         );
     });
 
+    describe("mirisViewerKey in the cached config", () => {
+        const CACHED_KEY = "cached-shared-key";
+
+        it("removes a cached shared key when per-view keys are enabled", async () => {
+            seedMode({ ...COGNITO_CONFIG, mirisViewerKey: CACHED_KEY });
+            mockGetSecureConfig.mockResolvedValue({
+                ...SECURE_CONFIG,
+                featuresEnabled: ["MIRIS_STREAMING", "MIRIS_PER_VIEW_KEYS"],
+                mirisViewerKey: "response-key",
+            });
+
+            renderAuth();
+
+            await waitFor(() =>
+                expect(appCache.getItem("config").featuresEnabled).toContain("MIRIS_PER_VIEW_KEYS")
+            );
+            expect(
+                Object.prototype.hasOwnProperty.call(appCache.getItem("config"), "mirisViewerKey")
+            ).toBe(false);
+        });
+
+        it("stores a supplied key when per-view keys are not enabled", async () => {
+            seedMode({ ...COGNITO_CONFIG, mirisViewerKey: CACHED_KEY });
+            mockGetSecureConfig.mockResolvedValue({
+                ...SECURE_CONFIG,
+                mirisViewerKey: "response-key",
+            });
+
+            renderAuth();
+
+            await waitFor(() =>
+                expect(appCache.getItem("config").mirisViewerKey).toBe("response-key")
+            );
+        });
+
+        it("keeps the cached key when per-view keys are not enabled and none is supplied", async () => {
+            seedMode({ ...COGNITO_CONFIG, mirisViewerKey: CACHED_KEY });
+            mockGetSecureConfig.mockResolvedValue(SECURE_CONFIG);
+
+            renderAuth();
+
+            await waitFor(() =>
+                expect(appCache.getItem("config").featuresEnabled).toContain("LOCATIONSERVICES")
+            );
+            expect(appCache.getItem("config").mirisViewerKey).toBe(CACHED_KEY);
+        });
+    });
+
     it("stops after a bounded number of attempts instead of retrying forever", async () => {
         mockGetSecureConfig.mockRejectedValue(new Error("503 Service Unavailable"));
 

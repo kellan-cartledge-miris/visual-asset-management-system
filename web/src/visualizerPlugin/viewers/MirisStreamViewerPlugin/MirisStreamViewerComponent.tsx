@@ -16,7 +16,10 @@ import {
     mintMirisViewerKey,
 } from "../../../services/APIService";
 import { appCache } from "../../../services/appCache";
-import { featuresEnabled } from "../../../common/constants/featuresEnabled";
+import {
+    featuresEnabled,
+    normalizeFeaturesEnabled,
+} from "../../../common/constants/featuresEnabled";
 import {
     isKnownVersionId,
     isStaleStream,
@@ -239,7 +242,11 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                     | { mirisViewerKey?: string; featuresEnabled?: string | string[] }
                     | undefined;
                 let viewerKey: string | undefined;
-                if (appConfig?.featuresEnabled?.includes(featuresEnabled.MIRIS_PER_VIEW_KEYS)) {
+                if (
+                    normalizeFeaturesEnabled(appConfig?.featuresEnabled).includes(
+                        featuresEnabled.MIRIS_PER_VIEW_KEYS
+                    )
+                ) {
                     const mintResult = await mintMirisViewerKey({ databaseId, assetId, filePath });
                     if (cancelled) return;
                     if (mintResult[0] !== true) {

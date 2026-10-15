@@ -50,7 +50,7 @@ import {
     ALLOWED_API_ROUTES_CACHE_TTL_MILLIS,
     ALLOWED_API_ROUTES_CACHE_KEY,
 } from "../common/constants/authRoutes";
-import { normalizeFeaturesEnabled } from "../common/constants/featuresEnabled";
+import { featuresEnabled, normalizeFeaturesEnabled } from "../common/constants/featuresEnabled";
 import { GlobalHeader } from "./../common/GlobalHeader";
 import { Header } from "./../authenticator/Header";
 import { Footer, PageFooter } from "./../authenticator/Footer";
@@ -725,15 +725,29 @@ const Auth: React.FC<AuthProps> = (props) => {
                     // featuresEnabled is normalized to a string array so the many
                     // config.featuresEnabled.includes(...) consumers cannot crash if the API
                     // returns a non-array (e.g. a boolean or comma-separated string).
-                    // mirisViewerKey is only overwritten when the backend supplied a value:
-                    // /secure-config omits it when MIRIS_VIEWER_KEY is unset, and an
-                    // unconditional assignment would clobber a valid cached key with undefined.
+                    // mirisViewerKey follows the viewer key mode. With MIRIS_PER_VIEW_KEYS the
+                    // browser holds no shared key, so the property is removed from the cached
+                    // config whatever it held before. Otherwise it is only overwritten when the
+                    // backend supplied a value: /secure-config omits it when MIRIS_VIEWER_KEY is
+                    // unset, and an unconditional assignment would clobber a valid cached key
+                    // with undefined.
+                    const normalizedFeatures = normalizeFeaturesEnabled(value.featuresEnabled);
+                    const { mirisViewerKey: cachedViewerKey, ...cachedConfig } =
+                        configRef.current as typeof configRef.current & {
+                            mirisViewerKey?: string;
+                        };
+                    const perViewKeys = normalizedFeatures.includes(
+                        featuresEnabled.MIRIS_PER_VIEW_KEYS
+                    );
+                    const viewerKey = perViewKeys
+                        ? undefined
+                        : value.mirisViewerKey || cachedViewerKey;
                     const withSecureConfig = {
-                        ...configRef.current,
-                        featuresEnabled: normalizeFeaturesEnabled(value.featuresEnabled),
+                        ...cachedConfig,
+                        featuresEnabled: normalizedFeatures,
                         locationServiceApiUrl: value.locationServiceApiUrl,
                         webDeployedUrl: value.webDeployedUrl || "",
-                        ...(value.mirisViewerKey ? { mirisViewerKey: value.mirisViewerKey } : {}),
+                        ...(viewerKey ? { mirisViewerKey: viewerKey } : {}),
                     };
                     appCache.setItem("config", withSecureConfig);
                     setConfig(withSecureConfig);
