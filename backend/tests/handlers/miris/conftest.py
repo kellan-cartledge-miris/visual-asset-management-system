@@ -1,0 +1,87 @@
+# Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Fakes for the Miris Integration API client: Secrets Manager, the HTTP seam, and the loggers."""
+
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import pytest
+
+from backend.backend.handlers.miris import mirisIntegration, viewerKeyCleanup
+
+INTEGRATION_KEY = "test-integration-key-do-not-log-7f3a9c"
+SECRET_ARN = "arn:aws:secretsmanager:us-east-1:123456789012:secret:test-miris-api-key-AbCdEf"
+BASE_URL = "https://miris.example.test"
+
+
+def miris_response(status_code, text=""):
+    response = MagicMock()
+    response.status_code = status_code
+    response.text = text
+    return response
+
+
+@pytest.fixture
+def miris_api(monkeypatch):
+    """Configure the client and replace Secrets Manager and `requests.request`.
+
+    Append to `responses` an int status, a `(status, body)` tuple, or an exception to raise; each
+    request consumes one. `calls` records every request as a dict of its method, URL and kwargs.
+    """
+    mirisIntegration._invalidate_api_key_cache()
+    monkeypatch.setattr(mirisIntegration, "MIRIS_API_BASE_URL", BASE_URL)
+    monkeypatch.setattr(mirisIntegration, "MIRIS_API_KEY_SECRET_ARN", SECRET_ARN)
+
+    secretsmanager = MagicMock()
+    secretsmanager.get_secret_value.return_value = {"SecretString": INTEGRATION_KEY}
+    monkeypatch.setattr(mirisIntegration, "_get_secretsmanager_client", lambda: secretsmanager)
+
+    calls = []
+    responses = []
+
+    def fake_request(method, url, **kwargs):
+        calls.append({"method": method, "url": url, **kwargs})
+        outcome = responses.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        if isinstance(outcome, tuple):
+            return miris_response(*outcome)
+        return miris_response(outcome)
+
+    monkeypatch.setattr(mirisIntegration.requests, "request", fake_request)
+    yield SimpleNamespace(
+        integration_key=INTEGRATION_KEY,
+        secret_arn=SECRET_ARN,
+        base_url=BASE_URL,
+        secretsmanager=secretsmanager,
+        calls=calls,
+        responses=responses,
+    )
+    mirisIntegration._invalidate_api_key_cache()
+
+
+class LogRecorder:
+    """Stands in for a module logger and records every line logged through any level."""
+
+    def __init__(self):
+        self.lines = []
+
+    def __getattr__(self, level):
+        def record(*args, **kwargs):
+            self.lines.append(f"{level}: " + " ".join(str(a) for a in args) + f" {kwargs}")
+
+        return record
+
+    def text(self):
+        return "\n".join(self.lines)
+
+
+@pytest.fixture
+def log_recorder(monkeypatch):
+    """Replace the client's and the cleanup handler's loggers with one recorder. The root conftest's
+    logger stand-in discards every line, so neither it nor caplog would show a leaked secret."""
+    recorder = LogRecorder()
+    monkeypatch.setattr(mirisIntegration, "logger", recorder)
+    monkeypatch.setattr(viewerKeyCleanup, "logger", recorder)
+    return recorder

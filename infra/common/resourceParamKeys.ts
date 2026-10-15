@@ -65,6 +65,8 @@ export const RESOURCE_PARAM_KEYS = {
         pipelineTemplateTagSchemaStorage: "dynamoTables/pipelineTemplateTagSchemaStorage",
         workflowStorageV2: "dynamoTables/workflowStorageV2",
         workflowTriggersStorage: "dynamoTables/workflowTriggersStorage",
+        // Published only when Miris per-view viewer keys are enabled
+        mirisViewerKeyStorage: "dynamoTables/mirisViewerKeyStorage",
     },
     // Deprecated tables retained for data migration only (no handler reads them)
     dynamoTablesLegacy: {

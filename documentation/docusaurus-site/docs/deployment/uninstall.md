@@ -134,7 +134,7 @@ aws cloudformation delete-stack \
 Then manually delete the retained resources using the steps in Step 2 through Step 11.
 
 :::note[Amazon SQS queues are deleted with the stack]
-Every VAMS Amazon SQS queue uses a `DESTROY` removal policy, so none of the steps below covers one. That includes every source queue — the file and asset indexer queues, both bucket-sync queues per registered bucket, the large file processing queue, the workflow trigger dispatch queue, the Garnet queues, and the two Physna sync queues when Physna sync is enabled — and the dead-letter queue each one redrives to. The dead-letter queues are auto-named by AWS CloudFormation and never conflict with a redeploy; the bucket sync, indexer, Physna sync, and Garnet queues carry explicit names of the form `<configuration name>-<app.baseStackName>-<purpose>`, and the large file processing queue one of the form `<configuration name>-<env.coreStackName>-sqsUploadLargeFile-queue`. If a teardown fails partway, delete any queue left behind before redeploying with the same configuration name and the same `app.baseStackName` into the same account and Region.
+Every VAMS Amazon SQS queue uses a `DESTROY` removal policy, so none of the steps below covers one. That includes every source queue — the file and asset indexer queues, both bucket-sync queues per registered bucket, the large file processing queue, the workflow trigger dispatch queue, the Garnet queues, and the two Physna sync queues when Physna sync is enabled — and the dead-letter queue each one redrives to, as well as the Miris viewer key cleanup dead-letter queue when Miris per-view viewer keys are enabled. The dead-letter queues are auto-named by AWS CloudFormation and never conflict with a redeploy; the bucket sync, indexer, Physna sync, and Garnet queues carry explicit names of the form `<configuration name>-<app.baseStackName>-<purpose>`, and the large file processing queue one of the form `<configuration name>-<env.coreStackName>-sqsUploadLargeFile-queue`. If a teardown fails partway, delete any queue left behind before redeploying with the same configuration name and the same `app.baseStackName` into the same account and Region.
 
 Check the indexer dead-letter queues before deleting them. They hold the asset and file records the indexer could not add to the search index, and a redeploy does not replay them — run a reindex to rebuild the index for the affected assets and files.
 
@@ -212,6 +212,8 @@ A model cache bucket holds the model weights the GPU pipelines download on first
 ## Step 3: Delete DynamoDB tables
 
 VAMS DynamoDB tables use a `RETAIN` removal policy, so they and their contents survive stack teardown and require manual deletion. This protects against accidental data loss. Every table is auto-named by AWS CloudFormation, so a retained table never blocks a redeploy with the same configuration name — delete the tables only when you intend to permanently remove the stored data.
+
+A deployment with Miris per-view viewer keys (`app.miris.viewerKeyMode: "perView"`) also retains `MirisViewerKeyStorageTable`, which follows the same policy and is auto-named. The viewer key cleanup Lambda is deleted with the stack, so the Miris viewer keys whose rows had not yet expired are no longer deleted from the Miris workspace. They expire on their own and can no longer start a stream; delete them in the Miris Portal or with `miris viewerkey delete` if you want them removed.
 
 ```bash
 # List remaining VAMS tables

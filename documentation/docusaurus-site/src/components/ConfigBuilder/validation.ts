@@ -190,6 +190,32 @@ function mirisPerView(cfg: ConfigShape): boolean {
     return !!g(cfg, "app.miris.enabled") && g(cfg, "app.miris.viewerKeyMode") === "perView";
 }
 
+/**
+ * True when an endpoint's host is loopback, link-local, or private (config.ts:
+ * `validateOutboundHttpsEndpoint`). False for an unparseable URL, which a parseability rule reports.
+ */
+function isPrivateEndpointHost(endpoint: string): boolean {
+    let host: string;
+    try {
+        host = new URL(endpoint).hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    } catch {
+        return false;
+    }
+    return (
+        host === "localhost" ||
+        host.endsWith(".localhost") ||
+        host.endsWith(".local") ||
+        host.endsWith(".internal") ||
+        host === "::1" ||
+        /^127\./.test(host) ||
+        /^169\.254\./.test(host) ||
+        /^10\./.test(host) ||
+        /^192\.168\./.test(host) ||
+        /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+        /^(fc|fd)[0-9a-f]{2}:/.test(host)
+    );
+}
+
 /** Physna credentials supplied via an operator-managed secret ARN (config.ts: `hasSecretArn`). */
 function physnaHasSecretArn(cfg: ConfigShape): boolean {
     return !isUnset(g(cfg, "app.addons.usePhysnaSync.credentialsSecretArn"));
@@ -2161,24 +2187,48 @@ export const RULES: Rule[] = [
             "The Miris auto-upload pipeline requires app.miris.apiKeySecretArn, the Secrets Manager ARN of the Miris Integration Key.",
     },
     {
-        id: "miris-upload-baseurl-required",
-        severity: "error",
-        fieldPaths: ["app.miris.mirisApiBaseUrl"],
-        appliesWhen: (c) => {
-            if (!g(c, "app.miris.upload.enabled")) return false;
-            const url = g(c, "app.miris.mirisApiBaseUrl");
-            return !isAbsent(url) && !url; // an absent value is filled with https://app.miris.com
-        },
-        message:
-            "The Miris auto-upload pipeline requires app.miris.mirisApiBaseUrl (default https://app.miris.com).",
-    },
-    {
         id: "miris-govcloud",
         severity: "error",
         fieldPaths: ["app.miris.enabled", "app.govCloud.enabled"],
         appliesWhen: (c) => g(c, "app.miris.enabled") && g(c, "app.govCloud.enabled"),
         message:
             "Miris Spatial Streaming cannot be enabled with GovCloud. Miris SaaS endpoints (*.miris.com) are not reachable from GovCloud deployments.",
+    },
+    // config.ts: "VAMS Lambdas send the Miris viewer key or Integration Key to this URL."
+    // An unset value (missing, "", or "UNDEFINED") is filled with https://app.miris.com.
+    {
+        id: "miris-baseurl-url",
+        severity: "error",
+        fieldPaths: ["app.miris.mirisApiBaseUrl"],
+        appliesWhen: (c) => {
+            const url = g(c, "app.miris.mirisApiBaseUrl");
+            return !!g(c, "app.miris.enabled") && !isUnset(url) && !isValidUrl(url);
+        },
+        message: "app.miris.mirisApiBaseUrl must be a valid URL.",
+    },
+    {
+        id: "miris-baseurl-https",
+        severity: "error",
+        fieldPaths: ["app.miris.mirisApiBaseUrl"],
+        appliesWhen: (c) => {
+            const url = g(c, "app.miris.mirisApiBaseUrl");
+            if (!g(c, "app.miris.enabled") || isUnset(url) || !isValidUrl(url)) return false;
+            return new URL(url).protocol !== "https:";
+        },
+        message:
+            "app.miris.mirisApiBaseUrl must use https. VAMS sends Miris credentials to it, which plain http transmits in cleartext.",
+    },
+    {
+        id: "miris-baseurl-private-host",
+        severity: "error",
+        fieldPaths: ["app.miris.mirisApiBaseUrl"],
+        appliesWhen: (c) => {
+            const url = g(c, "app.miris.mirisApiBaseUrl");
+            if (!g(c, "app.miris.enabled") || isUnset(url)) return false;
+            return isPrivateEndpointHost(String(url));
+        },
+        message:
+            "app.miris.mirisApiBaseUrl points at a loopback, link-local, or private address. VAMS Lambdas send Miris credentials to it, so it must name an external service.",
     },
     {
         id: "miris-viewerkey-required",
@@ -2558,25 +2608,7 @@ export const RULES: Rule[] = [
             if (!g(c, "app.addons.usePhysnaSync.enabled")) return false;
             const value = String(g(c, path) ?? "");
             if (isBlank(value)) return false;
-            let host: string;
-            try {
-                host = new URL(value).hostname.toLowerCase().replace(/^\[|\]$/g, "");
-            } catch {
-                return false;
-            }
-            return (
-                host === "localhost" ||
-                host.endsWith(".localhost") ||
-                host.endsWith(".local") ||
-                host.endsWith(".internal") ||
-                host === "::1" ||
-                /^127\./.test(host) ||
-                /^169\.254\./.test(host) ||
-                /^10\./.test(host) ||
-                /^192\.168\./.test(host) ||
-                /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
-                /^(fc|fd)[0-9a-f]{2}:/.test(host)
-            );
+            return isPrivateEndpointHost(value);
         },
         message: `usePhysnaSync.${label} points at a loopback, link-local, or private address. It is called by a Lambda that can read the VAMS asset buckets, so it must name an external service.`,
     })),

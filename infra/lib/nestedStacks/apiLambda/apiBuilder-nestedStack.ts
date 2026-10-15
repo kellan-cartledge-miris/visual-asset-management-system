@@ -11,9 +11,13 @@ import * as sqs from "aws-cdk-lib/aws-sqs";
 import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 
 import * as lambda from "aws-cdk-lib/aws-lambda";
+import { SqsDlq } from "aws-cdk-lib/aws-lambda-event-sources";
 import { storageResources } from "../storage/storageBuilder-nestedStack";
 import { buildConfigService } from "../../lambdaBuilder/configFunctions";
-import { buildGetMirisAssetStatusFunction } from "../../lambdaBuilder/mirisFunctions";
+import {
+    buildGetMirisAssetStatusFunction,
+    buildMirisViewerKeyCleanupFunction,
+} from "../../lambdaBuilder/mirisFunctions";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import * as cdk from "aws-cdk-lib";
 import {
@@ -1165,6 +1169,61 @@ export class ApiBuilderNestedStack extends NestedStack {
                 method: apigateway.HttpMethod.GET,
                 registry: registry,
             });
+        }
+
+        // Per-view Miris viewer keys: delete each key from Miris when TTL removes its table row
+        const mirisViewerKeyTable = storageResources.dynamo.mirisViewerKeyStorageTable;
+        if (mirisViewerKeyTable) {
+            const mirisViewerKeyCleanup = buildMirisViewerKeyCleanupFunction(
+                this,
+                lambdaCommonBaseLayer,
+                storageResources,
+                config,
+                vpc,
+                subnets
+            );
+
+            const mirisViewerKeyCleanupDlq = new sqs.Queue(this, "MirisViewerKeyCleanupDLQ", {
+                retentionPeriod: cdk.Duration.days(14),
+                encryption: storageResources.encryption.kmsKey
+                    ? sqs.QueueEncryption.KMS
+                    : sqs.QueueEncryption.SQS_MANAGED,
+                encryptionMasterKey: storageResources.encryption.kmsKey,
+                enforceSSL: true,
+            });
+
+            // Only TTL deletions: REMOVE records written by the DynamoDB service itself. A batch
+            // that still fails after its retries is recorded in the dead-letter queue.
+            new lambda.EventSourceMapping(this, "MirisViewerKeyCleanupStream", {
+                target: mirisViewerKeyCleanup,
+                eventSourceArn: mirisViewerKeyTable.tableStreamArn,
+                startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+                batchSize: 5,
+                reportBatchItemFailures: true,
+                bisectBatchOnError: true,
+                retryAttempts: 10,
+                onFailure: new SqsDlq(mirisViewerKeyCleanupDlq),
+                filters: [
+                    lambda.FilterCriteria.filter({
+                        eventName: lambda.FilterRule.isEqual("REMOVE"),
+                        userIdentity: {
+                            type: lambda.FilterRule.isEqual("Service"),
+                            principalId: lambda.FilterRule.isEqual("dynamodb.amazonaws.com"),
+                        },
+                    }),
+                ],
+            });
+
+            NagSuppressions.addResourceSuppressions(
+                mirisViewerKeyCleanupDlq,
+                [
+                    {
+                        id: "AwsSolutions-SQS3",
+                        reason: "This queue is the on-failure destination of the Miris viewer key cleanup stream mapping and so terminates that chain; a redrive policy of its own would only move the same failed batch record to a further queue.",
+                    },
+                ],
+                true
+            );
         }
 
         //Nag Supressions

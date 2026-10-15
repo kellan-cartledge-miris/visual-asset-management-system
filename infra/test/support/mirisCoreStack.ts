@@ -17,7 +17,7 @@ import * as Config from "../../config/config";
 import * as Service from "../../lib/helper/service-helper";
 import commercialTemplate from "../../config/config.template.commercial.json";
 
-export const createMirisMockConfig = (): Config.Config => {
+export const createMirisMockConfig = (mutate?: (config: Config.Config) => void): Config.Config => {
     const config = JSON.parse(JSON.stringify(commercialTemplate)) as Config.Config;
 
     // Fixed synth environment.
@@ -67,17 +67,23 @@ export const createMirisMockConfig = (): Config.Config => {
     config.webUrlDeploymentSSMParam = "/vams-test-us-east-1/web/url";
     config.resourceNamesSSMParamPrefix = "/vams-test-us-east-1/resourceNames";
 
+    mutate?.(config);
     return config;
 };
 
 /**
- * Build the core stack under `app` with the Miris upload pipeline enabled.
+ * Build the core stack under `app` with the Miris upload pipeline enabled, after applying `mutate`
+ * to the config.
  *
  * The construct id must match `stackName` -- core-stack.ts's NagSuppressions path
  * (`/${stackName}/ApiBuilder2/...`) assumes the two agree, as bin/infra.ts always does.
  */
-export function newMirisCoreStack(app: cdk.App, description: string): Infra.CoreVAMSStack {
-    const mockConfig = createMirisMockConfig();
+export function newMirisCoreStack(
+    app: cdk.App,
+    description: string,
+    mutate?: (config: Config.Config) => void
+): Infra.CoreVAMSStack {
+    const mockConfig = createMirisMockConfig(mutate);
     Service.SetConfig(mockConfig);
     return new Infra.CoreVAMSStack(app, mockConfig.app.baseStackName, {
         env: {

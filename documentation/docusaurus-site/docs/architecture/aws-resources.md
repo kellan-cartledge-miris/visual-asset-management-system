@@ -4,7 +4,7 @@ This page provides a comprehensive inventory of all AWS resources deployed by VA
 
 ## Amazon DynamoDB Tables
 
-VAMS deploys 53 Amazon DynamoDB tables for persistent data storage — 46 read by Lambda handlers and 7 migration source tables. All tables use on-demand (PAY_PER_REQUEST) billing, point-in-time recovery, and optional AWS KMS customer-managed key encryption.
+VAMS deploys 53 Amazon DynamoDB tables for persistent data storage — 46 read by Lambda handlers and 7 migration source tables. Miris per-view viewer keys add one more, MirisViewerKeyStorageTable. All tables use on-demand (PAY_PER_REQUEST) billing, point-in-time recovery, and optional AWS KMS customer-managed key encryption.
 
 All tables use a `RETAIN` removal policy, so they and their data survive `cdk destroy` and require manual deletion. Because every table is auto-named by AWS CloudFormation (no explicit `tableName`), a retained orphan never collides with the freshly named table a redeploy creates. See [Uninstall the solution — Step 3: Delete DynamoDB tables](../deployment/uninstall.md#step-3-delete-dynamodb-tables) for cleanup steps.
 
@@ -89,6 +89,16 @@ Executions are workflow-keyed; asset and database linkage lives in the workflow/
 | UserRolesStorageTable    | `userId`           | `roleName`    | --                                                                                                                                                               | User-role assignments                    |
 | UserStorageTable         | `userId`           | --            | --                                                                                                                                                               | User profile records                     |
 | ApiKeyStorageTable       | `apiKeyId`         | --            | `apiKeyHashIndex` (PK: apiKeyHash), `userIdIndex` (PK: userId, SK: apiKeyId)                                                                                     | API key records                          |
+
+### Miris Tables
+
+Deployed only when `app.miris.enabled` is `true` and `app.miris.viewerKeyMode` is `"perView"`.
+
+| Table                      | Partition Key (PK) | Sort Key (SK) | Streams   | TTL attribute | Purpose                                    |
+| -------------------------- | ------------------ | ------------- | --------- | ------------- | ------------------------------------------ |
+| MirisViewerKeyStorageTable | `mirisViewerKeyId` | --            | KEYS_ONLY | `ttl`         | Miris viewer keys minted for a single view |
+
+Each row records the Miris key ID of one per-view viewer key, never the key itself. When DynamoDB TTL deletes a row after the key has expired, its stream record invokes the viewer key cleanup Lambda, which deletes the key from the Miris workspace. The event source mapping passes only TTL deletions, reports failures per record, retries a failing batch ten times, and then records it in the MirisViewerKeyCleanupDLQ queue. TTL deletion runs in the background some time after a row's `ttl` passes, so an expired key can stay in the Miris workspace for that long; Miris rejects an expired key for new streams regardless.
 
 ### Migration Source Tables
 
@@ -251,25 +261,26 @@ All Amazon SNS topics enforce SSL and use optional AWS KMS encryption.
 
 ## Amazon SQS Queues
 
-| Queue                                 | Purpose                                                                                                                                                         |
-| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **WorkflowTriggerDispatchQueue**      | Buffers file-upload trigger events fanned out to workflow executions                                                                                            |
-| **WorkflowTriggerDispatchDLQ**        | Dead-letter queue for trigger events that fail three delivery attempts                                                                                          |
-| **DeadlineCloudJobCallbackDLQ**       | Dead-letter queue for Deadline Cloud job-status events the callback Lambda could not process (conditional on `app.pipelines.deadlineCloudExecutionTypeEnabled`) |
-| **LargeFileProcessingQueue**          | Buffers large multi-part upload finalization work (5-day retention, redrives to LargeFileProcessingDLQ after 3 receives)                                        |
-| **LargeFileProcessingDLQ**            | Dead-letter queue for large-upload finalization work that fails three receives (14-day retention)                                                               |
-| **BucketSyncCreated** (per bucket)    | Processes S3 ObjectCreated events for bucket synchronization                                                                                                    |
-| **BucketSyncCreatedDLQ** (per bucket) | Dead-letter queue for ObjectCreated records that fail three receives (14-day retention, one per bucket)                                                         |
-| **BucketSyncDeleted** (per bucket)    | Processes S3 ObjectRemoved events for bucket synchronization                                                                                                    |
-| **BucketSyncDeletedDLQ** (per bucket) | Dead-letter queue for ObjectRemoved records that fail three receives (14-day retention, one per bucket)                                                         |
-| **File/Asset Indexer Queues**         | Buffer indexing events between Amazon SNS and indexer Lambdas                                                                                                   |
-| **File/Asset Indexer DLQs**           | One per indexer queue. Hold the indexing records the indexer Lambda still could not process after three deliveries                                              |
-| **Physna File/Asset Sync Queues**     | Buffer sync events for the Physna addon (conditional on `app.addons.usePhysnaSync`)                                                                             |
-| **Physna File/Asset Sync DLQs**       | One per Physna sync queue. Hold the sync events the sync Lambda still could not process after three deliveries (conditional on `app.addons.usePhysnaSync`)      |
-| **Garnet File/Asset/Database Queues** | Buffer indexing events for the Garnet Framework addon (conditional on `app.addons.useGarnetFramework`)                                                          |
-| **Garnet File/Asset/Database DLQs**   | One per Garnet indexer queue. Hold the events the indexer Lambda could not process after three deliveries (conditional on `app.addons.useGarnetFramework`)      |
+| Queue                                 | Purpose                                                                                                                                                                                                                 |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **WorkflowTriggerDispatchQueue**      | Buffers file-upload trigger events fanned out to workflow executions                                                                                                                                                    |
+| **WorkflowTriggerDispatchDLQ**        | Dead-letter queue for trigger events that fail three delivery attempts                                                                                                                                                  |
+| **DeadlineCloudJobCallbackDLQ**       | Dead-letter queue for Deadline Cloud job-status events the callback Lambda could not process (conditional on `app.pipelines.deadlineCloudExecutionTypeEnabled`)                                                         |
+| **MirisViewerKeyCleanupDLQ**          | On-failure destination of the Miris viewer key cleanup stream mapping. Records the shard and sequence range of a batch that still fails after ten retries (14-day retention, conditional on Miris per-view viewer keys) |
+| **LargeFileProcessingQueue**          | Buffers large multi-part upload finalization work (5-day retention, redrives to LargeFileProcessingDLQ after 3 receives)                                                                                                |
+| **LargeFileProcessingDLQ**            | Dead-letter queue for large-upload finalization work that fails three receives (14-day retention)                                                                                                                       |
+| **BucketSyncCreated** (per bucket)    | Processes S3 ObjectCreated events for bucket synchronization                                                                                                                                                            |
+| **BucketSyncCreatedDLQ** (per bucket) | Dead-letter queue for ObjectCreated records that fail three receives (14-day retention, one per bucket)                                                                                                                 |
+| **BucketSyncDeleted** (per bucket)    | Processes S3 ObjectRemoved events for bucket synchronization                                                                                                                                                            |
+| **BucketSyncDeletedDLQ** (per bucket) | Dead-letter queue for ObjectRemoved records that fail three receives (14-day retention, one per bucket)                                                                                                                 |
+| **File/Asset Indexer Queues**         | Buffer indexing events between Amazon SNS and indexer Lambdas                                                                                                                                                           |
+| **File/Asset Indexer DLQs**           | One per indexer queue. Hold the indexing records the indexer Lambda still could not process after three deliveries                                                                                                      |
+| **Physna File/Asset Sync Queues**     | Buffer sync events for the Physna addon (conditional on `app.addons.usePhysnaSync`)                                                                                                                                     |
+| **Physna File/Asset Sync DLQs**       | One per Physna sync queue. Hold the sync events the sync Lambda still could not process after three deliveries (conditional on `app.addons.usePhysnaSync`)                                                              |
+| **Garnet File/Asset/Database Queues** | Buffer indexing events for the Garnet Framework addon (conditional on `app.addons.useGarnetFramework`)                                                                                                                  |
+| **Garnet File/Asset/Database DLQs**   | One per Garnet indexer queue. Hold the events the indexer Lambda could not process after three deliveries (conditional on `app.addons.useGarnetFramework`)                                                              |
 
-All Amazon SQS queues enforce SSL and use optional AWS KMS encryption. Each dead-letter queue repeats the encryption configuration of the queue whose messages it receives; the Deadline Cloud callback queue is the dead-letter target of Amazon EventBridge rules rather than of a source queue, and takes the same deployment-wide encryption setting. A consumer Lambda role holds receive permission on its source queue only, so reading or redriving a dead-letter queue is an operator action performed with credentials that grant access to that queue. Every queue uses a `DESTROY` removal policy and is deleted with the stack.
+All Amazon SQS queues enforce SSL and use optional AWS KMS encryption. Each dead-letter queue repeats the encryption configuration of the queue whose messages it receives; the Deadline Cloud callback queue is the dead-letter target of Amazon EventBridge rules, and the Miris viewer key cleanup queue the on-failure destination of a DynamoDB stream mapping, rather than of a source queue, and both take the same deployment-wide encryption setting. A consumer Lambda role holds receive permission on its source queue only, so reading or redriving a dead-letter queue is an operator action performed with credentials that grant access to that queue. Every queue uses a `DESTROY` removal policy and is deleted with the stack.
 
 Every dead-letter queue is auto-named by AWS CloudFormation, as is the workflow trigger dispatch source queue, so an orphaned copy of one never blocks a redeploy. The bucket sync, indexer, Physna sync, and Garnet source queues carry explicit names of the form `<configuration name>-<app.baseStackName>-<purpose>`, and the large file processing queue one of the form `<configuration name>-<env.coreStackName>-sqsUploadLargeFile-queue`. An orphaned copy left by a failed teardown therefore blocks a redeploy only when every part of the name matches: redeploying under a different `app.baseStackName` — or, for the large file processing queue, a different `env.coreStackName` — produces differently named queues and does not conflict.
 
@@ -397,7 +408,7 @@ VAMS publishes deployment configuration values as explicitly named SSM `String` 
 
 | Parameter Group                                               | Count  | Purpose                                                                                                                                                                                                                              |
 | ------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `/<name>-<baseStackName>/resourceNames/dynamoTables/*`        | 46     | DynamoDB table names resolved by Lambda functions at cold start                                                                                                                                                                      |
+| `/<name>-<baseStackName>/resourceNames/dynamoTables/*`        | 46     | DynamoDB table names resolved by Lambda functions at cold start; 47 with Miris per-view viewer keys                                                                                                                                  |
 | `/<name>-<baseStackName>/resourceNames/dynamoTables/legacy/*` | 7      | Migration source table names, read by the data-migration tooling only                                                                                                                                                                |
 | `/<name>-<baseStackName>/resourceNames/s3Buckets/*`           | 2      | Asset auxiliary and artefacts bucket names                                                                                                                                                                                           |
 | `/<name>-<baseStackName>/resourceNames/cloudwatchLogGroups/*` | 9      | Audit log group names                                                                                                                                                                                                                |

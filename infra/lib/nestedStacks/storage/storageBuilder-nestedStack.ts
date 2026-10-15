@@ -126,6 +126,8 @@ export interface storageResources {
         pipelineTemplateTagSchemaStorageTable: dynamodb.Table;
         workflowStorageTableV2: dynamodb.Table;
         workflowTriggersStorageTable: dynamodb.Table;
+        // Present only when Miris per-view viewer keys are enabled
+        mirisViewerKeyStorageTable?: dynamodb.Table;
     };
 }
 
@@ -2087,6 +2089,21 @@ export function storageResourcesBuilder(
         projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // Miris viewer key IDs minted per view. TTL deletions stream to the cleanup Lambda, which deletes
+    // the key from the Miris workspace.
+    let mirisViewerKeyStorageTable: dynamodb.Table | undefined = undefined;
+    if (config.app.miris?.enabled && config.app.miris.viewerKeyMode === "perView") {
+        mirisViewerKeyStorageTable = new dynamodb.Table(scope, "MirisViewerKeyStorageTable", {
+            ...dynamodbDefaultProps,
+            partitionKey: {
+                name: "mirisViewerKeyId",
+                type: dynamodb.AttributeType.STRING,
+            },
+            timeToLiveAttribute: "ttl",
+            stream: dynamodb.StreamViewType.KEYS_ONLY,
+        });
+    }
+
     ///DEPRECATED TABLES - KEPT FOR DATA MIGRATION PURPOSES
 
     const assetLinksStorageTableDeprecated = new dynamodb.Table(scope, "AssetLinksStorageTable", {
@@ -2187,6 +2204,7 @@ export function storageResourcesBuilder(
             userRolesStorageTable: userRolesStorageTable,
             userStorageTable: userStorageTable,
             apiKeyStorageTable: apiKeyStorageTable,
+            mirisViewerKeyStorageTable: mirisViewerKeyStorageTable,
             // Pipeline + workflow V2 data model tables
             pipelineStorageTableV2: pipelineStorageTableV2,
             pipelineTemplatesStorageTable: pipelineTemplatesStorageTable,
@@ -2827,6 +2845,10 @@ export function storageResourcesBuilder(
         [RESOURCE_PARAM_KEYS.dynamoTablesLegacy.tagTypeStorage]:
             storageResources.dynamo.tagTypeStorageTableLegacy.tableName,
     };
+    if (mirisViewerKeyStorageTable) {
+        resourceNameParamValues[RESOURCE_PARAM_KEYS.dynamoTables.mirisViewerKeyStorage] =
+            mirisViewerKeyStorageTable.tableName;
+    }
     Object.entries(resourceNameParamValues).forEach(([paramKey, value]) => {
         resourceNameRegistry.register({ paramKey, value });
     });

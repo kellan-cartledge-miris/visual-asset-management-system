@@ -1078,7 +1078,7 @@ export function getConfig(app: cdk.App): Config {
     if (config.app.miris.apiKeySecretArn == undefined) {
         config.app.miris.apiKeySecretArn = "";
     }
-    if (config.app.miris.mirisApiBaseUrl == undefined) {
+    if (isMirisValueUnset(config.app.miris.mirisApiBaseUrl)) {
         config.app.miris.mirisApiBaseUrl = "https://app.miris.com";
     }
     if (config.app.miris.perViewKey == undefined) {
@@ -1142,12 +1142,6 @@ export function getConfig(app: cdk.App): Config {
                     "Manager ARN of the Miris Integration Key."
             );
         }
-        if (!config.app.miris.mirisApiBaseUrl || config.app.miris.mirisApiBaseUrl === "") {
-            throw new Error(
-                "Configuration Error: app.miris.upload.enabled requires " +
-                    "app.miris.mirisApiBaseUrl (default https://app.miris.com)."
-            );
-        }
     }
 
     if (config.app.miris.enabled) {
@@ -1158,6 +1152,19 @@ export function getConfig(app: cdk.App): Config {
                     "are not reachable from GovCloud deployments."
             );
         }
+        // VAMS Lambdas send the Miris viewer key or Integration Key to this URL.
+        try {
+            new URL(config.app.miris.mirisApiBaseUrl);
+        } catch (e) {
+            throw new Error(
+                "Configuration Error: app.miris.mirisApiBaseUrl must be a valid URL. Got: " +
+                    config.app.miris.mirisApiBaseUrl
+            );
+        }
+        validateOutboundHttpsEndpoint(
+            config.app.miris.mirisApiBaseUrl,
+            "app.miris.mirisApiBaseUrl"
+        );
         if (config.app.miris.viewerKeyMode === "perView") {
             // Per-view keys are minted with the Integration Key, and no deployment-wide viewer key is used.
             if (isMirisValueUnset(config.app.miris.apiKeySecretArn)) {

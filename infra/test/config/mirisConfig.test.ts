@@ -5,7 +5,9 @@
 
 /**
  * `getConfig()` rules for `app.miris`: defaults, the legacy `app.miris.upload.apiKeySecretArn` and
- * `app.miris.upload.mirisApiBaseUrl` aliases, the viewer key mode, and the per-view key lifetime.
+ * `app.miris.upload.mirisApiBaseUrl` aliases, the viewer key mode, the per-view key lifetime, and the
+ * outbound check on `app.miris.mirisApiBaseUrl`. The ConfigBuilder's hand-ported base URL rules are
+ * asserted from the same cases.
  *
  * Every rejection asserts on the MESSAGE. A Miris config can be invalid in several ways at once, so a
  * bare `.toThrow()` would pass while the rule under test did nothing.
@@ -15,6 +17,7 @@ import * as fs from "fs";
 import * as Config from "../../config/config";
 import commercialTemplate from "../../config/config.template.commercial.json";
 import { newTestApp } from "../support/testApp";
+import { evaluateRules } from "../../../documentation/docusaurus-site/src/components/ConfigBuilder/validation";
 
 const realReadFileSync = jest.requireActual("fs").readFileSync;
 
@@ -384,14 +387,88 @@ describe("upload pipeline", () => {
         ).toThrow(/app\.miris\.upload\.enabled requires app\.miris\.apiKeySecretArn to be set/);
     });
 
-    test("names app.miris.mirisApiBaseUrl and its default when the base URL is empty", () => {
-        expect(
-            resolve((c) => {
-                enableUpload(c);
-                c.app.miris.mirisApiBaseUrl = "";
-            })
-        ).toThrow(
-            /app\.miris\.upload\.enabled requires app\.miris\.mirisApiBaseUrl \(default https:\/\/app\.miris\.com\)/
+    test("an empty base URL gets the default", () => {
+        const miris = resolve((c) => {
+            enableUpload(c);
+            c.app.miris.mirisApiBaseUrl = "";
+        })().app.miris;
+        expect(miris.mirisApiBaseUrl).toBe("https://app.miris.com");
+    });
+});
+
+describe("mirisApiBaseUrl", () => {
+    /** The ConfigBuilder rule ids reported for a config, restricted to the base URL rules. */
+    function builderBaseUrlRules(mutate: (c: any) => void): string[] {
+        const config = JSON.parse(JSON.stringify(commercialTemplate));
+        mutate(config);
+        return evaluateRules(config)
+            .map((rule) => rule.id)
+            .filter((id) => id.startsWith("miris-baseurl-"));
+    }
+
+    test.each(["UNDEFINED", ""])(
+        "a hoisted %p is treated as unset and gets the default",
+        (value) => {
+            const miris = resolve((c) => {
+                enableMiris(c);
+                c.app.miris.mirisApiBaseUrl = value;
+            })().app.miris;
+            expect(miris.mirisApiBaseUrl).toBe("https://app.miris.com");
+            expect(
+                builderBaseUrlRules((c) => {
+                    enableMiris(c);
+                    c.app.miris.mirisApiBaseUrl = value;
+                })
+            ).toEqual([]);
+        }
+    );
+
+    test("https://app.miris.com is accepted while Miris is enabled", () => {
+        const mutate = (c: any) => {
+            enablePerView(c);
+            c.app.miris.mirisApiBaseUrl = "https://app.miris.com";
+        };
+        expect(resolve(mutate)().app.miris.mirisApiBaseUrl).toBe("https://app.miris.com");
+        expect(builderBaseUrlRules(mutate)).toEqual([]);
+    });
+
+    test("the instance metadata endpoint is rejected while Miris is enabled", () => {
+        const mutate = (c: any) => {
+            enableMiris(c);
+            c.app.miris.mirisApiBaseUrl = "https://169.254.169.254";
+        };
+        expect(resolve(mutate)).toThrow(
+            /app\.miris\.mirisApiBaseUrl resolves to a loopback, link-local, or private address/
         );
+        expect(builderBaseUrlRules(mutate)).toEqual(["miris-baseurl-private-host"]);
+    });
+
+    test("plain http is rejected while Miris is enabled", () => {
+        const mutate = (c: any) => {
+            enableMiris(c);
+            c.app.miris.mirisApiBaseUrl = "http://169.254.169.254";
+        };
+        expect(resolve(mutate)).toThrow(/app\.miris\.mirisApiBaseUrl must use https/);
+        expect(builderBaseUrlRules(mutate)).toEqual(
+            expect.arrayContaining(["miris-baseurl-https"])
+        );
+    });
+
+    test("an unparseable URL is rejected while Miris is enabled", () => {
+        const mutate = (c: any) => {
+            enableMiris(c);
+            c.app.miris.mirisApiBaseUrl = "app.miris.com";
+        };
+        expect(resolve(mutate)).toThrow(/app\.miris\.mirisApiBaseUrl must be a valid URL/);
+        expect(builderBaseUrlRules(mutate)).toEqual(["miris-baseurl-url"]);
+    });
+
+    test("is not validated while Miris is disabled", () => {
+        const mutate = (c: any) => {
+            c.app.miris.enabled = false;
+            c.app.miris.mirisApiBaseUrl = "http://169.254.169.254";
+        };
+        expect(resolve(mutate)().app.miris.mirisApiBaseUrl).toBe("http://169.254.169.254");
+        expect(builderBaseUrlRules(mutate)).toEqual([]);
     });
 });
