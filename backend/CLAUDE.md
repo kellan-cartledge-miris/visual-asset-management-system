@@ -71,8 +71,14 @@ backend/
 │   │   │                                           #   deadlineCloudJobCallback
 │   │   ├── addon/garnetFramework/                  # Garnet NGSI-LD indexer Lambdas
 │   │   ├── addon/physna/                           # Physna Sync Lambdas (physnaCommon.py shared)
+│   │   ├── miris/                                  # Miris streaming: getAssetStatus (stream status
+│   │   │                                           #   of a file), mintViewerKey (per-view viewer key,
+│   │   │                                           #   perView mode only), viewerKeyCleanup (TTL stream
+│   │   │                                           #   consumer); mirisIntegration (Integration Key
+│   │   │                                           #   client) and streamMetadata (file stream keys)
+│   │   │                                           #   are shared modules
 │   │   └── assetLinks, comments, config, databases, indexing, metadata,
-│   │       metadataschema, miris, roles, search, sendEmail, subscription,
+│   │       metadataschema, roles, search, sendEmail, subscription,
 │   │       tags, tagTypes, userRoles               # Domain handlers (folder per domain)
 │   └── models/                                     # Pydantic v1 models, one file per domain
 │       ├── assetsV3.py                             # GOLD STANDARD model file

@@ -14,6 +14,8 @@ carries at most the HTTP status code, never the Miris response body.
 import os
 import re
 import time
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 import boto3
@@ -34,8 +36,8 @@ _SECRET_CACHE_TTL_SECONDS = 3600
 
 _API_KEY_HEADER = "Miris-API-Key"
 
-# Miris viewer key IDs are UUIDs. Checked before an ID is placed in a request path.
-_VIEWER_KEY_ID_PATTERN = re.compile(
+# Miris viewer key IDs and asset IDs are UUIDs. Checked before an ID is placed in a request path.
+_UUID_PATTERN = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 )
 
@@ -44,14 +46,10 @@ _secretsmanager = None
 _cached_api_key: Optional[str] = None
 _cached_api_key_fetched_at: float = 0.0
 
-# Module-level config, read once at cold start.
-try:
-    MIRIS_API_KEY_SECRET_ARN = os.environ["MIRIS_API_KEY_SECRET_ARN"].strip()
-    MIRIS_API_BASE_URL = os.environ["MIRIS_API_BASE_URL"].strip().rstrip("/")
-except KeyError as e:
-    logger.warning(f"Miris integration env vars not set at import time (OK during test collection): {e}")
-    MIRIS_API_KEY_SECRET_ARN = os.environ.get("MIRIS_API_KEY_SECRET_ARN", "").strip()
-    MIRIS_API_BASE_URL = os.environ.get("MIRIS_API_BASE_URL", "").strip().rstrip("/")
+# Module-level config, read once at cold start. A call made while either is unset raises
+# `MirisIntegrationError`, so a Lambda that imports this module without calling it needs neither.
+MIRIS_API_KEY_SECRET_ARN = os.environ.get("MIRIS_API_KEY_SECRET_ARN", "").strip()
+MIRIS_API_BASE_URL = os.environ.get("MIRIS_API_BASE_URL", "").strip().rstrip("/")
 
 
 class MirisIntegrationError(Exception):
@@ -65,9 +63,38 @@ class MirisIntegrationError(Exception):
         self.status_code = status_code
 
 
+@dataclass(frozen=True)
+class MintedViewerKey:
+    """A viewer key Miris created. `key` is the key material, which Miris returns only once."""
+
+    key_id: str
+    key: str = field(repr=False)
+    expires_at: str
+
+
+def _is_uuid(value: Any) -> bool:
+    return isinstance(value, str) and bool(_UUID_PATTERN.fullmatch(value))
+
+
 def is_viewer_key_id(value: Any) -> bool:
     """True when `value` is a string in the UUID form Miris uses for viewer key IDs."""
-    return isinstance(value, str) and bool(_VIEWER_KEY_ID_PATTERN.fullmatch(value))
+    return _is_uuid(value)
+
+
+def _rfc3339_utc(value: datetime) -> str:
+    """Format a datetime as an RFC 3339 UTC timestamp with second precision, e.g. 2026-10-15T19:04:28Z."""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _json_object(response: requests.Response) -> Optional[dict]:
+    """The response body as a dict, or None when it is not a JSON object."""
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    return body if isinstance(body, dict) else None
 
 
 def _get_secretsmanager_client():
@@ -157,3 +184,64 @@ def delete_viewer_key(key_id: str) -> None:
         f"Miris viewer key delete returned HTTP {response.status_code}",
         status_code=response.status_code,
     )
+
+
+def create_viewer_key(miris_asset_uuid: str, expires_at: datetime, name: str) -> MintedViewerKey:
+    """Create a viewer key that can stream only `miris_asset_uuid`, until `expires_at`.
+
+    The key is created with no tags and the one asset ID; Miris combines tags and asset IDs with
+    AND, so an empty tag list grants exactly the listed asset. The returned `expires_at` is the
+    requested expiry as sent. Raises `MirisIntegrationError` for an asset ID that is not a UUID
+    (without calling Miris), for a non-2xx status, for a transport failure, and for a response
+    without a UUID `id` and a non-empty `key`.
+    """
+    if not _is_uuid(miris_asset_uuid):
+        raise MirisIntegrationError("Miris asset ID is not a UUID")
+    requested_expiry = _rfc3339_utc(expires_at)
+    response = _request(
+        "POST",
+        "/v1/asset-viewer-key",
+        json_body={
+            "name": name,
+            "tags": [],
+            "asset_ids": [miris_asset_uuid],
+            "expires_at": requested_expiry,
+        },
+    )
+    if response.status_code not in (200, 201):
+        raise MirisIntegrationError(
+            f"Miris viewer key create returned HTTP {response.status_code}",
+            status_code=response.status_code,
+        )
+
+    body = _json_object(response) or {}
+    key_id = body.get("id")
+    key = body.get("key")
+    if not is_viewer_key_id(key_id) or not isinstance(key, str) or not key.strip():
+        raise MirisIntegrationError(
+            "Miris viewer key create returned no usable key", status_code=response.status_code
+        )
+    logger.info(f"Created Miris viewer key {key_id}")
+    return MintedViewerKey(key_id=key_id, key=key, expires_at=requested_expiry)
+
+
+def get_asset_state(miris_asset_uuid: str) -> Optional[str]:
+    """Return the Miris `state` of one asset, or None when Miris has no such asset (404).
+
+    Raises `MirisIntegrationError` for an ID that is not a UUID (without calling Miris), for any
+    other non-2xx status, for a transport failure, and for a response without a string `state`.
+    """
+    if not _is_uuid(miris_asset_uuid):
+        raise MirisIntegrationError("Miris asset ID is not a UUID")
+    response = _request("GET", f"/v1/asset/{miris_asset_uuid}")
+    if response.status_code == 404:
+        return None
+    if response.status_code != 200:
+        raise MirisIntegrationError(
+            f"Miris asset read returned HTTP {response.status_code}",
+            status_code=response.status_code,
+        )
+    state = (_json_object(response) or {}).get("state")
+    if not isinstance(state, str):
+        raise MirisIntegrationError("Miris asset read returned no state", status_code=200)
+    return state

@@ -8,9 +8,10 @@
  *
  * The handler reads the stream's Miris asset UUID from the viewed file's metadata, so it serves streams
  * that were recorded by hand on deployments without the upload pipeline. It authenticates its probe with
- * the deployment viewer key (always present when Miris is enabled) and never with the upload pipeline's
- * Integration Key, so its Lambda carries no Secrets Manager access in either configuration. Its table
- * access is read-only.
+ * the deployment viewer key (always present in static mode) and never with the upload pipeline's
+ * Integration Key, so in static mode its Lambda carries no Secrets Manager access whether or not the
+ * upload pipeline is enabled. Its table access is read-only. Per-view mode is covered by
+ * `mirisViewerKeyMint.test.ts`.
  */
 
 import { Resource, SynthResult, synthTemplate } from "../support/templateSynth";

@@ -426,6 +426,9 @@ os.environ["ASSET_FILE_METADATA_STORAGE_TABLE_NAME"] = "assetFileMetadataTable"
 os.environ["FILE_ATTRIBUTE_STORAGE_TABLE_NAME"] = "fileAttributeTable"
 os.environ["METADATA_SCHEMA_STORAGE_TABLE_V2_NAME"] = "metadataSchemaTableV2"
 
+# Per-view Miris viewer key table (mintViewerKey reads it at module load)
+os.environ["MIRIS_VIEWER_KEY_STORAGE_TABLE_NAME"] = "mirisViewerKeyTable"
+
 
 @pytest.fixture(scope="function")
 def lambda_context():

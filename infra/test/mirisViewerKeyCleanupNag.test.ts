@@ -4,18 +4,22 @@
  */
 
 /**
- * In Miris "perView" mode, the stacks holding the viewer key table and its cleanup Lambda synthesize
- * with no unsuppressed AwsSolutions finding.
+ * In Miris "perView" mode, the stacks holding the viewer key table, its cleanup Lambda and the viewer
+ * key mint Lambda synthesize with no unsuppressed AwsSolutions finding.
  *
  * `templateSynth` leaves Nag off, so a suppression that matches nothing, or a finding with no
  * suppression, surfaces only on a real `cdk synth`. This applies `AwsSolutionsChecks` the way
  * bin/infra.ts does and reads the error annotations the aspect stamps onto the per-view constructs:
  * the table in the storage nested stack, and the cleanup Lambda, its mapping and its dead-letter
- * queue in the API nested stack.
+ * queue, the mint Lambda and the status Lambda in the API nested stack.
  *
  * The assertion is scoped to those constructs. In a jest synth the shared grant suppressions do not
  * reach the OverflowPolicy resources CDK splits off large roles at synthesis, so other functions in
  * the same stacks report findings that are identical in static mode and unrelated to this one.
+ *
+ * The API nested stack carries a stack-wide AwsSolutions-IAM5 suppression, so for the API constructs
+ * this check enforces the other rules; the mint and status Lambdas' IAM scope is asserted directly in
+ * `api/mirisViewerKeyMint.test.ts`.
  *
  * One synth per file: cdk-nag reports reliably only on the first synth in a jest process.
  */
@@ -26,7 +30,7 @@ import { AwsSolutionsChecks } from "cdk-nag";
 import { MIRIS_TEST_APP_CONTEXT, newMirisCoreStack } from "./support/mirisCoreStack";
 import { newTestApp } from "./support/testApp";
 
-test("the per-view viewer key table and cleanup Lambda have no unsuppressed AwsSolutions error", () => {
+test("the per-view viewer key resources have no unsuppressed AwsSolutions error", () => {
     const app = newTestApp({ context: MIRIS_TEST_APP_CONTEXT });
     // `logIgnores` records each applied suppression as an info annotation, for the controls below.
     Aspects.of(app).add(new AwsSolutionsChecks({ verbose: true, logIgnores: true }));
@@ -54,6 +58,8 @@ test("the per-view viewer key table and cleanup Lambda have no unsuppressed AwsS
         "ApiBuilder/MirisViewerKeyCleanupFunction",
         "ApiBuilder/MirisViewerKeyCleanupStream",
         "ApiBuilder/MirisViewerKeyCleanupDLQ",
+        "ApiBuilder/MirisMintViewerKeyFunction",
+        "ApiBuilder/MirisGetAssetStatusFunction",
     ].map((id) => `${stack.node.path}/${id}`);
     const isPerView = (path: string) =>
         perViewConstructs.some((root) => path === root || path.startsWith(`${root}/`));
@@ -76,6 +82,11 @@ test("the per-view viewer key table and cleanup Lambda have no unsuppressed AwsS
     expect(cleanupInfos.some(({ entry }) => String(entry.data).includes("AwsSolutions-SQS3"))).toBe(
         true
     );
+    // Control: the aspect also reached the mint Lambda's role (its standard Lambda suppressions).
+    const mintRoot = `${stack.node.path}/ApiBuilder/MirisMintViewerKeyFunction`;
+    expect(
+        cleanupInfos.some(({ path }) => path === mintRoot || path.startsWith(`${mintRoot}/`))
+    ).toBe(true);
 
     const errors = all
         .filter(

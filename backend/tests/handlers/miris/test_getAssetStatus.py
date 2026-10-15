@@ -435,3 +435,79 @@ class TestAuthorization:
         status, _, table, _ = _invoke(_event(method="POST"))
         assert status == 400
         table.get_item.assert_not_called()
+
+
+@pytest.mark.unit
+class TestPerViewModeUsesTheIntegrationApi:
+    """In perView mode no deployment-wide viewer key exists, so the state comes from the
+    Integration API (`GET /v1/asset/{uuid}` with the Integration Key)."""
+
+    def _invoke_per_view(self, miris_api, metadata_table=None):
+        table = metadata_table if metadata_table is not None else _metadata_table(
+            {f"{DATABASE_ID}:{ASSET_ID}:/scene.usd": _stream_row()}
+        )
+        viewer_get = MagicMock()
+        with patch.object(getAssetStatus, "miris_viewer_key_mode", "perView"):
+            status, body, _, _ = _invoke(_event(), metadata_table=table, miris_get=viewer_get, viewer_key="")
+        return status, body, viewer_get
+
+    def test_the_state_is_read_with_the_integration_key(self, miris_api):
+        miris_api.responses.append((200, {"id": STORED_UUID, "state": "streamable"}))
+        status, body, viewer_get = self._invoke_per_view(miris_api)
+
+        assert status == 200
+        assert body["state"] == "streamable"
+        assert body["mirisAssetUuid"] == STORED_UUID
+        assert len(miris_api.calls) == 1
+        call = miris_api.calls[0]
+        assert call["method"] == "GET"
+        assert call["url"] == f"{miris_api.base_url}/v1/asset/{STORED_UUID}"
+        assert call["headers"]["Miris-API-Key"] == miris_api.integration_key
+        viewer_get.assert_not_called()
+
+    @pytest.mark.parametrize("miris_state", ["preview", "processing", "error", "failed"])
+    def test_other_states_are_passed_through(self, miris_api, miris_state):
+        miris_api.responses.append((200, {"state": miris_state}))
+        _, body, _ = self._invoke_per_view(miris_api)
+        assert body["state"] == miris_state
+
+    @pytest.mark.parametrize(
+        "outcome",
+        [404, (500, "boom"), (400, "bad"), (200, {"state": "x" * 200}), (200, {"name": "none"}), (200, "<html>")],
+        ids=["404", "500", "400", "malformed-state", "no-state", "non-json"],
+    )
+    def test_indeterminate_outcomes_are_unknown(self, miris_api, outcome):
+        miris_api.responses.append(outcome)
+        status, body, _ = self._invoke_per_view(miris_api)
+        assert status == 200
+        assert body["state"] == "unknown"
+        assert body["mirisAssetUuid"] == STORED_UUID
+
+    def test_a_transport_failure_is_unknown(self, miris_api):
+        miris_api.responses.append(requests.ConnectionError("unreachable"))
+        _, body, _ = self._invoke_per_view(miris_api)
+        assert body["state"] == "unknown"
+
+    def test_a_secret_read_failure_is_unknown_without_a_request(self, miris_api):
+        miris_api.secretsmanager.get_secret_value.side_effect = RuntimeError("denied")
+        _, body, _ = self._invoke_per_view(miris_api)
+        assert body["state"] == "unknown"
+        assert miris_api.calls == []
+
+    def test_not_streamed_and_invalid_uuid_call_no_miris_api(self, miris_api):
+        _, body, _ = self._invoke_per_view(miris_api, metadata_table=_metadata_table())
+        assert body["state"] == "notStreamed"
+        bad = _metadata_table({f"{DATABASE_ID}:{ASSET_ID}:/scene.usd": _stream_row(uuid="not-a-uuid")})
+        _, body, _ = self._invoke_per_view(miris_api, metadata_table=bad)
+        assert body["state"] == "invalidUuid"
+        assert miris_api.calls == []
+        miris_api.secretsmanager.get_secret_value.assert_not_called()
+
+    def test_static_mode_does_not_use_the_integration_api(self, miris_api):
+        table = _metadata_table({f"{DATABASE_ID}:{ASSET_ID}:/scene.usd": _stream_row()})
+        with patch.object(getAssetStatus, "miris_viewer_key_mode", "static"):
+            _, body, _, viewer_get = _invoke(_event(), metadata_table=table)
+        assert body["state"] == "streamable"
+        viewer_get.assert_called_once()
+        assert miris_api.calls == []
+        miris_api.secretsmanager.get_secret_value.assert_not_called()

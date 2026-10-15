@@ -1,9 +1,10 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pydantic v1 models for the Miris stream status endpoint.
+"""Pydantic v1 models for the Miris stream endpoints.
 
-    GET /database/{databaseId}/assets/{assetId}/miris/asset-status?filePath=...
+    GET  /database/{databaseId}/assets/{assetId}/miris/asset-status?filePath=...
+    POST /database/{databaseId}/assets/{assetId}/miris/viewer-key   body: {"filePath": ...}
 """
 
 from typing import Optional
@@ -36,10 +37,12 @@ MIRIS_STREAM_METADATA_KEYS = (
 STATE_NOT_STREAMED = "notStreamed"
 STATE_INVALID_UUID = "invalidUuid"
 STATE_UNKNOWN = "unknown"
+# The viewer API answers 400 for an asset Miris is still preparing.
+STATE_PROCESSING = "processing"
 
 
-class GetMirisAssetStatusRequestModel(BaseModel, extra="ignore"):
-    """Path and query parameters of the status request.
+class MirisFileRequestModel(BaseModel, extra="ignore"):
+    """The database, asset and file a Miris stream request addresses.
 
     ``filePath`` is validated and given a leading slash here. Mapping a full object key onto
     the asset-relative path needs the asset's root key, so it happens in the handler after the
@@ -96,6 +99,14 @@ def asset_relative_file_path(file_path: str, asset_id: str, asset_root_key: Opti
     return file_path
 
 
+class GetMirisAssetStatusRequestModel(MirisFileRequestModel):
+    """Path and query parameters of the status request."""
+
+
+class MintMirisViewerKeyRequestModel(MirisFileRequestModel):
+    """Path parameters and body of the viewer key request."""
+
+
 class MirisAssetStatusResponseModel(BaseModel):
     """Stream metadata recorded on the file, plus the stream's state."""
 
@@ -105,3 +116,12 @@ class MirisAssetStatusResponseModel(BaseModel):
     uploadedAt: Optional[str] = None
     displayName: Optional[str] = None
     state: str
+
+
+class MintMirisViewerKeyResponseModel(BaseModel):
+    """A viewer key that can stream only the file's Miris asset, until ``expiresAt``."""
+
+    filePath: str
+    mirisAssetUuid: str
+    viewerKey: str
+    expiresAt: str

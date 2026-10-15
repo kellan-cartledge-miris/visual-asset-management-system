@@ -9008,7 +9008,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /database/{databaseId}/assets/{assetId}/miris/asset-status:
         get:
             summary: "Get the Miris stream status of a file."
-            description: "Returns the Miris stream recorded on one asset file and the stream's processing state. The Miris asset UUID is read server side from the file's metadata (`miris_asset_uuid`); the request carries no UUID. The handler enforces GET on the asset before reading any metadata, then reads the `miris_asset_uuid`, `miris_source_version_id`, `miris_uploaded_at`, and `miris_display_name` keys of the file. The keys are read from the file's current metadata, including when the caller is viewing a historical asset version. When `miris_asset_uuid` holds a UUID and a Miris viewer key and API base URL are configured, the handler asks the Miris viewer API for the asset's processing state. This route is only deployed when `app.miris.enabled` is `true`."
+            description: "Returns the Miris stream recorded on one asset file and the stream's processing state. The Miris asset UUID is read server side from the file's metadata (`miris_asset_uuid`); the request carries no UUID. The handler enforces GET on the asset before reading any metadata, then reads the `miris_asset_uuid`, `miris_source_version_id`, `miris_uploaded_at`, and `miris_display_name` keys of the file. The keys are read from the file's current metadata, including when the caller is viewing a historical asset version. When `miris_asset_uuid` holds a UUID, the handler asks Miris for the asset's processing state: in static viewer key mode it calls the Miris viewer API with the deployment viewer key (when a viewer key and API base URL are configured); in perView mode (`app.miris.viewerKeyMode: \"perView\"`) it reads the asset with the Miris Integration Key. This route is only deployed when `app.miris.enabled` is `true`."
             parameters:
               - name: "databaseId"
                 in: "path"
@@ -9051,6 +9051,74 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                 $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+            security:
+                - DefaultCognitoAuthorizer: []
+
+    /database/{databaseId}/assets/{assetId}/miris/viewer-key:
+        post:
+            summary: "Mint a per-view Miris viewer key for a file."
+            description: "Creates a short-lived Miris viewer key that can stream only the Miris asset recorded on one asset file, and returns its key material once. The Miris asset UUID is read server side from the file's metadata (`miris_asset_uuid`); the request carries no UUID. The handler enforces GET on the asset before reading any metadata. The key is created with the Miris Integration Key, scoped to exactly that Miris asset, and expires `app.miris.perViewKey.ttlMinutes` minutes after it is minted. Its key ID (never the key material) is recorded in MirisViewerKeyStorageTable and in the audit log, and the key is deleted from Miris after it expires. The response carries `Cache-Control: no-cache, no-store`. This route is only deployed when `app.miris.enabled` is `true` and `app.miris.viewerKeyMode` is `perView`."
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Unique identifier for database."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+              - name: "assetId"
+                in: "path"
+                description: "Unique identifier for asset."
+                required: true
+                schema:
+                    $ref: "#/components/schemas/id_regex"
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/mintMirisViewerKeyRequest"
+            responses:
+                "200":
+                    description: "A viewer key for the file's Miris asset."
+                    headers:
+                        Cache-Control:
+                            description: "`no-cache, no-store`: the response carries key material and must not be cached."
+                            schema:
+                                type: string
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/mintMirisViewerKeyResponse"
+                "400":
+                    description: "Invalid or missing `filePath`, invalid path parameters, the asset does not exist, or the file's `miris_asset_uuid` is not a UUID (the body then carries `state: invalidUuid`)."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/mirisViewerKeyErrorResponse"
+                "403":
+                    description: "Caller lacks API-level access to POST on the route or GET access to the asset."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: "The file records no Miris stream: `miris_asset_uuid` is absent or empty (the body carries `state: notStreamed`)."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/mirisViewerKeyErrorResponse"
+                "500":
+                    description: "Error processing request, including a key that could not be recorded (the minted key is then deleted from Miris)."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "502":
+                    description: "Miris did not create the viewer key. The Miris response is not returned."
                     content:
                         application/json:
                             schema:
@@ -13766,6 +13834,52 @@ components:
                 - uploadedAt
                 - displayName
                 - state
+
+        mintMirisViewerKeyRequest:
+            type: object
+            properties:
+                filePath:
+                    type: string
+                    minLength: 1
+                    maxLength: 1024
+                    description: "Asset-relative path of the file, such as `/scene.usd`, or the file's full object key, such as `/assets/{assetId}/scene.usd`. Normalized as for the stream status route. Must not contain `..` or end with `/`."
+            required:
+                - filePath
+
+        mintMirisViewerKeyResponse:
+            type: object
+            description: "A Miris viewer key that can stream only `mirisAssetUuid`, until `expiresAt`."
+            properties:
+                filePath:
+                    type: string
+                    description: "Normalized asset-relative path of the file, beginning with `/`."
+                mirisAssetUuid:
+                    type: string
+                    format: uuid
+                    description: "Value of `miris_asset_uuid` on the file: the only Miris asset the key can stream."
+                viewerKey:
+                    type: string
+                    description: "Viewer key material. Returned only in this response; VAMS does not store it."
+                expiresAt:
+                    type: string
+                    format: date-time
+                    description: "When the key expires (RFC 3339, UTC)."
+            required:
+                - filePath
+                - mirisAssetUuid
+                - viewerKey
+                - expiresAt
+
+        mirisViewerKeyErrorResponse:
+            type: object
+            properties:
+                message:
+                    type: string
+                state:
+                    type: string
+                    description: "`notStreamed` (404) or `invalidUuid` (400) when the file's stream metadata is the cause; absent otherwise."
+            required:
+                - message
 
         getFileMetadataResponse:
             type: object

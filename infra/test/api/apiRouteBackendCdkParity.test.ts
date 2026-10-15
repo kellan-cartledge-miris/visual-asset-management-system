@@ -19,9 +19,10 @@
  *     API Gateway but absent from `apiRoutes.py` reaches a handler that does not recognise it. Depending
  *     on the handler that is a 500 or, worse, a path the authorizer has no constraint mapping for.
  * *   **backend ⊆ CDK holds only once every route-contributing feature is enabled.** Routes can be
- *     feature-gated: `GET /addon/physna/viewer` is registered by the Physna add-on stack and the Miris
- *     stream status route by `app.miris.enabled`, both of which ship disabled, so against the stock
- *     commercial template the backend surface is legitimately larger by those two pairs. Asserting
+ *     feature-gated: `GET /addon/physna/viewer` is registered by the Physna add-on stack, the Miris
+ *     stream status route by `app.miris.enabled`, and the Miris viewer key route by
+ *     `app.miris.viewerKeyMode: "perView"`, all of which ship disabled, so against the stock
+ *     commercial template the backend surface is legitimately larger by those three pairs. Asserting
  *     equality against the stock template would therefore have to hardcode an allowance, which would
  *     grow silently with each new optional route; enabling the features instead keeps the assertion
  *     exact.
@@ -196,10 +197,14 @@ function withRouteContributingFeatures(c: any) {
         physna.clientSecret = "synth-only-client-secret";
         physna.credentialsSecretArn = "";
     }
-    // Miris registers its stream status route and ships disabled.
+    // Miris registers its stream status route, and in perView mode its viewer key route; it ships
+    // disabled.
     c.app.webUi.allowUnsafeEvalFeatures = true;
     c.app.miris.enabled = true;
-    c.app.miris.viewerKey = "test-placeholder-viewer-key-000000";
+    c.app.miris.viewerKeyMode = "perView";
+    c.app.miris.viewerKey = "UNDEFINED";
+    c.app.miris.apiKeySecretArn =
+        "arn:aws:secretsmanager:us-east-1:123456789012:secret:test-miris-api-key-AbCdEf";
 }
 
 describe("apiRoutes.py parses as expected", () => {
@@ -271,9 +276,12 @@ describe("every backend route is registered with API Gateway", () => {
         expect(cdkPairs(synth).has("GET /addon/physna/viewer")).toBe(true);
     });
 
-    test("[control] enabling Miris added its route", () => {
+    test("[control] enabling Miris added its routes", () => {
         expect(
             cdkPairs(synth).has("GET /database/{databaseId}/assets/{assetId}/miris/asset-status")
+        ).toBe(true);
+        expect(
+            cdkPairs(synth).has("POST /database/{databaseId}/assets/{assetId}/miris/viewer-key")
         ).toBe(true);
     });
 

@@ -551,8 +551,11 @@ ADDON_ROUTES: Tuple[ApiRoute, ...] = (API_ADDON_PHYSNA_VIEWER,)
 API_MIRIS_ASSET_STATUS = ApiRoute(
     "/database/{databaseId}/assets/{assetId}/miris/asset-status", (GET,), "miris"
 )
+API_MIRIS_VIEWER_KEY = ApiRoute(
+    "/database/{databaseId}/assets/{assetId}/miris/viewer-key", (POST,), "miris"
+)
 
-MIRIS_ROUTES: Tuple[ApiRoute, ...] = (API_MIRIS_ASSET_STATUS,)
+MIRIS_ROUTES: Tuple[ApiRoute, ...] = (API_MIRIS_ASSET_STATUS, API_MIRIS_VIEWER_KEY)
 
 # ---------------------------------------------------------------------------
 # Master list and lookups

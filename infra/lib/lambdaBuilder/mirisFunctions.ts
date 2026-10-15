@@ -22,6 +22,15 @@ import {
     suppressCdkNagErrorsByGrantReadWrite,
 } from "../helper/security";
 
+/** Read access to exactly the configured Miris Integration Key secret. */
+function mirisIntegrationKeyReadStatement(config: Config.Config): iam.PolicyStatement {
+    return new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ["secretsmanager:GetSecretValue"],
+        resources: [config.app.miris.apiKeySecretArn],
+    });
+}
+
 export function buildGetMirisAssetStatusFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
@@ -31,6 +40,7 @@ export function buildGetMirisAssetStatusFunction(
     subnets: ec2.ISubnet[]
 ): lambda.Function {
     const name = "getAssetStatus";
+    const perView = config.app.miris.viewerKeyMode === "perView";
     const fun = new lambda.Function(scope, "MirisGetAssetStatusFunction", {
         code: lambda.Code.fromAsset(path.join(__dirname, "../../../backend/backend")),
         handler: `handlers.miris.${name}.lambda_handler`,
@@ -48,14 +58,13 @@ export function buildGetMirisAssetStatusFunction(
                 : undefined,
         environment: {
             MIRIS_API_BASE_URL: config.app.miris.mirisApiBaseUrl,
-            // The status probe authenticates with the deployment-wide VIEWER key,
-            // the same credential the frontend streams with, so it can only ever
-            // see the assets the viewer can play. It deliberately does NOT use the
-            // Integration Key: that key resolves to its owning Miris user's home
-            // workspace, which is administratively mutable and can drift away from
-            // the workspace holding the assets. The Integration Key stays with the
-            // upload pipeline, which must create assets.
-            MIRIS_VIEWER_KEY: config.app.miris.viewerKey,
+            MIRIS_VIEWER_KEY_MODE: config.app.miris.viewerKeyMode,
+            // Static mode: the status probe authenticates with the deployment-wide VIEWER
+            // key, the same credential the frontend streams with, so it can only ever see
+            // the assets the viewer can play. Per-view mode has no deployment-wide viewer
+            // key, so the probe reads the asset with the Integration Key instead.
+            MIRIS_VIEWER_KEY: perView ? "" : config.app.miris.viewerKey,
+            ...(perView ? { MIRIS_API_KEY_SECRET_ARN: config.app.miris.apiKeySecretArn } : {}),
         },
     });
 
@@ -63,6 +72,11 @@ export function buildGetMirisAssetStatusFunction(
     // stored as file metadata on the viewed file.
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     storageResources.dynamo.assetFileMetadataStorageTable.grantReadData(fun);
+
+    // Per-view mode: the Miris Integration Key, which authorizes the asset state read.
+    if (perView) {
+        fun.addToRolePolicy(mirisIntegrationKeyReadStatement(config));
+    }
 
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
@@ -117,13 +131,7 @@ export function buildMirisViewerKeyCleanupFunction(
     });
 
     // The Miris Integration Key, which authorizes the viewer key deletes.
-    fun.addToRolePolicy(
-        new iam.PolicyStatement({
-            effect: iam.Effect.ALLOW,
-            actions: ["secretsmanager:GetSecretValue"],
-            resources: [config.app.miris.apiKeySecretArn],
-        })
-    );
+    fun.addToRolePolicy(mirisIntegrationKeyReadStatement(config));
 
     // The table's stream, which carries the key IDs of TTL-deleted rows.
     viewerKeyTable.grantStreamRead(fun);
@@ -133,6 +141,70 @@ export function buildMirisViewerKeyCleanupFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagDynamoStreamListWildcard(fun);
     suppressCdkNagLambda(fun);
+
+    return fun;
+}
+
+/**
+ * Mints a per-view Miris viewer key for one asset file and records its key ID in
+ * MirisViewerKeyStorageTable (POST /database/{databaseId}/assets/{assetId}/miris/viewer-key).
+ */
+export function buildMintMirisViewerKeyFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[]
+): lambda.Function {
+    const viewerKeyTable = storageResources.dynamo.mirisViewerKeyStorageTable;
+    if (!viewerKeyTable) {
+        throw new Error(
+            "buildMintMirisViewerKeyFunction requires MirisViewerKeyStorageTable, which exists " +
+                'only when app.miris.viewerKeyMode is "perView".'
+        );
+    }
+
+    const name = "mintViewerKey";
+    const fun = new lambda.Function(scope, "MirisMintViewerKeyFunction", {
+        code: lambda.Code.fromAsset(path.join(__dirname, "../../../backend/backend")),
+        handler: `handlers.miris.${name}.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.seconds(30),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? vpc
+                : undefined,
+        vpcSubnets:
+            config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
+                ? { subnets: subnets }
+                : undefined,
+        environment: {
+            MIRIS_API_KEY_SECRET_ARN: config.app.miris.apiKeySecretArn,
+            MIRIS_API_BASE_URL: config.app.miris.mirisApiBaseUrl,
+            MIRIS_VIEWER_KEY_TTL_MINUTES: String(config.app.miris.perViewKey.ttlMinutes),
+        },
+    });
+
+    // The Miris Integration Key, which authorizes the viewer key creates (and the delete of a
+    // key whose table row could not be written).
+    fun.addToRolePolicy(mirisIntegrationKeyReadStatement(config));
+
+    // Read-only: the asset record for Tier-2 authorization, and the Miris stream keys
+    // stored as file metadata on the file.
+    storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    storageResources.dynamo.assetFileMetadataStorageTable.grantReadData(fun);
+
+    // Put-only: one row per minted key. The table has no index.
+    viewerKeyTable.grant(fun, "dynamodb:PutItem");
+
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
+    suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;
 }

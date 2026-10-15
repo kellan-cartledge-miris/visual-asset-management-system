@@ -3,22 +3,34 @@
 
 """Fakes for the Miris Integration API client: Secrets Manager, the HTTP seam, and the loggers."""
 
+import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
-from backend.backend.handlers.miris import mirisIntegration, viewerKeyCleanup
+from backend.backend.handlers.miris import (
+    getAssetStatus,
+    mintViewerKey,
+    mirisIntegration,
+    viewerKeyCleanup,
+)
 
 INTEGRATION_KEY = "test-integration-key-do-not-log-7f3a9c"
 SECRET_ARN = "arn:aws:secretsmanager:us-east-1:123456789012:secret:test-miris-api-key-AbCdEf"
 BASE_URL = "https://miris.example.test"
 
 
-def miris_response(status_code, text=""):
+def miris_response(status_code, body=""):
+    """A fake `requests.Response`. A dict or list `body` is served as JSON, a string as text."""
     response = MagicMock()
     response.status_code = status_code
-    response.text = text
+    if isinstance(body, (dict, list)):
+        response.text = json.dumps(body)
+        response.json.return_value = body
+    else:
+        response.text = body
+        response.json.side_effect = ValueError("not JSON")
     return response
 
 
@@ -26,8 +38,8 @@ def miris_response(status_code, text=""):
 def miris_api(monkeypatch):
     """Configure the client and replace Secrets Manager and `requests.request`.
 
-    Append to `responses` an int status, a `(status, body)` tuple, or an exception to raise; each
-    request consumes one. `calls` records every request as a dict of its method, URL and kwargs.
+    Append to `responses` an int status, a `(status, body)` tuple (a dict body is JSON), or an
+    exception to raise; each request consumes one. `calls` records every request as a dict of its method, URL and kwargs.
     """
     mirisIntegration._invalidate_api_key_cache()
     monkeypatch.setattr(mirisIntegration, "MIRIS_API_BASE_URL", BASE_URL)
@@ -79,9 +91,9 @@ class LogRecorder:
 
 @pytest.fixture
 def log_recorder(monkeypatch):
-    """Replace the client's and the cleanup handler's loggers with one recorder. The root conftest's
+    """Replace the client's and the Miris handlers' loggers with one recorder. The root conftest's
     logger stand-in discards every line, so neither it nor caplog would show a leaked secret."""
     recorder = LogRecorder()
-    monkeypatch.setattr(mirisIntegration, "logger", recorder)
-    monkeypatch.setattr(viewerKeyCleanup, "logger", recorder)
+    for module in (mirisIntegration, viewerKeyCleanup, mintViewerKey, getAssetStatus):
+        monkeypatch.setattr(module, "logger", recorder)
     return recorder

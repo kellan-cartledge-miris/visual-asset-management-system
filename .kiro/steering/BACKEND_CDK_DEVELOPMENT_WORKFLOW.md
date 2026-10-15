@@ -62,7 +62,7 @@ One folder per domain. The current domains:
 -   `indexing/` — OpenSearch indexing (DynamoDB/S3 streams)
 -   `metadata/` — Metadata CRUD
 -   `metadataschema/` — Metadata schema management
--   `miris/` — Miris spatial streaming (`getAssetStatus.py`: stream status of a file, read from its `miris_*` file metadata)
+-   `miris/` — Miris spatial streaming (`getAssetStatus.py`: stream status of a file, read from its `miris_*` file metadata; `mintViewerKey.py`: per-view viewer key for a file, deployed only in `viewerKeyMode: "perView"`; `viewerKeyCleanup.py`: deletes expired per-view keys from Miris on TTL removal; shared modules `mirisIntegration.py` (Integration Key client) and `streamMetadata.py` (reads a file's stream keys))
 -   `pipelines/` — Pipeline management (Pydantic models; Lambda/SQS/EventBridge/DeadlineCloud execution types — `PIPELINE_EXECUTION_TYPES` in `models/pipelines.py`. DeadlineCloud is async-only with a mandatory task-token callback: `waitForCallback` must be `Enabled` or create returns 400, and it is gated by `app.pipelines.deadlineCloudExecutionTypeEnabled` in the commercial `aws` partition only)
 -   `roles/` — Role CRUD
 -   `search/` — OpenSearch search handlers

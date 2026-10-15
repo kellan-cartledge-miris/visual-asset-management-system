@@ -16,6 +16,7 @@ import { storageResources } from "../storage/storageBuilder-nestedStack";
 import { buildConfigService } from "../../lambdaBuilder/configFunctions";
 import {
     buildGetMirisAssetStatusFunction,
+    buildMintMirisViewerKeyFunction,
     buildMirisViewerKeyCleanupFunction,
 } from "../../lambdaBuilder/mirisFunctions";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
@@ -1169,6 +1170,23 @@ export class ApiBuilderNestedStack extends NestedStack {
                 method: apigateway.HttpMethod.GET,
                 registry: registry,
             });
+
+            // Per-view Miris viewer key for a file, minted on each viewer open
+            if (config.app.miris.viewerKeyMode === "perView") {
+                const mirisMintViewerKey = buildMintMirisViewerKeyFunction(
+                    this,
+                    lambdaCommonBaseLayer,
+                    storageResources,
+                    config,
+                    vpc,
+                    subnets
+                );
+                attachFunctionToApi(this, mirisMintViewerKey, {
+                    routePath: "/database/{databaseId}/assets/{assetId}/miris/viewer-key",
+                    method: apigateway.HttpMethod.POST,
+                    registry: registry,
+                });
+            }
         }
 
         // Per-view Miris viewer keys: delete each key from Miris when TTL removes its table row

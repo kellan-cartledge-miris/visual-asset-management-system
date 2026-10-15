@@ -95,16 +95,21 @@ def test_a_transport_failure_reports_the_record(miris_api):
     assert _invoke(_record(KEY_A, "100")) == {"batchItemFailures": [{"itemIdentifier": "100"}]}
 
 
-def test_an_invalid_key_id_is_a_failure_without_an_http_call(miris_api):
+def test_an_invalid_key_id_is_skipped_without_an_http_call(miris_api, log_recorder):
+    # A retry cannot repair a malformed key ID, so it is not reported as a batch item failure.
+    miris_api.responses.append(204)
+
     result = _invoke(
         _record("../not-a-key", "100"),
         _record(None, "101"),
+        _record(KEY_A, "102"),
     )
 
-    assert result == {
-        "batchItemFailures": [{"itemIdentifier": "100"}, {"itemIdentifier": "101"}]
-    }
-    assert miris_api.calls == []
+    assert result == {"batchItemFailures": []}
+    assert _deleted_urls(miris_api) == [f"{miris_api.base_url}/v1/asset-viewer-key/{KEY_A}"]
+    text = log_recorder.text()
+    assert "Skipping stream record 100" in text
+    assert "Skipping stream record 101" in text
 
 
 def test_an_empty_event_reports_no_failures(miris_api):

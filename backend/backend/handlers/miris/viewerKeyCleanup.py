@@ -11,7 +11,8 @@ The event source mapping filters the KEYS_ONLY stream to TTL deletions: `REMOVE`
 
 A record whose key could not be deleted is reported in `batchItemFailures` under its
 `dynamodb.SequenceNumber`, so Lambda retries from that record rather than from the start of the
-batch. A key Miris no longer has counts as deleted, which keeps a retried record idempotent.
+batch. A key Miris no longer has counts as deleted, which keeps a retried record idempotent. A
+record whose key ID is not a UUID is logged and skipped, since no retry can delete it.
 """
 from typing import Any, Dict, List
 
@@ -46,8 +47,10 @@ def lambda_handler(event, context: LambdaContext) -> Dict[str, List[Dict[str, st
         key_id = ((stream_record.get("Keys") or {}).get(_KEY_ATTRIBUTE) or {}).get("S")
 
         if not mirisIntegration.is_viewer_key_id(key_id):
-            logger.error(f"Stream record {sequence_number} does not carry a viewer key ID")
-            failures.append({"itemIdentifier": sequence_number})
+            # A retry cannot repair the record, so it is skipped rather than reported.
+            logger.error(
+                f"Skipping stream record {sequence_number}: key ID {key_id!r:.100} is not a viewer key ID"
+            )
             continue
         try:
             mirisIntegration.delete_viewer_key(key_id)

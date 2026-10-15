@@ -1,6 +1,6 @@
 # Miris API Reference
 
-This page documents the VAMS REST API surface for Miris spatial streaming. The route is deployed only when `app.miris.enabled` is `true` in `infra/config/config.json`, whether or not the Miris upload pipeline is enabled.
+This page documents the VAMS REST API surface for Miris spatial streaming. The routes are deployed only when `app.miris.enabled` is `true` in `infra/config/config.json`, whether or not the Miris upload pipeline is enabled. The [viewer key route](#per-view-viewer-key) is deployed only when `app.miris.viewerKeyMode` is also `perView`.
 
 See [Miris Spatial Streaming](../developer/external-integrations/miris-spatial-streaming.md) for the integration as a whole.
 
@@ -44,12 +44,17 @@ At most one prefix is removed, so an asset-relative path whose first segments ma
 | `notStreamed`     | `miris_asset_uuid` is absent or empty. Miris is not called.                                                                                                                                                                    |
 | `invalidUuid`     | `miris_asset_uuid` is set but is not a UUID. Miris is not called.                                                                                                                                                              |
 | `unknown`         | The processing state could not be established: no Miris viewer key or Miris API base URL is configured (Miris is not called), or Miris was unreachable, did not show the asset to the viewer key, or returned no usable state. |
-| `processing`      | Miris is still preparing the asset and does not yet show it to the viewer key (the Miris viewer API returned HTTP 400).                                                                                                        |
+| `processing`      | Miris is still preparing the asset and does not yet show it to the viewer key (the Miris viewer API returned HTTP 400). Static mode only.                                                                                      |
 | `preview`         | Miris is still preparing the asset.                                                                                                                                                                                            |
 | `streamable`      | The asset can be streamed.                                                                                                                                                                                                     |
 | `error`, `failed` | Miris reported a definitive processing failure.                                                                                                                                                                                |
 
-Any other state Miris reports is returned as is. The status probe is advisory: the response carries the stored UUID whatever Miris reports, and only `error` and `failed` indicate that the stream cannot play, so the viewer attempts the stream in every other case where a UUID is present. The probe authenticates with the deployment's Miris viewer key (`app.miris.viewerKey`), the same credential the viewer streams with, so it sees exactly the assets the viewer can stream.
+Any other state Miris reports is returned as is. The status probe is advisory: the response carries the stored UUID whatever Miris reports, and only `error` and `failed` indicate that the stream cannot play, so the viewer attempts the stream in every other case where a UUID is present.
+
+How the probe authenticates depends on `app.miris.viewerKeyMode`:
+
+-   **`static`** (default): the probe calls the Miris viewer API with the deployment's Miris viewer key (`app.miris.viewerKey`), the same credential the viewer streams with, so it sees exactly the assets the viewer can stream.
+-   **`perView`**: no deployment-wide viewer key exists. The probe reads the asset (`GET /v1/asset/{uuid}`) with the Miris Integration Key from `app.miris.apiKeySecretArn`. A Miris 404, any other error, or a response without a usable state is reported as `unknown`.
 
 #### Example request
 
@@ -84,3 +89,70 @@ GET /database/engineering/assets/turbine-v2/miris/asset-status?filePath=%2Fscene
 -   **Object tier:** The caller must have `GET` permission on the asset (`objectType: "asset"`). This check runs before any metadata is read.
 
 Because the response carries the stream metadata, viewing a stream does not require access to the file metadata routes.
+
+---
+
+## Per-view viewer key
+
+### POST `/database/{databaseId}/assets/{assetId}/miris/viewer-key`
+
+Mints a short-lived Miris viewer key that can stream only the Miris asset recorded on one asset file. The streaming viewer calls it each time it opens a stream in per-view mode. The route exists only when `app.miris.viewerKeyMode` is `perView`.
+
+The Miris asset UUID is read server side from the file's `miris_asset_uuid` metadata key, as the [stream status](#stream-status) endpoint reads it; the request carries no UUID. VAMS creates the key with the Miris Integration Key (`app.miris.apiKeySecretArn`), scoped to exactly that Miris asset and expiring `app.miris.perViewKey.ttlMinutes` minutes after it is minted.
+
+The key material is returned in this response only. VAMS records the key ID, database, asset, file path, user, Miris asset UUID, and expiry in the Miris viewer key table and writes the same fields to the `AUTHOTHER` audit log (type `mirisViewerKeyMint`); neither holds the key material. After the key expires, VAMS deletes it from the Miris workspace. A stream that is already open keeps playing after its key expires; the expiry stops new streams from starting with that key.
+
+#### Request parameters
+
+| Parameter    | Location | Required | Description                                                                                                        |
+| ------------ | -------- | -------- | ------------------------------------------------------------------------------------------------------------------ |
+| `databaseId` | path     | Yes      | Database identifier.                                                                                               |
+| `assetId`    | path     | Yes      | Asset identifier.                                                                                                  |
+| `filePath`   | body     | Yes      | Asset-relative path or full object key of the file, in the same forms and with the same rules as the status route. |
+
+#### Example request
+
+```
+POST /database/engineering/assets/turbine-v2/miris/viewer-key
+```
+
+```json
+{
+    "filePath": "/scene.usd"
+}
+```
+
+#### Example response
+
+```json
+{
+    "filePath": "/scene.usd",
+    "mirisAssetUuid": "8d65af7c-5412-404b-a494-fbd2cdb62442",
+    "viewerKey": "<viewer key>",
+    "expiresAt": "2026-10-15T19:04:28Z"
+}
+```
+
+| Field            | Description                                                 |
+| ---------------- | ----------------------------------------------------------- |
+| `filePath`       | The normalized asset-relative path of the file.             |
+| `mirisAssetUuid` | The Miris asset the key can stream.                         |
+| `viewerKey`      | The viewer key material.                                    |
+| `expiresAt`      | When the key stops authorizing new streams (RFC 3339, UTC). |
+
+The response carries `Cache-Control: no-cache, no-store`.
+
+#### Error responses
+
+| Status | Description                                                                                                                                                                      |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid or missing `filePath`, invalid path parameters, or the asset does not exist. Also returned with `state: "invalidUuid"` when the file's `miris_asset_uuid` is not a UUID. |
+| `403`  | The caller lacks API-tier access to `POST` on the route or `GET` access to the asset.                                                                                            |
+| `404`  | The file records no Miris stream (`state: "notStreamed"`).                                                                                                                       |
+| `500`  | Internal server error, including a key that could not be recorded. VAMS deletes such a key from Miris before responding.                                                         |
+| `502`  | Miris did not create the key. The Miris response is not passed through.                                                                                                          |
+
+#### Authorization
+
+-   **API tier:** The caller's role must allow `POST` on `/database/{databaseId}/assets/{assetId}/miris/viewer-key` through a permission constraint with `objectType: "api"`. API-tier constraints match the request path and the HTTP method, so this is separate from the `GET` permission the status route needs; a role that streams in per-view mode needs both. The `database-admin` and `database-user` permission templates allow `POST` on routes starting with `/database` and so cover it. The `database-readonly` and `global-readonly` templates and the seeded default read-only role allow `GET` there but not `POST`, so their users receive `403` from this route until a constraint allowing `POST` on it is added.
+-   **Object tier:** The caller must have `GET` permission on the asset (`objectType: "asset"`), the same check as the status route. A viewer key grants streaming only, so minting one is authorized as a read of the asset. This check runs before any metadata is read.

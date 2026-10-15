@@ -5,6 +5,7 @@
 caching and rotation, and that no key or response body reaches a log line or exception message."""
 
 import logging
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import requests
@@ -188,3 +189,145 @@ class TestNoSecretInLogs:
         for text in (log_recorder.text(), caplog.text):
             assert miris_api.integration_key not in text
             assert RESPONSE_BODY not in text
+
+
+ASSET_UUID = "8d65af7c-5412-404b-a494-fbd2cdb62442"
+VIEWER_KEY_MATERIAL = "minted-viewer-key-material-do-not-log"
+EXPIRES_AT = datetime(2026, 10, 15, 19, 4, 28, tzinfo=timezone.utc)
+
+
+def _created(key_id=KEY_ID, key=VIEWER_KEY_MATERIAL):
+    return {
+        "id": key_id,
+        "key": key,
+        "name": "vams:db:asset:1",
+        "expires_at": "2026-10-15T19:04:28Z",
+        "asset_ids": [ASSET_UUID],
+        "tags": None,
+    }
+
+
+class TestCreateViewerKey:
+    def test_sends_one_post_scoped_to_exactly_the_asset(self, miris_api):
+        miris_api.responses.append((200, _created()))
+
+        mirisIntegration.create_viewer_key(ASSET_UUID, EXPIRES_AT, "vams:db:asset:1")
+
+        assert len(miris_api.calls) == 1
+        call = miris_api.calls[0]
+        assert call["method"] == "POST"
+        assert call["url"] == f"{miris_api.base_url}/v1/asset-viewer-key"
+        assert call["headers"]["Miris-API-Key"] == miris_api.integration_key
+        assert call["timeout"] == mirisIntegration._REQUEST_TIMEOUT_SECONDS
+        assert call["json"] == {
+            "name": "vams:db:asset:1",
+            "tags": [],
+            "asset_ids": [ASSET_UUID],
+            "expires_at": "2026-10-15T19:04:28Z",
+        }
+
+    def test_returns_the_key_id_material_and_requested_expiry(self, miris_api):
+        miris_api.responses.append((200, _created()))
+        minted = mirisIntegration.create_viewer_key(ASSET_UUID, EXPIRES_AT, "n")
+        assert minted.key_id == KEY_ID
+        assert minted.key == VIEWER_KEY_MATERIAL
+        assert minted.expires_at == "2026-10-15T19:04:28Z"
+
+    def test_the_key_material_is_not_in_the_repr(self, miris_api):
+        miris_api.responses.append((200, _created()))
+        minted = mirisIntegration.create_viewer_key(ASSET_UUID, EXPIRES_AT, "n")
+        assert VIEWER_KEY_MATERIAL not in repr(minted)
+        assert KEY_ID in repr(minted)
+
+    def test_an_expiry_in_another_zone_is_sent_as_utc(self, miris_api):
+        miris_api.responses.append((200, _created()))
+        local = EXPIRES_AT.astimezone(timezone(timedelta(hours=-7)))
+        mirisIntegration.create_viewer_key(ASSET_UUID, local, "n")
+        assert miris_api.calls[0]["json"]["expires_at"] == "2026-10-15T19:04:28Z"
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"id": KEY_ID},
+            {"id": KEY_ID, "key": ""},
+            {"id": KEY_ID, "key": "   "},
+            {"id": KEY_ID, "key": 123},
+            {"id": "not-a-uuid", "key": VIEWER_KEY_MATERIAL},
+            {"key": VIEWER_KEY_MATERIAL},
+            [VIEWER_KEY_MATERIAL],
+            f"<html>{VIEWER_KEY_MATERIAL}</html>",
+        ],
+        ids=["no-key", "empty-key", "blank-key", "non-string-key", "bad-id", "no-id", "list", "non-json"],
+    )
+    def test_a_response_without_a_usable_id_and_key_raises_without_echoing_it(self, miris_api, body):
+        miris_api.responses.append((200, body))
+        with pytest.raises(MirisIntegrationError, match="no usable key") as raised:
+            mirisIntegration.create_viewer_key(ASSET_UUID, EXPIRES_AT, "n")
+        assert VIEWER_KEY_MATERIAL not in str(raised.value)
+
+    @pytest.mark.parametrize("status", [400, 404, 409, 429, 500, 503])
+    def test_a_non_2xx_raises_with_the_status_code_only(self, miris_api, status):
+        miris_api.responses.append((status, RESPONSE_BODY))
+        with pytest.raises(MirisIntegrationError) as raised:
+            mirisIntegration.create_viewer_key(ASSET_UUID, EXPIRES_AT, "n")
+        assert raised.value.status_code == status
+        assert RESPONSE_BODY not in str(raised.value)
+
+    @pytest.mark.parametrize("value", ["", "not-a-uuid", f"{ASSET_UUID}/../x", None])
+    def test_a_non_uuid_asset_raises_without_a_request(self, miris_api, value):
+        with pytest.raises(MirisIntegrationError, match="not a UUID"):
+            mirisIntegration.create_viewer_key(value, EXPIRES_AT, "n")
+        assert miris_api.calls == []
+
+    def test_neither_key_reaches_the_logs(self, miris_api, log_recorder, caplog):
+        caplog.set_level(logging.DEBUG)
+        miris_api.responses.extend([(200, _created()), (401, RESPONSE_BODY), (200, _created())])
+
+        mirisIntegration.create_viewer_key(ASSET_UUID, EXPIRES_AT, "n")
+        mirisIntegration.create_viewer_key(ASSET_UUID, EXPIRES_AT, "n")
+
+        # Control: the create and the 401 retry were logged.
+        assert any(f"Created Miris viewer key {KEY_ID}" in line for line in log_recorder.lines)
+        assert any("401" in line for line in log_recorder.lines)
+        for text in (log_recorder.text(), caplog.text):
+            assert VIEWER_KEY_MATERIAL not in text
+            assert miris_api.integration_key not in text
+            assert RESPONSE_BODY not in text
+
+
+class TestGetAssetState:
+    def test_sends_one_get_for_the_asset_and_returns_its_state(self, miris_api):
+        miris_api.responses.append((200, {"id": ASSET_UUID, "state": "streamable"}))
+
+        assert mirisIntegration.get_asset_state(ASSET_UUID) == "streamable"
+
+        assert len(miris_api.calls) == 1
+        call = miris_api.calls[0]
+        assert call["method"] == "GET"
+        assert call["url"] == f"{miris_api.base_url}/v1/asset/{ASSET_UUID}"
+        assert call["headers"]["Miris-API-Key"] == miris_api.integration_key
+
+    def test_404_returns_none(self, miris_api):
+        miris_api.responses.append(404)
+        assert mirisIntegration.get_asset_state(ASSET_UUID) is None
+
+    @pytest.mark.parametrize("status", [400, 409, 500, 503])
+    def test_other_statuses_raise(self, miris_api, status):
+        miris_api.responses.append((status, RESPONSE_BODY))
+        with pytest.raises(MirisIntegrationError) as raised:
+            mirisIntegration.get_asset_state(ASSET_UUID)
+        assert raised.value.status_code == status
+        assert RESPONSE_BODY not in str(raised.value)
+
+    @pytest.mark.parametrize(
+        "body", [{"id": ASSET_UUID}, {"state": 3}, [], "not json"], ids=["no-state", "non-string", "list", "text"]
+    )
+    def test_a_response_without_a_string_state_raises(self, miris_api, body):
+        miris_api.responses.append((200, body))
+        with pytest.raises(MirisIntegrationError, match="no state"):
+            mirisIntegration.get_asset_state(ASSET_UUID)
+
+    def test_a_non_uuid_raises_without_a_request(self, miris_api):
+        with pytest.raises(MirisIntegrationError, match="not a UUID"):
+            mirisIntegration.get_asset_state("../v1/asset-viewer-key")
+        assert miris_api.calls == []
