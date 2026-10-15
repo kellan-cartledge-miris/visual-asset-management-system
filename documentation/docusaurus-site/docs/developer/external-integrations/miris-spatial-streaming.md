@@ -161,6 +161,7 @@ With `app.miris.viewerKeyMode` set to `"perView"`, the viewer asks VAMS for a vi
 
 ### Requirements
 
+-   `app.miris.enabled` must be `true` and `app.webUi.allowUnsafeEvalFeatures` must be `true`, as for every Miris viewer.
 -   `app.miris.apiKeySecretArn` must reference the Miris Integration Key secret. The key is used to create and delete viewer keys.
 -   Use an Integration Key that belongs to a Miris service account that is a member of only the shared workspace. An Integration Key carries the permissions of the person who created it and follows that person's default workspace, so a key from a personal account can create keys in, or lose access to, the wrong workspace.
 -   A secret encrypted with a customer managed AWS KMS key needs a key policy that lets the VAMS Lambda roles decrypt it. VAMS grants `secretsmanager:GetSecretValue` on the secret and no KMS permissions. This applies to every Lambda that reads the secret: the upload pipeline, the stream status function (in `perView` mode), the viewer key function, and the cleanup function.
@@ -171,7 +172,7 @@ With `app.miris.viewerKeyMode` set to `"perView"`, the viewer asks VAMS for a vi
 -   Expiry or revocation stops new streams from starting within seconds. It does not end a stream that is already open.
 -   The Miris SDK sends the viewer key in the query string of its request, so the key can appear in URL logs of intermediaries. A short lifetime limits that exposure.
 -   Each mint is written to the `AUTHOTHER` audit log (type `mirisViewerKeyMint`) with the user, database, asset, file path, Miris asset UUID, key ID, and expiry, and is recorded in `MirisViewerKeyStorageTable`. Neither holds the key material.
--   When a table row's TTL expires, a cleanup function deletes the key in Miris. DynamoDB TTL deletion is lazy, so an expired key can remain in the workspace for a while; it no longer authorizes streams. Batches that still fail after their retries go to a dead-letter queue.
+-   A key is unusable from its expiry. VAMS deletes it from Miris when the table row's TTL fires: one hour after expiry, plus DynamoDB's lazy TTL deletion delay (typically within 48 hours), so an expired key can remain in the workspace for that period. Batches that still fail after their retries go to a dead-letter queue.
 -   Users can mint keys at their API request rate, which API Gateway throttling limits.
 
 ### Permissions
@@ -207,6 +208,7 @@ flowchart LR
         MD["Stream metadata on the USD file"]
         STATUS["Stream status endpoint"]
         VIEW["Miris viewer plugin"]
+        MINT["Viewer key endpoint"]
     end
     subgraph Miris Platform
         API["Miris content API"]
@@ -221,7 +223,7 @@ flowchart LR
     VIEW -->|file path| STATUS
     STATUS -->|read UUID| MD
     VIEW -->|stream via viewer key| STREAM
-    VIEW -.->|perView mode: request key| MINT["Viewer key endpoint"]
+    VIEW -.->|perView mode: request key| MINT
     MINT -.->|create scoped, expiring key| API
 ```
 

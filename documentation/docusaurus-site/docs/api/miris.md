@@ -100,7 +100,7 @@ Mints a short-lived Miris viewer key that can stream only the Miris asset record
 
 The Miris asset UUID is read server side from the file's `miris_asset_uuid` metadata key, as the [stream status](#stream-status) endpoint reads it; the request carries no UUID. VAMS creates the key with the Miris Integration Key (`app.miris.apiKeySecretArn`), scoped to exactly that Miris asset and expiring `app.miris.perViewKey.ttlMinutes` minutes after it is minted.
 
-The key material is returned in this response only. VAMS records the key ID, database, asset, file path, user, Miris asset UUID, and expiry in the Miris viewer key table and writes the same fields to the `AUTHOTHER` audit log (type `mirisViewerKeyMint`); neither holds the key material. After the key expires, VAMS deletes it from the Miris workspace. A stream that is already open keeps playing after its key expires; the expiry stops new streams from starting with that key.
+The key material is returned in this response only. VAMS records the key ID, database, asset, file path, user, Miris asset UUID, and expiry in the Miris viewer key table and writes the same fields to the `AUTHOTHER` audit log (type `mirisViewerKeyMint`); neither holds the key material. The key is unusable from its expiry. VAMS deletes it from the Miris workspace when the table row's TTL fires, one hour after expiry plus DynamoDB's lazy TTL deletion delay. A stream that is already open keeps playing after its key expires; the expiry stops new streams from starting with that key.
 
 #### Request parameters
 

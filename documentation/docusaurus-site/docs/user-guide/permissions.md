@@ -47,7 +47,7 @@ administrative routes that `admin` holds: detailed execution logs
 broad path prefixes such as `/workflows`, those two routes are withheld by explicit `deny` constraints,
 which override a matching `allow`.
 
-When Miris per-view viewer keys are enabled, `basicReadOnly` may also `POST` to the Miris viewer key route (`/database/{databaseId}/assets/{assetId}/miris/viewer-key`) so that it can stream the assets it can view. The route mints a streaming-only key and creates no VAMS data.
+When Miris per-view viewer keys are enabled, `basicReadOnly` may also `POST` to the Miris viewer key route (`/database/{databaseId}/assets/{assetId}/miris/viewer-key`) so that it can stream the assets it can view. The route mints a streaming-only key and creates no asset or user data. It records the key ID and metadata (never the key material) in a table row and an audit record.
 
 In the web interface a user without execution-log access still sees the **Logs** tab on an execution,
 and the tab reports that the logs are not viewable.

@@ -13,7 +13,7 @@ MirisViewerKeyStorageTable under its Miris key ID, with a `ttl` one hour after i
 viewer key cleanup Lambda deletes the key from Miris when TTL removes the row. The key material is
 returned to the caller only, and is never stored, logged or audited.
 
-Response body (200, `Cache-Control: no-store`):
+Response body (200, `Cache-Control: no-cache, no-store`):
 
     filePath         the normalized asset-relative path, e.g. "/scene.usd"
     mirisAssetUuid   the Miris asset the key can stream
