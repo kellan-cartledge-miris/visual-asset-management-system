@@ -69,8 +69,9 @@ Both default roles are seeded at deployment time. `admin` receives the administr
 `app.adminUserId`, plus the reserved `SYSTEM_USER` identity so system processes satisfy both
 authorization tiers. `basicReadOnly` grants GET on the read paths (assets, files, metadata, databases,
 pipelines, workflows, executions, tags, comments, subscriptions, metadata schemas), the non-mutating
-POST paths (`/auth/routes`, `/search`, `/check-subscription`), and management of the caller's own API
-keys.
+POST paths (`/auth/routes`, `/search`, `/check-subscription`), POST on the Miris viewer key route
+(`/database/{databaseId}/assets/{assetId}/miris/viewer-key`, which mints a streaming-only key for an
+asset the role can read), and management of the caller's own API keys.
 
 Two routes are administrative and belong to `admin` alone: detailed execution logs
 (`GET /workflows/executions/{executionId}/logs`) and execution permanent delete

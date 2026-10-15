@@ -186,6 +186,18 @@ def delete_viewer_key(key_id: str) -> None:
     )
 
 
+def _delete_unusable_key(key_id: str) -> None:
+    """Delete a key Miris created but returned without usable key material (best effort)."""
+    try:
+        delete_viewer_key(key_id)
+        logger.warning(f"Deleted Miris viewer key {key_id}, returned without usable key material")
+    except Exception as e:
+        logger.error(
+            f"Could not delete Miris viewer key {key_id}, returned without usable key material"
+            f" ({type(e).__name__})"
+        )
+
+
 def create_viewer_key(miris_asset_uuid: str, expires_at: datetime, name: str) -> MintedViewerKey:
     """Create a viewer key that can stream only `miris_asset_uuid`, until `expires_at`.
 
@@ -193,7 +205,9 @@ def create_viewer_key(miris_asset_uuid: str, expires_at: datetime, name: str) ->
     AND, so an empty tag list grants exactly the listed asset. The returned `expires_at` is the
     requested expiry as sent. Raises `MirisIntegrationError` for an asset ID that is not a UUID
     (without calling Miris), for a non-2xx status, for a transport failure, and for a response
-    without a UUID `id` and a non-empty `key`.
+    without a UUID `id` and a non-empty `key`. A response with a UUID `id` but no usable `key` has
+    still created a key, so that key is deleted before the error is raised; a failed delete is
+    logged and does not change the error.
     """
     if not _is_uuid(miris_asset_uuid):
         raise MirisIntegrationError("Miris asset ID is not a UUID")
@@ -218,6 +232,8 @@ def create_viewer_key(miris_asset_uuid: str, expires_at: datetime, name: str) ->
     key_id = body.get("id")
     key = body.get("key")
     if not is_viewer_key_id(key_id) or not isinstance(key, str) or not key.strip():
+        if is_viewer_key_id(key_id):
+            _delete_unusable_key(key_id)
         raise MirisIntegrationError(
             "Miris viewer key create returned no usable key", status_code=response.status_code
         )

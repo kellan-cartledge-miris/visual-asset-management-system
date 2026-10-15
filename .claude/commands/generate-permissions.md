@@ -230,6 +230,8 @@ Write paths (POST/PUT for editors/admins): `/uploads`, `/ingest-asset` (admin on
 
 Non-mutating POST paths (needed by all roles including read-only): `/auth/routes`, `/search`, `/check-subscription`
 
+Miris viewer key (POST, granted to read-only roles too): `/database/{databaseId}/assets/{assetId}/miris/viewer-key`, as a separate `api` constraint whose `criteriaAnd` holds `route__path starts_with /database` and `route__path ends_with /miris/viewer-key`. Never widen it into the general POST constraint: a `starts_with /database` POST grant opens every asset write route
+
 Add-on paths (GET; each is deployed only when its add-on is enabled, and a criterion for an undeployed route matches nothing): `/addon/physna/viewer` (the Physna viewer plugin; granted by every shipped template whose role views files)
 
 Admin paths: `/roles`, `/user-roles`, `/auth/constraints`, `/user/cognito`
@@ -263,8 +265,8 @@ When building a new template, use these as a guide for expected constraint count
 
 -   **Admin (database-scoped)**: ~14 constraints (1 web + 3 api + 1 database + 1 asset + 2 pipeline + 2 workflow + 2 metadataSchema + 1 tag + 1 tagType)
 -   **User (database-scoped)**: ~17 constraints (1 web + 6 api + 1 database + 1 asset + 2 pipeline + 2 workflow + 2 metadataSchema + 1 tag + 1 tagType)
--   **Read-only (database-scoped)**: ~12 constraints (1 web + 4 api + 1 database + 1 asset + 1 pipeline + 1 workflow + 1 metadataSchema + 1 tag + 1 tagType)
--   **Read-only (global)**: ~12 constraints (same structure but uses `contains .*` wildcards instead of `equals {{DATABASE_ID}}`)
+-   **Read-only (database-scoped)**: ~13 constraints (1 web + 5 api + 1 database + 1 asset + 1 pipeline + 1 workflow + 1 metadataSchema + 1 tag + 1 tagType)
+-   **Read-only (global)**: ~13 constraints (same structure but uses `contains .*` wildcards instead of `equals {{DATABASE_ID}}`)
 -   **Tag admin (database-scoped)**: ~6 constraints (1 web + 1 api + 2 tag + 2 tagType)
 -   **Deny overlay**: 1 constraint per deny rule
 

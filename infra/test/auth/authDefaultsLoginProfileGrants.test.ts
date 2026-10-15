@@ -186,3 +186,30 @@ describe("seeded basicReadOnly api constraints", () => {
         expect(pick(reparsed, "allow_get_apis").routeValuesOr).toContain("/auth/loginProfile");
     });
 });
+
+describe("seeded basicReadOnly Miris viewer key grant", () => {
+    // The route is POST /database/{databaseId}/assets/{assetId}/miris/viewer-key. The grant is its
+    // own constraint whose two criteria are both in criteriaAnd, so a path must start with
+    // /database AND end with /miris/viewer-key. Casbin-level allow and deny cases are in
+    // backend/tests/handlers/auth/test_readonly_roles_miris_viewer_key.py.
+    it("grants POST through a separate AND-only constraint", () => {
+        const constraint = byId("allow_miris_viewer_key_post");
+        expect(constraint.permissions).toEqual([{ permission: "POST", permissionType: "allow" }]);
+        expect(constraint.routeValuesAnd).toEqual(["/database", "/miris/viewer-key"]);
+        expect(constraint.routeValuesOr).toEqual([]);
+    });
+
+    it("leaves the general POST constraint without /database", () => {
+        const post = byId("allow_post_apis");
+        expect(post.routeValuesOr).not.toContain("/database");
+        expect(post.routeValuesOr).not.toContain("/miris/viewer-key");
+        expect(post.routeValuesAnd).toEqual([]);
+    });
+
+    it("is the only seeded constraint that mentions the viewer key route", () => {
+        const mentioning = constraints.filter((c) =>
+            [...c.routeValuesAnd, ...c.routeValuesOr].includes("/miris/viewer-key")
+        );
+        expect(mentioning.map((c) => c.id)).toEqual(["allow_miris_viewer_key_post"]);
+    });
+});

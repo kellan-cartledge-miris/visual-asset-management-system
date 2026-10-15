@@ -118,6 +118,21 @@
             "groupPermissions": [{ "action": "POST", "type": "allow" }]
         },
         {
+            "name": "{{ROLE_NAME}}-api-routes-miris-viewer-key-post",
+            "description": "Allow POST on the Miris per-view viewer key route only. The asset GET check still decides which assets a key can be minted for.",
+            "objectType": "api",
+            "criteriaAnd": [
+                { "field": "route__path", "operator": "starts_with", "value": "/database" },
+                {
+                    "field": "route__path",
+                    "operator": "ends_with",
+                    "value": "/miris/viewer-key"
+                }
+            ],
+            "criteriaOr": [],
+            "groupPermissions": [{ "action": "POST", "type": "allow" }]
+        },
+        {
             "name": "{{ROLE_NAME}}-databases",
             "description": "Allow read access to all databases",
             "objectType": "database",

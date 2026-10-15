@@ -10,6 +10,7 @@ material is returned to the caller and appears in no log line, audit entry, tabl
 
 import json
 import logging
+import sys
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
@@ -358,12 +359,17 @@ class TestRequestValidation:
 class TestFailures:
 
     @pytest.mark.parametrize(
-        "outcome",
-        [(500, MIRIS_ERROR_BODY), (400, MIRIS_ERROR_BODY), (200, {"id": KEY_ID}), (200, MIRIS_ERROR_BODY)],
+        "outcomes",
+        [
+            [(500, MIRIS_ERROR_BODY)],
+            [(400, MIRIS_ERROR_BODY)],
+            [(200, {"id": KEY_ID}), 204],
+            [(200, MIRIS_ERROR_BODY)],
+        ],
         ids=["500", "400", "no-key", "non-json"],
     )
-    def test_a_miris_failure_is_502_without_the_miris_body(self, miris_api, outcome):
-        miris_api.responses.append(outcome)
+    def test_a_miris_failure_is_502_without_the_miris_body(self, miris_api, outcomes):
+        miris_api.responses.extend(outcomes)
         key_table = MagicMock()
         audit = MagicMock()
         response, body = _invoke(_event(), miris_api, key_table=key_table, audit=audit)
@@ -403,6 +409,55 @@ class TestFailures:
         deletes = _deletes(miris_api)
         assert [c["url"] for c in deletes] == [f"{miris_api.base_url}/v1/asset-viewer-key/{KEY_ID}"]
         audit.assert_not_called()
+
+    def test_a_key_returned_without_material_is_deleted_and_is_502(self, miris_api):
+        miris_api.responses.extend([(200, {"id": KEY_ID}), 204])
+        key_table = MagicMock()
+        response, _ = _invoke(_event(), miris_api, key_table=key_table)
+
+        assert response["statusCode"] == 502
+        assert [c["url"] for c in _deletes(miris_api)] == [
+            f"{miris_api.base_url}/v1/asset-viewer-key/{KEY_ID}"]
+        key_table.put_item.assert_not_called()
+
+    def test_an_unexpected_failure_after_the_mint_logs_only_its_type(self, miris_api, log_recorder, caplog):
+        caplog.set_level(logging.DEBUG)
+        miris_api.responses.append((200, _created()))
+        audit = MagicMock(side_effect=RuntimeError(f"boom {VIEWER_KEY_MATERIAL}"))
+        response, _ = _invoke(_event(), miris_api, audit=audit)
+
+        assert response["statusCode"] == 500
+        assert VIEWER_KEY_MATERIAL not in response["body"]
+        audit.assert_called_once()
+        # Control: the catch-all logged the failure, by its type.
+        assert "Internal error (RuntimeError)" in log_recorder.text()
+        for logged in (log_recorder.text(), caplog.text):
+            assert VIEWER_KEY_MATERIAL not in logged
+            assert "boom" not in logged
+
+    def test_the_error_response_is_built_outside_the_exception(self, miris_api):
+        """The 500 response writes an audit entry, and a failed write logs a traceback. Built while
+        the exception is still being handled, that traceback would chain the exception's message."""
+        miris_api.responses.append((200, _created()))
+        audit = MagicMock(side_effect=RuntimeError(f"boom {VIEWER_KEY_MATERIAL}"))
+        handled_at_call = []
+        real_internal_error = mintViewerKey.internal_error
+
+        def recording_internal_error(*args, **kwargs):
+            handled_at_call.append(sys.exc_info()[1])
+            return real_internal_error(*args, **kwargs)
+
+        with patch.object(mintViewerKey, "internal_error", side_effect=recording_internal_error):
+            response, _ = _invoke(_event(), miris_api, audit=audit)
+
+        assert response["statusCode"] == 500
+        assert handled_at_call == [None]
+
+    def test_the_catch_all_does_not_log_a_traceback(self, miris_api, log_recorder):
+        miris_api.responses.append((200, _created()))
+        audit = MagicMock(side_effect=RuntimeError("boom"))
+        _invoke(_event(), miris_api, audit=audit)
+        assert not any(line.startswith("exception:") for line in log_recorder.lines)
 
     def test_a_failed_cleanup_delete_still_returns_500(self, miris_api):
         miris_api.responses.extend([(200, _created()), (503, MIRIS_ERROR_BODY)])

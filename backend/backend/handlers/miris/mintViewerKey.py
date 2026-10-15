@@ -125,8 +125,12 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={"message": str(v)}, event=event)
     except Exception as e:
-        logger.exception(f"Internal error: {e}")
-        return internal_error(event=event)
+        # The type only: a viewer key may exist by now, and an exception message or traceback
+        # could carry its material.
+        logger.error(f"Internal error ({type(e).__name__})")
+    # Answered outside the except block, so a traceback logged by the error response's audit write
+    # does not chain the exception.
+    return internal_error(event=event)
 
 
 def _request_body(event) -> dict:

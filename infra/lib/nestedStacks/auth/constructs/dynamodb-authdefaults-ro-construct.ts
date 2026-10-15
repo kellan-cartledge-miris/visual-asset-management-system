@@ -900,6 +900,82 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                     S: "constraint",
                 },
                 sk: {
+                    S: `initial_${roleNameIDClean}_allow_miris_viewer_key_post`,
+                },
+                constraintId: {
+                    S: `initial_${roleNameIDClean}_allow_miris_viewer_key_post`,
+                },
+                criteriaAnd: {
+                    L: [
+                        {
+                            M: {
+                                field: {
+                                    S: "route__path",
+                                },
+                                id: {
+                                    S: `0_${roleNameIDClean}_miris_viewer_key_post`,
+                                },
+                                operator: {
+                                    S: "starts_with",
+                                },
+                                value: {
+                                    S: "/database",
+                                },
+                            },
+                        },
+                        {
+                            M: {
+                                field: {
+                                    S: "route__path",
+                                },
+                                id: {
+                                    S: `1_${roleNameIDClean}_miris_viewer_key_post`,
+                                },
+                                operator: {
+                                    S: "ends_with",
+                                },
+                                value: {
+                                    S: "/miris/viewer-key",
+                                },
+                            },
+                        },
+                    ],
+                },
+                description: {
+                    S: "Allow POST on the Miris per-view viewer key route only. The asset GET check still decides which assets a key can be minted for.",
+                },
+                groupPermissions: {
+                    L: [
+                        {
+                            M: {
+                                groupId: {
+                                    S: roleName,
+                                },
+                                id: {
+                                    S: `${roleNameIDClean}-allow-miris-viewer-key-post`,
+                                },
+                                permission: {
+                                    S: "POST",
+                                },
+                                permissionType: {
+                                    S: "allow",
+                                },
+                            },
+                        },
+                    ],
+                },
+                name: {
+                    S: `${roleNameIDClean}-allow-miris-viewer-key-post`,
+                },
+                objectType: {
+                    S: "api",
+                },
+            },
+            {
+                entityType: {
+                    S: "constraint",
+                },
+                sk: {
                     S: `initial_${roleNameIDClean}_allow_all_databases`,
                 },
                 constraintId: {

@@ -263,10 +263,11 @@ DELETE is granted at Tier 2 because archive operations require it. Permanent del
 
 View-only access scoped to a single database. Can browse assets, view files, and read metadata but cannot modify anything.
 
-**Key constraints (12 constraints):**
+**Key constraints (13 constraints):**
 
 -   `web` -- Allow GET on viewing pages only (no `/upload`, no `/metadataschema`)
 -   `api` -- Allow GET on all read routes; allow POST only on `/auth/routes`, `/auth/loginProfile`, `/search`, `/check-subscription`; allow self-service API key management on `/auth/user/api-keys`
+-   `api` (Miris viewer key) -- Allow POST where `route__path` starts with `/database` AND ends with `/miris/viewer-key`, the per-view viewer key route; the asset `GET` check still decides which assets a key can be minted for
 -   `api` (deny) -- Deny GET on paths ending in `/logs`, withholding the detailed execution-logs route that the broad `/workflows` GET allow would otherwise reach
 -   `database` -- Allow GET where `databaseId equals {DATABASE_ID}`
 -   `asset` -- Allow GET where `databaseId equals {DATABASE_ID}`
@@ -277,7 +278,7 @@ Key differences from the admin and user roles: web routes are a narrower set of 
 
 ### Global read-only
 
-View-only access across all databases (12 constraints). Same as database read-only, except the entity constraints match every database with `databaseId contains .*` instead of scoping to one `databaseId`.
+View-only access across all databases (13 constraints). Same as database read-only, except the entity constraints match every database with `databaseId contains .*` instead of scoping to one `databaseId`.
 
 ### Database tag admin
 
@@ -433,9 +434,9 @@ VAMS includes pre-built permission templates that you can import to quickly set 
 | ------------------ | ------------------------- | -------------------------- | ---------------------------------------------------------------------------- |
 | Database Admin     | `database-admin.json`     | `DATABASE_ID`, `ROLE_NAME` | Full management of a specific database (14 constraints)                      |
 | Database User      | `database-user.json`      | `DATABASE_ID`, `ROLE_NAME` | Standard user access with archive-only delete (17 constraints)               |
-| Database Read-Only | `database-readonly.json`  | `DATABASE_ID`, `ROLE_NAME` | View-only access to a specific database (12 constraints)                     |
+| Database Read-Only | `database-readonly.json`  | `DATABASE_ID`, `ROLE_NAME` | View-only access to a specific database (13 constraints)                     |
 | Database Tag Admin | `database-tag-admin.json` | `DATABASE_ID`, `ROLE_NAME` | Database-scoped tag and tag type management with global read (6 constraints) |
-| Global Read-Only   | `global-readonly.json`    | `ROLE_NAME`                | Read-only access across all databases (12 constraints)                       |
+| Global Read-Only   | `global-readonly.json`    | `ROLE_NAME`                | Read-only access across all databases (13 constraints)                       |
 | Deny Tagged Assets | `deny-tagged-assets.json` | `ROLE_NAME`, `TAG_VALUE`   | Overlay: deny editing of assets with a specific tag (1 constraint)           |
 
 Templates are located in the `documentation/permissionsTemplates/` directory.

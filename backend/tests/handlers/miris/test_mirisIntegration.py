@@ -260,10 +260,58 @@ class TestCreateViewerKey:
         ids=["no-key", "empty-key", "blank-key", "non-string-key", "bad-id", "no-id", "list", "non-json"],
     )
     def test_a_response_without_a_usable_id_and_key_raises_without_echoing_it(self, miris_api, body):
-        miris_api.responses.append((200, body))
+        # The 204 answers the delete a response with a UUID id triggers.
+        miris_api.responses.extend([(200, body), 204])
         with pytest.raises(MirisIntegrationError, match="no usable key") as raised:
             mirisIntegration.create_viewer_key(ASSET_UUID, EXPIRES_AT, "n")
         assert VIEWER_KEY_MATERIAL not in str(raised.value)
+
+    @pytest.mark.parametrize(
+        "body",
+        [{"id": KEY_ID}, {"id": KEY_ID, "key": ""}, {"id": KEY_ID, "key": "   "}, {"id": KEY_ID, "key": 123}],
+        ids=["no-key", "empty-key", "blank-key", "non-string-key"],
+    )
+    def test_a_key_created_without_usable_material_is_deleted_at_once(self, miris_api, body):
+        miris_api.responses.extend([(201, body), 204])
+        with pytest.raises(MirisIntegrationError, match="no usable key") as raised:
+            mirisIntegration.create_viewer_key(ASSET_UUID, EXPIRES_AT, "n")
+        assert raised.value.status_code == 201
+        assert [(c["method"], c["url"]) for c in miris_api.calls] == [
+            ("POST", f"{miris_api.base_url}/v1/asset-viewer-key"),
+            ("DELETE", f"{miris_api.base_url}/v1/asset-viewer-key/{KEY_ID}"),
+        ]
+
+    @pytest.mark.parametrize(
+        "body",
+        [{"id": "not-a-uuid", "key": ""}, {"key": ""}, {"id": f"{KEY_ID}/../x"}, "not json"],
+        ids=["bad-id", "no-id", "path-id", "non-json"],
+    )
+    def test_no_delete_is_sent_without_a_uuid_id(self, miris_api, body):
+        miris_api.responses.append((200, body))
+        with pytest.raises(MirisIntegrationError, match="no usable key"):
+            mirisIntegration.create_viewer_key(ASSET_UUID, EXPIRES_AT, "n")
+        assert [c["method"] for c in miris_api.calls] == ["POST"]
+
+    @pytest.mark.parametrize(
+        "delete_outcome",
+        [(500, RESPONSE_BODY), requests.ConnectionError(RESPONSE_BODY)],
+        ids=["delete-500", "delete-transport"],
+    )
+    def test_a_failed_delete_is_logged_by_type_and_keeps_the_create_error(
+            self, miris_api, log_recorder, caplog, delete_outcome):
+        caplog.set_level(logging.DEBUG)
+        miris_api.responses.extend([(200, {"id": KEY_ID}), delete_outcome])
+        with pytest.raises(MirisIntegrationError, match="no usable key") as raised:
+            mirisIntegration.create_viewer_key(ASSET_UUID, EXPIRES_AT, "n")
+        assert raised.value.status_code == 200
+        assert raised.value.__context__ is None
+        assert len(miris_api.calls) == 2
+
+        assert (f"Could not delete Miris viewer key {KEY_ID}, returned without usable key material"
+                " (MirisIntegrationError)") in log_recorder.text()
+        for text in (log_recorder.text(), caplog.text):
+            assert RESPONSE_BODY not in text
+            assert miris_api.integration_key not in text
 
     @pytest.mark.parametrize("status", [400, 404, 409, 429, 500, 503])
     def test_a_non_2xx_raises_with_the_status_code_only(self, miris_api, status):

@@ -78,6 +78,7 @@ SHIPPED_CRITERION_VALUES = [
     '/ingest-asset',
     '/metadata',
     '/metadataschema',
+    '/miris/viewer-key',
     '/pipelines',
     '/search',
     '/secure-config',
