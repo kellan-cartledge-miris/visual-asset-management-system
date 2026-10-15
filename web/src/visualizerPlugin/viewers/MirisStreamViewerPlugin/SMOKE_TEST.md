@@ -163,6 +163,16 @@ To confirm the security gate works, try to deploy with `miris.enabled: true` but
 
 -   [ ] CDK synth fails with the expected error message.
 
+## Per-view viewer keys
+
+Run when the deployment sets `app.miris.viewerKeyMode: "perView"` (the stack then records `MIRIS_PER_VIEW_KEYS`). No shared viewer key is deployed in this mode.
+
+-   [ ] `/secure-config` lists `MIRIS_PER_VIEW_KEYS` in `featuresEnabled` and has no `mirisViewerKey` field.
+-   [ ] Opening a streamed USD file in the Miris viewer sends one `POST .../assets/{assetId}/miris/viewer-key` request with body `{"filePath": "/<object key>"}` after the `asset-status` request, and the stream renders.
+-   [ ] The response carries `viewerKey`, `mirisAssetUuid` (matching the status UUID) and `expiresAt`; the key does not appear in `localStorage`, `sessionStorage` or the console.
+-   [ ] Closing and reopening the viewer sends a new mint request.
+-   [ ] A user without access to the asset sees "You do not have permission to stream this asset." and no stream.
+
 ## Sign-off
 
 When all checkboxes pass, mark the smoke test complete in the PR description and the branch is ready to merge.

@@ -825,7 +825,7 @@ The 3D/media viewer system uses a plugin-based architecture:
 
 > Note: `supersplat-viewer` is a **iframe-embedded** viewer — it self-hosts a from-source SuperSplat build under `public/viewers/supersplat/` and loads files via a presigned URL `?load=` parameter (see 8.5 before copying that pattern). The build is WebGPU-only (no WebGL2 fallback). Under the production CSP its `<base>` element, inline script, and embedded `pc-icon` data-URI font are blocked without breaking the editor.
 
-> Note: `miris-stream-viewer` is gated by the `MIRIS_STREAMING` feature switch. With `app.miris.viewerKeyMode: "perView"` the backend also records `MIRIS_PER_VIEW_KEYS` (VAMS mints a short-lived, single-asset viewer key per viewer open) and the config Lambda sends no shared viewer key to the browser.
+> Note: `miris-stream-viewer` is gated by the `MIRIS_STREAMING` feature switch. With `app.miris.viewerKeyMode: "perView"` the backend also records `MIRIS_PER_VIEW_KEYS` (VAMS mints a short-lived, single-asset viewer key per viewer open) and the config Lambda sends no shared viewer key to the browser. In that mode the viewer calls `mintMirisViewerKey` (`POST database/{databaseId}/assets/{assetId}/miris/viewer-key`) on every open after the status call reports a streamable asset, streams with the returned key, and keeps it in the load effect's scope only (never `appCache`, storage, or logs). Without the flag it reads the shared `mirisViewerKey` from `/secure-config`.
 
 ### 8.3 Adding a New Viewer Plugin
 

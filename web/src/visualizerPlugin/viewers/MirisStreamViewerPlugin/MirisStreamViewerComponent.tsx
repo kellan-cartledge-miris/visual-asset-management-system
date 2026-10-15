@@ -10,8 +10,13 @@ import { MirisScene, MirisStream } from "@miris-inc/three";
 import { PerspectiveCamera, Vector3, WebGLRenderer } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { ViewerPluginProps } from "../../core/types";
-import { fetchFileInfo, getMirisStreamStatus } from "../../../services/APIService";
+import {
+    fetchFileInfo,
+    getMirisStreamStatus,
+    mintMirisViewerKey,
+} from "../../../services/APIService";
 import { appCache } from "../../../services/appCache";
+import { featuresEnabled } from "../../../common/constants/featuresEnabled";
 import {
     isKnownVersionId,
     isStaleStream,
@@ -24,6 +29,8 @@ import styles from "./MirisStreamViewer.module.css";
 type ViewerError =
     | { kind: "NOT_CONFIGURED" }
     | { kind: "STATUS_FETCH" }
+    | { kind: "MINT_FORBIDDEN" }
+    | { kind: "MINT_FAILED" }
     | { kind: "INVALID_UUID" }
     | { kind: "LOAD_FAILED" }
     | { kind: "STREAM_TIMEOUT"; uuid: string }
@@ -85,6 +92,10 @@ function errorMessage(err: ViewerError): string {
             return "Miris streaming is not configured for this deployment. Contact your administrator.";
         case "STATUS_FETCH":
             return "Could not load the Miris stream status for this file. Try again.";
+        case "MINT_FORBIDDEN":
+            return "You do not have permission to stream this asset.";
+        case "MINT_FAILED":
+            return "Could not get access to stream this asset from Miris. Try again.";
         case "INVALID_UUID":
             return "This file's miris_asset_uuid metadata is not a valid UUID. Correct it in the file's metadata, or run Stream with Miris again.";
         case "LOAD_FAILED":
@@ -222,11 +233,35 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                 }
                 setProcessingState(null);
 
-                // 3. Viewer key check
+                // 3. Viewer key: minted per open in per-view mode (kept in this scope only),
+                // otherwise the shared key from the app config
                 const appConfig = appCache.getItem("config") as
-                    | { mirisViewerKey?: string }
+                    | { mirisViewerKey?: string; featuresEnabled?: string | string[] }
                     | undefined;
-                const viewerKey = appConfig?.mirisViewerKey;
+                let viewerKey: string | undefined;
+                if (appConfig?.featuresEnabled?.includes(featuresEnabled.MIRIS_PER_VIEW_KEYS)) {
+                    const mintResult = await mintMirisViewerKey({ databaseId, assetId, filePath });
+                    if (cancelled) return;
+                    if (mintResult[0] !== true) {
+                        if (mintResult[2] === 404) {
+                            setStreamInfo(null);
+                            setNotStreamed(true);
+                            setLoading(false);
+                        } else {
+                            setError({
+                                kind: mintResult[2] === 403 ? "MINT_FORBIDDEN" : "MINT_FAILED",
+                            });
+                        }
+                        return;
+                    }
+                    if (mintResult[1].mirisAssetUuid !== uuid) {
+                        setError({ kind: "MINT_FAILED" });
+                        return;
+                    }
+                    viewerKey = mintResult[1].viewerKey;
+                } else {
+                    viewerKey = appConfig?.mirisViewerKey;
+                }
                 if (!viewerKey) {
                     setError({ kind: "NOT_CONFIGURED" });
                     return;

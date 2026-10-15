@@ -101,17 +101,21 @@ jest.mock("./dependencies", () => ({
 const mockGetMirisStreamStatus = jest.fn();
 const mockFetchFileInfo = jest.fn();
 const mockDownloadAsset = jest.fn();
+const mockMintMirisViewerKey = jest.fn();
 jest.mock("../../../services/APIService", () => ({
     getMirisStreamStatus: (...args: unknown[]) => mockGetMirisStreamStatus(...args),
     fetchFileInfo: (...args: unknown[]) => mockFetchFileInfo(...args),
     downloadAsset: (...args: unknown[]) => mockDownloadAsset(...args),
+    mintMirisViewerKey: (...args: unknown[]) => mockMintMirisViewerKey(...args),
 }));
 
 // --- Mock appCache ---
 const mockAppCacheGet = jest.fn();
+const mockAppCacheSet = jest.fn();
 jest.mock("../../../services/appCache", () => ({
     appCache: {
         getItem: (key: string) => mockAppCacheGet(key),
+        setItem: (...args: unknown[]) => mockAppCacheSet(...args),
     },
 }));
 
@@ -392,6 +396,134 @@ describe("MirisStreamViewerComponent", () => {
             await waitFor(() => expect(mockFetchFileInfo).toHaveBeenCalledTimes(1));
             await waitFor(() => expect(mockSceneCtor).toHaveBeenCalledTimes(1));
             expect(screen.queryByText(STALE_TEXT)).not.toBeInTheDocument();
+        });
+    });
+
+    describe("per-view viewer keys", () => {
+        const MINTED_KEY = "minted-key-abcdef";
+        const mintOk = (overrides: Record<string, unknown> = {}) => [
+            true,
+            {
+                filePath: "/asset-1/folder/scene.usd",
+                mirisAssetUuid: VALID_UUID,
+                viewerKey: MINTED_KEY,
+                expiresAt: "2026-10-15T13:00:00Z",
+                ...overrides,
+            },
+        ];
+
+        beforeEach(() => {
+            mockAppCacheGet.mockReturnValue({
+                featuresEnabled: "MIRIS_STREAMING,MIRIS_PER_VIEW_KEYS",
+            });
+            mockMintMirisViewerKey.mockResolvedValue(mintOk());
+        });
+
+        it("mints once for the viewed file and streams with the minted key", async () => {
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() => expect(mockSceneCtor).toHaveBeenCalledTimes(1));
+            expect(mockMintMirisViewerKey).toHaveBeenCalledTimes(1);
+            expect(mockMintMirisViewerKey).toHaveBeenCalledWith({
+                databaseId: "db-1",
+                assetId: "asset-1",
+                filePath: "/asset-1/folder/scene.usd",
+            });
+            expect(mockSceneCtor).toHaveBeenCalledWith({ viewerKey: MINTED_KEY });
+            expect(mockStreamCtor).toHaveBeenCalledWith({ uuid: VALID_UUID });
+        });
+
+        it("ignores a shared key in the app config", async () => {
+            mockAppCacheGet.mockReturnValue({
+                featuresEnabled: ["MIRIS_PER_VIEW_KEYS"],
+                mirisViewerKey: "shared-key",
+            });
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() => expect(mockSceneCtor).toHaveBeenCalledTimes(1));
+            expect(mockSceneCtor).toHaveBeenCalledWith({ viewerKey: MINTED_KEY });
+        });
+
+        it("never persists the minted key", async () => {
+            const localSet = jest.spyOn(Storage.prototype, "setItem");
+            const logSpies = [
+                jest.spyOn(console, "log").mockImplementation(() => undefined),
+                jest.spyOn(console, "warn").mockImplementation(() => undefined),
+                jest.spyOn(console, "error").mockImplementation(() => undefined),
+            ];
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() => expect(mockSceneCtor).toHaveBeenCalledTimes(1));
+            expect(localSet).not.toHaveBeenCalled();
+            expect(mockAppCacheSet).not.toHaveBeenCalled();
+            for (const spy of logSpies) {
+                expect(JSON.stringify(spy.mock.calls)).not.toContain(MINTED_KEY);
+            }
+            localSet.mockRestore();
+            logSpies.forEach((spy) => spy.mockRestore());
+        });
+
+        it("mints again on a remount", async () => {
+            const first = render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() => expect(mockSceneCtor).toHaveBeenCalledTimes(1));
+            first.unmount();
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() => expect(mockSceneCtor).toHaveBeenCalledTimes(2));
+            expect(mockMintMirisViewerKey).toHaveBeenCalledTimes(2);
+        });
+
+        it("shows a permission error on 403", async () => {
+            mockMintMirisViewerKey.mockResolvedValue([false, "Forbidden", 403]);
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() =>
+                expect(
+                    screen.getByText("You do not have permission to stream this asset.")
+                ).toBeInTheDocument()
+            );
+            expect(mockSceneCtor).not.toHaveBeenCalled();
+        });
+
+        it.each([
+            ["a 500", [false, "boom", 500]],
+            ["an unknown status", [false, "no response", undefined]],
+            ["a different asset UUID", mintOk({ mirisAssetUuid: "other-uuid" })],
+        ])("shows a retryable error on %s", async (_label, result) => {
+            mockMintMirisViewerKey.mockResolvedValue(result);
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() =>
+                expect(screen.getByText(/Could not get access to stream/i)).toBeInTheDocument()
+            );
+            expect(mockSceneCtor).not.toHaveBeenCalled();
+        });
+
+        it("shows the not-yet-streamed guidance when the mint reports no stream", async () => {
+            mockMintMirisViewerKey.mockResolvedValue([false, "not streamed", 404]);
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() =>
+                expect(screen.getByText(/Not yet streamed with Miris/i)).toBeInTheDocument()
+            );
+            expect(mockSceneCtor).not.toHaveBeenCalled();
+        });
+
+        it("builds no scene when unmounted before the mint resolves", async () => {
+            let resolveMint: (value: unknown) => void = () => undefined;
+            mockMintMirisViewerKey.mockReturnValue(
+                new Promise((resolve) => {
+                    resolveMint = resolve;
+                })
+            );
+            const view = render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() => expect(mockMintMirisViewerKey).toHaveBeenCalledTimes(1));
+            view.unmount();
+            await act(async () => {
+                resolveMint(mintOk());
+            });
+            expect(mockSceneCtor).not.toHaveBeenCalled();
+        });
+
+        it("does not mint without the per-view flag", async () => {
+            mockAppCacheGet.mockReturnValue({ mirisViewerKey: "key-1234567890abcdef" });
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() => expect(mockSceneCtor).toHaveBeenCalledTimes(1));
+            expect(mockMintMirisViewerKey).not.toHaveBeenCalled();
+            expect(mockSceneCtor).toHaveBeenCalledWith({ viewerKey: "key-1234567890abcdef" });
         });
     });
 });
