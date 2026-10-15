@@ -442,49 +442,28 @@ export class MirisUploadConstruct extends Construct {
             true
         );
 
+        // The .sync Batch integration and the state machine's own logging and tracing.
         NagSuppressions.addResourceSuppressions(
-            this,
+            stateMachine.role,
             [
                 {
                     id: "AwsSolutions-IAM5",
-                    reason: nagReason,
+                    reason:
+                        "BatchSubmitJob grants SubmitJob on job-definition/* because Batch authorizes " +
+                        "the revision-qualified ARN; Region and account are pinned, the queue is its own ARN.",
                     appliesTo: [
                         {
-                            regex: "/^Resource::.*MirisUploadContainerExecutionRole/.*/g",
+                            regex: "/^Resource::arn:<AWS::Partition>:batch:.+:job-definition/\\*$/g",
                         },
                     ],
                 },
-            ],
-            true
-        );
-
-        NagSuppressions.addResourceSuppressions(
-            this,
-            [
                 {
                     id: "AwsSolutions-IAM5",
-                    reason: nagReason,
-                    appliesTo: [
-                        {
-                            regex: "/^Resource::.*MirisUploadContainerJobRole/.*/g",
-                        },
-                    ],
-                },
-            ],
-            true
-        );
-
-        NagSuppressions.addResourceSuppressions(
-            this,
-            [
-                {
-                    id: "AwsSolutions-IAM5",
-                    reason: nagReason,
-                    appliesTo: [
-                        {
-                            regex: "/^Resource::.*MirisUploadInnerStateMachine/Role/.*/g",
-                        },
-                    ],
+                    reason:
+                        "Step Functions log delivery (logs:*LogDelivery*, PutResourcePolicy, " +
+                        "DescribeLogGroups) and X-Ray trace write support no resource-level " +
+                        "permissions, so Resource must be '*'.",
+                    appliesTo: ["Resource::*"],
                 },
             ],
             true

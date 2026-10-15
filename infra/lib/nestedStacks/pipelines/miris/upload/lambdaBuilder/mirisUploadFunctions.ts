@@ -38,6 +38,30 @@ const LAMBDA_SRC = path.join(
  */
 const MIRIS_CLAIM_PREFIX = "locks/miris-upload";
 
+/**
+ * Suppresses the IAM5 finding for a function's grant on the claim prefix. The regex names that
+ * prefix literally, so a wildcard on any other auxiliary-bucket key still surfaces at synth.
+ */
+function suppressCdkNagClaimPrefixWildcard(fun: lambda.Function) {
+    NagSuppressions.addResourceSuppressions(
+        fun,
+        [
+            {
+                id: "AwsSolutions-IAM5",
+                reason:
+                    "Claim objects are keyed per asset and version, known only at run time, under the " +
+                    "fixed locks/miris-upload/ prefix of this deployment's auxiliary bucket.",
+                appliesTo: [
+                    {
+                        regex: "/^Resource::<.*AssetAuxiliaryBucket.*\\.Arn>/locks/miris-upload/\\*$/g",
+                    },
+                ],
+            },
+        ],
+        true
+    );
+}
+
 function _commonProps(
     config: Config.Config,
     vpc: ec2.IVpc,
@@ -88,6 +112,7 @@ export function buildMirisUploadGateFunction(
     // checks the owner of an existing claim, telling a retry of its own put from another execution's.
     storageResources.s3.assetAuxiliaryBucket.grantPut(fun, `${MIRIS_CLAIM_PREFIX}/*`);
     storageResources.s3.assetAuxiliaryBucket.grantRead(fun, `${MIRIS_CLAIM_PREFIX}/*`);
+    suppressCdkNagClaimPrefixWildcard(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
@@ -130,6 +155,7 @@ export function buildVamsExecuteMirisUploadFunction(
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
     // Releases the claim the gate wrote when the run cannot be handed off to the pipeline.
     storageResources.s3.assetAuxiliaryBucket.grantDelete(fun, `${MIRIS_CLAIM_PREFIX}/*`);
+    suppressCdkNagClaimPrefixWildcard(fun);
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
@@ -195,6 +221,7 @@ export function buildOpenMirisUploadPipelineFunction(
     );
     // Releases the claim the gate wrote when the input is rejected or the state machine cannot start.
     storageResources.s3.assetAuxiliaryBucket.grantDelete(fun, `${MIRIS_CLAIM_PREFIX}/*`);
+    suppressCdkNagClaimPrefixWildcard(fun);
     storageResources.eventBridge.orchestrationBus.grantPutEventsTo(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
@@ -258,6 +285,7 @@ export function buildMirisUploadPipelineEndFunction(
     );
     // A run that does not succeed releases its claim here, so the asset version can be retried.
     storageResources.s3.assetAuxiliaryBucket.grantDelete(fun, `${MIRIS_CLAIM_PREFIX}/*`);
+    suppressCdkNagClaimPrefixWildcard(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
