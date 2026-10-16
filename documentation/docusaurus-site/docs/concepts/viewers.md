@@ -223,14 +223,14 @@ Several viewers depend on WebAssembly (WASM) modules for rendering. WASM-based v
 
 The following viewers use WASM:
 
-| Viewer                             | WASM Library                                     | Required Feature Flag                      |
-| ---------------------------------- | ------------------------------------------------ | ------------------------------------------ |
-| Needle USD Viewer (Experimental)   | `usd-wasm`                                       | `ALLOWUNSAFEEVAL`                          |
-| Cesium 3D Tileset Viewer           | `@cesium/engine` (draco/KTX2 decoding)           | None                                       |
-| SuperSplat Editor (PlayCanvas)     | PlayCanvas engine (WebGL shader compilation)     | `ALLOWUNSAFEEVAL`                          |
-| Three.js Viewer (CAD formats only) | OpenCascade (`opencascade.js`)                   | `ALLOWUNSAFEEVAL`                          |
-| ThatOpen IFC BIM Viewer            | `web-ifc` (That Open Engine)                     | `ALLOWUNSAFEEVAL`                          |
-| Miris Stream Viewer                | Miris Spatial Streaming SDK (`@miris-inc/three`) | `ALLOWUNSAFEEVAL` (plus `MIRIS_STREAMING`) |
+| Viewer                             | WASM Library                                 | Required Feature Flag                      |
+| ---------------------------------- | -------------------------------------------- | ------------------------------------------ |
+| Needle USD Viewer (Experimental)   | `usd-wasm`                                   | `ALLOWUNSAFEEVAL`                          |
+| Cesium 3D Tileset Viewer           | `@cesium/engine` (draco/KTX2 decoding)       | None                                       |
+| SuperSplat Editor (PlayCanvas)     | PlayCanvas engine (WebGL shader compilation) | `ALLOWUNSAFEEVAL`                          |
+| Three.js Viewer (CAD formats only) | OpenCascade (`opencascade.js`)               | `ALLOWUNSAFEEVAL`                          |
+| ThatOpen IFC BIM Viewer            | `web-ifc` (That Open Engine)                 | `ALLOWUNSAFEEVAL`                          |
+| Miris Stream Viewer                | Miris Web SDK (`@miris-inc/components`)      | `ALLOWUNSAFEEVAL` (plus `MIRIS_STREAMING`) |
 
 :::warning[Content Security Policy]
 Enabling `ALLOWUNSAFEEVAL` adds `unsafe-eval` to the Content Security Policy `script-src` directive. This is required by the SuperSplat Editor and by WASM loaders for OpenCascade, Needle USD, and web-ifc (the ThatOpen IFC BIM viewer). Review this setting with your organization's security team before enabling. Set `app.webUi.allowUnsafeEvalFeatures` to `true` in the CDK `config.json` to enable.

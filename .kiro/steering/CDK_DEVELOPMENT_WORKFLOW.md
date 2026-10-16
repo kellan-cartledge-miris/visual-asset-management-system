@@ -1971,7 +1971,7 @@ export function generateContentSecurityPolicy(
     // Add Miris sources if enabled (getConfig() ties app.miris.enabled to allowUnsafeEvalFeatures)
     if (config.app.miris.enabled) {
         connectSrc.push("https://*.miris.com", "wss://*.miris.com");
-        scriptSrc.push("blob:"); // the Miris SDK imports part of its engine from a blob: script URL
+        scriptSrc.push("blob:"); // the Miris web SDK imports part of its engine from a blob: script URL
     }
 
     // Add Location Services if enabled

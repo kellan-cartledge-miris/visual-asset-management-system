@@ -42,6 +42,27 @@ The viewer reads the UUID through the status endpoint, never by downloading file
 
 ---
 
+## Web SDK
+
+The viewer renders with the Miris web SDK, which VAMS bundles from three npm packages: `@miris-inc/components` (the `<miris-scene>`, `<miris-camera>` and `<miris-stream>` elements the viewer renders), `@miris-inc/three` and `@miris-inc/core` (the streaming engine). All three are pinned to the same exact version, `0.0.8-1787ad9`, in `web/package.json`, because `@miris-inc/core` is pinned exactly by its siblings and the packages publish in lockstep. Upgrade them together. The packages ship their own TypeScript declarations, and the application's `three` dependency is `^0.185.1`, inside the SDK's supported range. Installs honor the repository's npm `min-release-age = 7` setting (`web/.npmrc`), so a new SDK release becomes installable only after it is seven days old.
+
+### Rendering
+
+The SDK renders with WebGPU where the browser grants a WebGPU adapter. When it does not, the viewer selects the SDK's WebGL 2 engine before the first scene mounts. A device with neither shows "Miris streaming is not supported on this device" as soon as the viewer opens, instead of a blank panel. Browsers that grant a WebGPU adapter need no WebGL 2 context.
+
+Adding `?shark=0` to the page's query string, before the `#`, forces the WebGL 2 engine on a browser that supports WebGPU (for example `https://vams.example.com/?shark=0#/databases`). Use it to tell an engine-specific rendering problem from a streaming problem.
+
+### Content Security Policy
+
+With `app.miris.enabled`, the Content Security Policy gains `blob:` in `script-src` and `https://*.miris.com` and `wss://*.miris.com` in `connect-src`. The SDK also needs `'unsafe-eval'` (from `app.webUi.allowUnsafeEvalFeatures`) and `'wasm-unsafe-eval'` in `script-src`, which the base policy carries. The web distribution serves the SDK's `.wasm` files as `application/wasm`. See [Security](../../architecture/security.md#content-security-policy-csp) for the policy as a whole.
+
+### Troubleshooting
+
+-   **The panel stays blank or shows "Miris streaming is not supported on this device"**: the browser grants neither a WebGPU adapter nor a WebGL 2 context. Enable hardware acceleration, or use a supported browser.
+-   **A render problem on a WebGPU browser**: reload with `?shark=0` to use the WebGL 2 engine.
+-   **"The Miris viewer failed to load"**: the viewer waits 60 seconds for the SDK to load and then stops. Check the Network tab for blocked or stalled SDK and `.wasm` requests and the console for CSP violations.
+-   **"Timed out waiting for Miris to start streaming"**: the stream sends no first frame within 60 seconds. An invalid or wrong-workspace viewer key and a blocked `*.miris.com` connection also surface this way, because they fire no event.
+
 ## Stream metadata
 
 The Miris stream for a USD file is described by four keys in that file's metadata:
@@ -124,7 +145,7 @@ Enable Miris by setting `app.miris.enabled` to `true` and either providing a vie
 | `miris.upload.triggerExtensions`  | For upload              | Comma-separated extensions that auto-trigger the pipeline (default `.usd,.usda,.usdc,.usdz`).                                                                 |
 | `miris.upload.taskTimeoutSeconds` | For upload              | Maximum time the upload container waits for Miris processing.                                                                                                 |
 | `miris.upload.maxAssetSizeBytes`  | For upload              | Maximum source asset size accepted for upload.                                                                                                                |
-| `webUi.allowUnsafeEvalFeatures`   | Yes                     | Must be `true`; the Miris SDK requires the `unsafe-eval` CSP directive.                                                                                       |
+| `webUi.allowUnsafeEvalFeatures`   | Yes                     | Must be `true`; the Miris SDK compiles code at runtime and requires the `unsafe-eval` CSP directive.                                                          |
 
 `miris.upload.apiKeySecretArn` and `miris.upload.mirisApiBaseUrl` are accepted as deprecated aliases of `miris.apiKeySecretArn` and `miris.mirisApiBaseUrl`; see the [Configuration Reference](../../deployment/configuration-reference.md#miris-auto-upload-pipeline-appmirisupload).
 
@@ -244,10 +265,10 @@ Because a `fileUpload` trigger fires once per matching file, a multi-file USD as
 ## Requirements and limitations
 
 -   `app.miris.enabled` must be `true`, with a valid `app.miris.viewerKey` in the default `static` viewer key mode, or with `app.miris.viewerKeyMode` set to `perView` and `app.miris.apiKeySecretArn` set.
--   `app.webUi.allowUnsafeEvalFeatures` must be `true` — the Miris SDK uses WebAssembly and requires the `unsafe-eval` CSP directive. Review this with your security team.
+-   `app.webUi.allowUnsafeEvalFeatures` must be `true`: the Miris SDK compiles code at runtime and requires the `unsafe-eval` CSP directive. Review this with your security team.
 -   When `app.miris.enabled` is `true`, the Content Security Policy also lists `blob:` in `script-src`, because the Miris SDK loads part of its engine from a `blob:` script, and `https://*.miris.com` and `wss://*.miris.com` in `connect-src`. With Miris disabled the policy carries neither.
 -   The upload pipeline requires a Miris Integration Key stored in AWS Secrets Manager, referenced by `app.miris.apiKeySecretArn`.
--   Browser support: Chrome 90+, Firefox 88+, Safari 14+, Edge 90+, with WebGL 2.0 and WebSocket support. HTTPS is mandatory.
+-   Browser support: Chrome 90+, Firefox 88+, Safari 14+, Edge 90+, with WebSocket support and either WebGPU or WebGL 2.0 (see [Rendering](#rendering)). HTTPS is mandatory.
 -   After upload, Miris processes an asset (typically 1–2 hours) before it is streamable.
 -   Cannot be enabled in GovCloud or air-gapped deployments.
 

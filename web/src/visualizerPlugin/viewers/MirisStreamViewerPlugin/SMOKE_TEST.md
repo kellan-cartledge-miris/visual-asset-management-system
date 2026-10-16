@@ -10,7 +10,9 @@ The viewer streams the Miris asset recorded in a USD file's `miris_asset_uuid` f
 -   A valid Miris viewer key (16+ chars) from the same Miris workspace as those assets. Generate one in the Miris Portal or with `miris viewerkey create`.
 -   A small USD file (`.usdz` recommended) to upload to VAMS. Its geometry does not matter; the viewer streams the Miris asset, not the file.
 -   A VAMS dev stack you can deploy to (commercial region; GovCloud is blocked by `getConfig()`).
--   Browser DevTools open on the Network tab (WS and Fetch/XHR filters).
+-   Browser DevTools open on the Network tab (WS and Fetch/XHR filters) and the Console.
+-   A browser with WebGPU (current desktop Chrome or Edge) for the default engine; step 4b also covers the WebGL 2 engine and an unsupported device.
+-   The viewer renders with `@miris-inc/components`, `@miris-inc/three` and `@miris-inc/core`, all pinned to `0.0.8-1787ad9` in `web/package.json`. After an SDK upgrade, confirm the three versions in `web/package-lock.json` still match.
 -   Docker Desktop with the **containerd image store disabled** (Settings → General → uncheck "Use containerd for pulling and storing images"). With it enabled, CDK Lambda layer bundling fails because BuildKit-built images aren't visible to `docker run`.
 -   CDK bootstrap in **two regions**: your primary region (e.g. `us-west-2`) AND `us-east-1`. The CloudFront WAF stack lives in us-east-1 regardless of where the main stack deploys.
 
@@ -30,7 +32,7 @@ In `infra/config/config.json` (or your deployment-specific config), set both blo
 }
 ```
 
-`allowUnsafeEvalFeatures: true` is required: `getConfig()` rejects `miris.enabled` without it. The `@miris-inc/three` SDK calls `eval()` at runtime, so it lives on the same opt-in trust boundary as Cesium and Needle USD. The upload pipeline (`miris.upload.enabled`) is not needed for this checklist.
+`allowUnsafeEvalFeatures: true` is required: `getConfig()` rejects `miris.enabled` without it. The Miris web SDK compiles code at runtime, so it lives on the same opt-in trust boundary as Cesium and Needle USD. With Miris enabled the CSP also lists `blob:` in `script-src` and `*.miris.com` in `connect-src`. The upload pipeline (`miris.upload.enabled`) is not needed for this checklist.
 
 Bootstrap CDK in both regions if you haven't already:
 
@@ -97,12 +99,21 @@ Reopen `smoke-test.usdz`. Verify:
 -   [ ] 3D content begins to stream within a few seconds.
 -   [ ] `Smoke Test` appears as the overlay label.
 -   [ ] No "different version" banner is shown (no source version is recorded).
--   [ ] **Camera framing:** asset is centered in view at a 3/4 diagonal angle, not at the origin inside the asset. (On `sceneloaded`, the component calls `stream.getBounds()` and fits the camera to the asset's bounding box.)
+-   [ ] **Fill and framing:** the scene fills the viewer panel, and the asset is framed and centered in view (the `<miris-scene camera-fit="contain">` element does the framing), not at the origin inside the asset. Resizing the window or the panel keeps the asset framed.
 -   [ ] **Drag to orbit:** left-click drag orbits the camera around the asset center. The asset itself stays fixed; the camera moves.
 -   [ ] **Scroll to zoom:** mouse wheel / pinch zooms toward the orbit target.
 -   [ ] **Right-click drag to pan:** moves the orbit target through space.
 -   [ ] **Damping:** motion has a small inertial smoothing (release-and-keep-moving).
 -   [ ] Fullscreen toggle works (button in the viewer toolbar).
+-   [ ] The Console shows no Content Security Policy violations (in particular none for `blob:` scripts or `eval`), and no failed `*.miris.com` requests.
+-   [ ] Network: the SDK's `.wasm` responses are `200` with `Content-Type: application/wasm`.
+
+### 4b. Renderer selection and unsupported devices
+
+-   [ ] In a WebGPU browser the stream renders with the default engine.
+-   [ ] Reload with `?shark=0` in the real query string, before the `#` (for example `https://<vams-host>/?shark=0#/...`). The stream renders with the WebGL 2 engine, and the framing and controls from step 4 behave the same.
+-   [ ] In a browser with no WebGPU adapter, the viewer selects the WebGL 2 engine on its own and streams.
+-   [ ] In a browser with neither WebGPU nor WebGL 2 (for example WebGL disabled in the browser settings), opening the file shows "Miris streaming is not supported on this device" immediately, not a blank panel or a 60-second wait.
 
 ### 5. Switch and clear the stream
 
@@ -132,6 +143,7 @@ Restore a valid UUID and open the file. In DevTools → Network → WS, note the
 
 -   [ ] WebSocket transitions from "Pending" to "Closed" within ~1 second.
 -   [ ] Console shows no "Miris viewer load failed" errors related to the teardown.
+-   [ ] Switching back to the Miris viewer in the same session loads it again.
 
 ### 9. Verify the disable path
 

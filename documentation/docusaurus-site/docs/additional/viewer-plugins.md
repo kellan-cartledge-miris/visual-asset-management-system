@@ -38,7 +38,7 @@ VAMS includes one Miris viewer plugin, which streams the Miris asset recorded in
 | `miris-stream-viewer` | `.usd`, `.usda`, `.usdc`, `.usdz` | 0        | `MIRIS_STREAMING` | Streams the Miris asset recorded in the file's `miris_asset_uuid` metadata, or shows how to stream it. Auto-selected for USD. |
 
 :::note
-For configuration, the stream metadata, the upload flow, architecture, and requirements, see the dedicated [Miris Spatial Streaming Integration](../developer/external-integrations/miris-spatial-streaming.md) guide. The viewer streams with the viewer key configured in `app.miris.viewerKey`, or, with `app.miris.viewerKeyMode` set to `perView`, with a short-lived key that VAMS mints for each viewer open.
+For configuration, the stream metadata, the upload flow, architecture, and requirements, see the dedicated [Miris Spatial Streaming Integration](../developer/external-integrations/miris-spatial-streaming.md) guide. The viewer renders with the Miris web SDK (`@miris-inc/components`, `@miris-inc/three` and `@miris-inc/core`, pinned together) using WebGPU where the browser grants an adapter and WebGL 2 otherwise. The viewer streams with the viewer key configured in `app.miris.viewerKey`, or, with `app.miris.viewerKeyMode` set to `perView`, with a short-lived key that VAMS mints for each viewer open.
 :::
 
 ---

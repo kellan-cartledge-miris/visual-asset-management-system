@@ -2256,7 +2256,7 @@ export const RULES: Rule[] = [
         fieldPaths: ["app.miris.enabled", "app.webUi.allowUnsafeEvalFeatures"],
         appliesWhen: (c) => g(c, "app.miris.enabled") && !g(c, "app.webUi.allowUnsafeEvalFeatures"),
         message:
-            "Miris Spatial Streaming requires app.webUi.allowUnsafeEvalFeatures = true. The @miris-inc/three SDK uses eval() at runtime.",
+            "Miris Spatial Streaming requires app.webUi.allowUnsafeEvalFeatures = true. The Miris web SDK (@miris-inc/components) compiles code at runtime.",
     },
 
     // ===== Warnings (config.ts console.warn advisories) =====

@@ -74,8 +74,8 @@ describe("Miris CSP size on the ALB path", () => {
         deployedCspBytes(policy(region, mirisEnabled, true));
 
     test("the worst case with Miris exceeds the attribute cap and fits without Miris", () => {
-        expect(bytes("ap-southeast-5", true)).toBeGreaterThan(ALB_LISTENER_ATTRIBUTE_MAX_BYTES);
-        expect(bytes("ap-southeast-5", false)).toBeLessThanOrEqual(
+        expect(bytes("ap-southeast-1", true)).toBeGreaterThan(ALB_LISTENER_ATTRIBUTE_MAX_BYTES);
+        expect(bytes("ap-southeast-1", false)).toBeLessThanOrEqual(
             ALB_LISTENER_ATTRIBUTE_MAX_BYTES
         );
     });

@@ -1195,8 +1195,8 @@ export function getConfig(app: cdk.App): Config {
         if (!config.app.webUi.allowUnsafeEvalFeatures) {
             throw new Error(
                 "Configuration Error: app.miris.enabled requires " +
-                    "app.webUi.allowUnsafeEvalFeatures = true. The @miris-inc/three " +
-                    "SDK uses eval() at runtime, the same trust boundary required " +
+                    "app.webUi.allowUnsafeEvalFeatures = true. The Miris web " +
+                    "SDK (@miris-inc/components) compiles code at runtime, the same trust boundary required " +
                     "by the Cesium and Needle USD viewer plugins. Consult your " +
                     "security team before enabling."
             );

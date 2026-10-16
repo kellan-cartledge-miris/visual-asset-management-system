@@ -42,7 +42,7 @@ VAMS ships with viewer plugins across five categories: 3D, Media, Document, Data
 For the complete list of all viewers, supported extensions, priority resolution, and extension-to-viewer mapping, see [File Viewers](../concepts/viewers.md).
 
 :::info[Miris Spatial Streaming Viewer]
-VAMS includes one Miris viewer plugin, `miris-stream-viewer` (USD files, `MIRIS_STREAMING`, priority `0`), which streams the Miris asset recorded in the file's stream metadata with a deployment viewer key or, in `perView` mode, a short-lived key minted for each viewer open. For the full integration — viewer behavior, the upload pipeline's auto-trigger and Automation launch, configuration, and architecture — see the dedicated [Miris Spatial Streaming Integration](external-integrations/miris-spatial-streaming.md) guide and the [Miris Auto-Upload Pipeline](../pipelines/miris-upload.md).
+VAMS includes one Miris viewer plugin, `miris-stream-viewer` (USD files, `MIRIS_STREAMING`, priority `0`), which streams the Miris asset recorded in the file's stream metadata with a deployment viewer key or, in `perView` mode, a short-lived key minted for each viewer open. It renders with the Miris web SDK (`@miris-inc/components`, `@miris-inc/three` and `@miris-inc/core`, pinned to one version) and needs `blob:` in `script-src` as well as `'unsafe-eval'`. For the full integration — viewer behavior, the upload pipeline's auto-trigger and Automation launch, configuration, and architecture — see the dedicated [Miris Spatial Streaming Integration](external-integrations/miris-spatial-streaming.md) guide and the [Miris Auto-Upload Pipeline](../pipelines/miris-upload.md).
 :::
 
 :::info[Priority System]

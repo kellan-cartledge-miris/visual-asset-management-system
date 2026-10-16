@@ -591,9 +591,9 @@ export function generateContentSecurityPolicy(
 
     //Add Miris streaming sources when enabled.
     //
-    //The @miris-inc/three SDK requires 'unsafe-eval' (it calls eval() at
-    //runtime, not only WebAssembly) and imports part of its engine from a
-    //blob: script URL. getConfig() rejects app.miris.enabled unless
+    //The Miris web SDK (@miris-inc/components and its @miris-inc/core engine)
+    //requires 'unsafe-eval' (it compiles code at runtime, not only
+    //WebAssembly) and imports part of its engine from a blob: script URL. getConfig() rejects app.miris.enabled unless
     //config.app.webUi.allowUnsafeEvalFeatures is also true, so 'unsafe-eval'
     //is already in scriptSrc here; Miris adds blob: and the *.miris.com hosts.
     if (config.app.miris.enabled) {
