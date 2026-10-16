@@ -592,20 +592,14 @@ export function generateContentSecurityPolicy(
     //Add Miris streaming sources when enabled.
     //
     //The @miris-inc/three SDK requires 'unsafe-eval' (it calls eval() at
-    //runtime, not only WebAssembly). VAMS already has a single gate for that
-    //directive — config.app.webUi.allowUnsafeEvalFeatures — pushed above.
-    //Rather than duplicate the push here, getConfig() validates that Miris
-    //cannot be enabled without that flag also being true, so by the time we
-    //reach this block 'unsafe-eval' is already in scriptSrc. This keeps the
-    //trust boundary explicit at the config layer (matching Cesium/Needle USD)
-    //and avoids letting Miris silently widen CSP behind the operator's back.
+    //runtime, not only WebAssembly) and imports part of its engine from a
+    //blob: script URL. getConfig() rejects app.miris.enabled unless
+    //config.app.webUi.allowUnsafeEvalFeatures is also true, so 'unsafe-eval'
+    //is already in scriptSrc here; Miris adds blob: and the *.miris.com hosts.
     if (config.app.miris.enabled) {
         connectSrc.push("https://*.miris.com");
         connectSrc.push("wss://*.miris.com");
-        // The Miris SDK loads part of its engine through a dynamic import of a blob: script URL.
-        if (!scriptSrc.includes("blob:")) {
-            scriptSrc.push("blob:");
-        }
+        scriptSrc.push("blob:");
     }
 
     //Add GeoLocation service URL if feature turned on

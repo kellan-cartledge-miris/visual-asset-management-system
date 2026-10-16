@@ -11,29 +11,29 @@
 
 import { generateContentSecurityPolicy } from "../../lib/helper/security";
 import { SetConfig } from "../../lib/helper/service-helper";
+import {
+    ALB_LISTENER_ATTRIBUTE_MAX_BYTES,
+    deployedCspBytes,
+} from "../../lib/nestedStacks/staticWebApp/constructs/alb-s3-website-albDeploy-construct";
 import commercialTemplate from "../../config/config.template.commercial.json";
-import govcloudTemplate from "../../config/config.template.govcloud.json";
-import eusovereignTemplate from "../../config/config.template.eusovereign.json";
 
-/** The ALB delivers the whole policy as one listener attribute, which Elastic Load Balancing caps at 1 KB. */
-const ALB_ATTRIBUTE_CAP_BYTES = 1024;
-
-const TEMPLATES: Array<[string, unknown, string]> = [
-    ["commercial", commercialTemplate, "us-east-1"],
-    ["govcloud", govcloudTemplate, "us-gov-west-1"],
-    ["eusovereign", eusovereignTemplate, "eusc-de-east-1"],
-];
-
-function policy(template: unknown, region: string, mirisEnabled: boolean): string {
-    const config = JSON.parse(JSON.stringify(template));
+/** Where Miris can be on: `getConfig()` rejects it with GovCloud, so only the commercial template applies. */
+function policy(region: string, mirisEnabled: boolean, albWorstCase = false): string {
+    const config = JSON.parse(JSON.stringify(commercialTemplate));
     config.env.region = region;
     config.app.miris = { ...(config.app.miris ?? {}), enabled: mirisEnabled };
     config.app.webUi.allowUnsafeEvalFeatures = mirisEnabled;
+    if (albWorstCase) {
+        config.app.useCloudFront.enabled = false;
+        config.app.useAlb.enabled = true;
+        config.app.useLocationService.enabled = true;
+    }
     SetConfig(config);
+    // The caller passes the Cognito hosted UI URL with its scheme and the API host without one.
     return generateContentSecurityPolicy(
         {} as never,
-        "auth.example.com",
-        "api.example.com",
+        `https://vamsfederated.auth.${region}.amazoncognito.com`,
+        `abcde12345.execute-api.${region}.amazonaws.com`,
         config
     );
 }
@@ -44,30 +44,43 @@ function scriptSrc(csp: string): string[] {
 }
 
 describe("Miris blob: script source in the CSP", () => {
-    test.each(TEMPLATES)(
-        "%s: script-src lists blob: with Miris enabled and not with it disabled",
-        (_name, template, region) => {
-            const on = scriptSrc(policy(template, region, true));
-            const off = scriptSrc(policy(template, region, false));
-            // Control: both policies parsed to a real script-src.
-            expect(on).toContain("'self'");
-            expect(off).toContain("'self'");
-            expect(on.filter((source) => source === "blob:")).toHaveLength(1);
-            expect(off).not.toContain("blob:");
-        }
-    );
-
-    test("enabling Miris adds blob: to script-src after the existing sources", () => {
-        const on = scriptSrc(policy(commercialTemplate, "us-east-1", true));
-        const off = scriptSrc(policy(commercialTemplate, "us-east-1", false));
-        expect(on.filter((source) => !off.includes(source))).toEqual(["'unsafe-eval'", "blob:"]);
+    test("script-src lists blob: with Miris enabled and not with it disabled", () => {
+        const on = scriptSrc(policy("us-east-1", true));
+        const off = scriptSrc(policy("us-east-1", false));
+        // Control: both policies parsed to a real script-src.
+        expect(on).toContain("'self'");
+        expect(off).toContain("'self'");
+        expect(on.filter((source) => source === "blob:")).toHaveLength(1);
+        expect(off).not.toContain("blob:");
     });
 
-    test.each(TEMPLATES)(
-        "%s: the policy with Miris enabled stays under the ALB attribute cap",
-        (_name, template, region) => {
-            const bytes = Buffer.byteLength(policy(template, region, true), "utf8");
-            expect(bytes).toBeLessThanOrEqual(ALB_ATTRIBUTE_CAP_BYTES);
-        }
-    );
+    test("the sources Miris adds to script-src are exactly 'unsafe-eval' and blob:", () => {
+        const on = scriptSrc(policy("us-east-1", true));
+        const off = scriptSrc(policy("us-east-1", false));
+        expect(new Set(on.filter((source) => !off.includes(source)))).toEqual(
+            new Set(["'unsafe-eval'", "blob:"])
+        );
+    });
+});
+
+/**
+ * The ALB carries the policy in one listener attribute capped at 1 KB, and Miris adds about 58 bytes.
+ * The documented boundary (security.md, "Policy size on the Application Load Balancer path") is that a
+ * Miris deployment on the ALB with a federated Cognito domain and Location Service in a 14-character
+ * region does not fit. Moving the boundary should be a decision, so these pin both sides of it.
+ */
+describe("Miris CSP size on the ALB path", () => {
+    const bytes = (region: string, mirisEnabled: boolean) =>
+        deployedCspBytes(policy(region, mirisEnabled, true));
+
+    test("the worst case with Miris exceeds the attribute cap and fits without Miris", () => {
+        expect(bytes("ap-southeast-5", true)).toBeGreaterThan(ALB_LISTENER_ATTRIBUTE_MAX_BYTES);
+        expect(bytes("ap-southeast-5", false)).toBeLessThanOrEqual(
+            ALB_LISTENER_ATTRIBUTE_MAX_BYTES
+        );
+    });
+
+    test("the same combination in us-east-1 fits with Miris", () => {
+        expect(bytes("us-east-1", true)).toBeLessThanOrEqual(ALB_LISTENER_ATTRIBUTE_MAX_BYTES);
+    });
 });

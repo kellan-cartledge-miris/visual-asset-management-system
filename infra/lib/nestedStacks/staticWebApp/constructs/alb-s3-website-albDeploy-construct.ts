@@ -60,7 +60,7 @@ const ES_MODULE_CONTENT_TYPE = "text/javascript";
 // on the ALB path — which is the only distribution available in a restricted partition and the one
 // with no test environment. Checked at synth so an over-long policy names itself here rather than
 // failing the deploy or arriving truncated.
-const ALB_LISTENER_ATTRIBUTE_MAX_BYTES = 1024;
+export const ALB_LISTENER_ATTRIBUTE_MAX_BYTES = 1024;
 
 // Warn from 90% so the margin is visible before it runs out. One additional SHA-256 hash source costs
 // roughly 52 bytes with quoting.
@@ -78,7 +78,7 @@ const ALB_CSP_WARN_BYTES = Math.floor(ALB_LISTENER_ATTRIBUTE_MAX_BYTES * 0.9);
  */
 const RESOLVED_TOKEN_WIDTH = 10;
 
-function deployedCspBytes(csp: string): number {
+export function deployedCspBytes(csp: string): number {
     return Buffer.byteLength(csp.replace(/\$\{[^}]*\}/g, "x".repeat(RESOLVED_TOKEN_WIDTH)), "utf8");
 }
 

@@ -1951,17 +1951,27 @@ export function generateContentSecurityPolicy(
     config: Config.Config
 ): string {
     const connectSrc = ["'self'", "blob:", authenticationDomain, `https://${apiUrl}`];
-    const scriptSrc = ["'self'", "blob:", authenticationDomain];
+    const scriptSrc = [
+        "'self'",
+        "'unsafe-hashes'",
+        "'wasm-unsafe-eval'",
+        ...INDEX_HTML_INLINE_SCRIPT_HASHES,
+    ];
 
     // Add Cognito endpoints if enabled
     if (config.app.authProvider.useCognito.enabled) {
         connectSrc.push(`https://${Service("COGNITO_IDP").Endpoint}/`);
-        scriptSrc.push(`https://${Service("COGNITO_IDP").Endpoint}/`);
     }
 
     // Add unsafe-eval if explicitly enabled
     if (config.app.webUi.allowUnsafeEvalFeatures) {
         scriptSrc.push(`'unsafe-eval'`);
+    }
+
+    // Add Miris sources if enabled (getConfig() ties app.miris.enabled to allowUnsafeEvalFeatures)
+    if (config.app.miris.enabled) {
+        connectSrc.push("https://*.miris.com", "wss://*.miris.com");
+        scriptSrc.push("blob:"); // the Miris SDK imports part of its engine from a blob: script URL
     }
 
     // Add Location Services if enabled

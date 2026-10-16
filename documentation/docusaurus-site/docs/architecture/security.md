@@ -512,6 +512,8 @@ The two web distributions deliver the policy by different mechanisms with differ
 
 A policy that exceeds the limit is rejected at synthesis time with a message naming its measured size, so the constraint surfaces before deployment rather than as a load balancer error or a truncated header. Because the limit belongs to the delivery mechanism rather than to the policy, the check applies only where an ALB serves the web front. Restricted partitions use the ALB exclusively, so a deployment that adds several CSP sources should confirm the size there.
 
+Enabling the Miris viewer adds the `*.miris.com` `connect-src` hosts, `'unsafe-eval'` and `blob:` to the policy, about 58 bytes in all. On the ALB path a deployment that also uses a federated Cognito domain and Location Service in a region with a long name, such as `ap-southeast-5`, can exceed the 1 KB attribute and fails at synthesis. Use the CloudFront distribution for that combination.
+
 ## Web Response Security Headers
 
 Both web distributions set the same security response headers, so neither delivery path is the weaker one.
