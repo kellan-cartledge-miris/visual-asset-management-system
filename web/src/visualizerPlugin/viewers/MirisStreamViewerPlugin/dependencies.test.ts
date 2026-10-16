@@ -170,6 +170,16 @@ describe("MirisStreamDependencyManager.loadMirisStream", () => {
         expect(getContext).toHaveBeenCalledTimes(1);
     });
 
+    it("starts a new attempt after the pending load is abandoned, and a stale attempt does not clear it", async () => {
+        const { MirisStreamDependencyManager } = freshModule();
+        const first = MirisStreamDependencyManager.loadMirisStream();
+        MirisStreamDependencyManager.abandonPendingLoad();
+        const second = MirisStreamDependencyManager.loadMirisStream();
+        const third = MirisStreamDependencyManager.loadMirisStream();
+        await Promise.all([first, second, third]);
+        expect(getContext).toHaveBeenCalledTimes(2);
+    });
+
     it("rejects when the elements fail to load and retries on the next call", async () => {
         const { MirisStreamDependencyManager } = freshModule();
         mockComponentsFail = true;

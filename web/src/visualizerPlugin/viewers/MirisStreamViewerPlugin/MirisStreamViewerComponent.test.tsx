@@ -19,10 +19,12 @@ jest.mock("./dependencies", () => ({
     MirisStreamDependencyManager: {
         loadMirisStream: jest.fn().mockResolvedValue(undefined),
         isDeviceSupported: jest.fn().mockReturnValue(true),
+        abandonPendingLoad: jest.fn(),
         cleanup: jest.fn(),
     },
 }));
 const mockLoadMirisStream = MirisStreamDependencyManager.loadMirisStream as jest.Mock;
+const mockAbandonPendingLoad = MirisStreamDependencyManager.abandonPendingLoad as jest.Mock;
 const mockIsDeviceSupported = MirisStreamDependencyManager.isDeviceSupported as jest.Mock;
 
 // --- Mock the stream status and file info calls ---
@@ -280,6 +282,131 @@ describe("MirisStreamViewerComponent", () => {
             });
             expect(screen.getByText(/not supported on this device/i)).toBeInTheDocument();
             expect(sceneElement()).toBeNull();
+        });
+    });
+
+    describe("SDK load", () => {
+        afterEach(() => {
+            jest.useRealTimers();
+        });
+
+        const neverSettles = () => mockLoadMirisStream.mockReturnValueOnce(new Promise(() => {}));
+        const waitForSdkLoad = (calls: number) =>
+            waitFor(() => expect(mockLoadMirisStream).toHaveBeenCalledTimes(calls));
+
+        it("shows the load error and mounts no scene when the SDK load never settles", async () => {
+            jest.useFakeTimers();
+            neverSettles();
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitForSdkLoad(1);
+            expect(screen.getByText("Loading…")).toBeInTheDocument();
+
+            await act(async () => {
+                jest.advanceTimersByTime(60_000);
+            });
+            expect(screen.getByText(/miris viewer failed to load/i)).toBeInTheDocument();
+            expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+            expect(sceneElement()).toBeNull();
+            expect(mockAbandonPendingLoad).toHaveBeenCalledTimes(1);
+            expect(jest.getTimerCount()).toBe(0);
+        });
+
+        it("does not time out a load that settles in time", async () => {
+            jest.useFakeTimers();
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitForScene();
+            expect(mockAbandonPendingLoad).not.toHaveBeenCalled();
+            expect(screen.queryByText(/miris viewer failed to load/i)).not.toBeInTheDocument();
+        });
+
+        it("shows nothing and leaves no timers when unmounted during the wait", async () => {
+            jest.useFakeTimers();
+            neverSettles();
+            const { unmount } = render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitForSdkLoad(1);
+            unmount();
+            expect(jest.getTimerCount()).toBe(0);
+            await act(async () => {
+                jest.advanceTimersByTime(120_000);
+            });
+            expect(mockAbandonPendingLoad).not.toHaveBeenCalled();
+            expect(sceneElement()).toBeNull();
+        });
+
+        it("ignores the timeout of an open the file change replaced", async () => {
+            jest.useFakeTimers();
+            neverSettles();
+            const { rerender } = render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitForSdkLoad(1);
+            rerender(<MirisStreamViewerComponent {...baseProps} assetKey="asset-1/other.usd" />);
+            await waitForScene();
+            await act(async () => {
+                jest.advanceTimersByTime(120_000);
+            });
+            expect(screen.queryByText(/miris viewer failed to load/i)).not.toBeInTheDocument();
+            expect(mockAbandonPendingLoad).not.toHaveBeenCalled();
+        });
+
+        it("calls into the loader again on a later open after a timed-out load", async () => {
+            jest.useFakeTimers();
+            neverSettles();
+            const first = render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitForSdkLoad(1);
+            await act(async () => {
+                jest.advanceTimersByTime(60_000);
+            });
+            first.unmount();
+            expect(mockAbandonPendingLoad).toHaveBeenCalledTimes(1);
+
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitForScene();
+            expect(mockLoadMirisStream).toHaveBeenCalledTimes(2);
+        });
+    });
+
+    describe("file cleared", () => {
+        it("resets every overlay when the asset key becomes empty", async () => {
+            mockGetMirisStreamStatus.mockResolvedValueOnce([false, "Not Authorized"]);
+            const { rerender, container } = render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() =>
+                expect(
+                    screen.getByText(/could not load the miris stream status/i)
+                ).toBeInTheDocument()
+            );
+            rerender(<MirisStreamViewerComponent {...baseProps} assetKey="" />);
+            await waitFor(() =>
+                expect(
+                    screen.queryByText(/could not load the miris stream status/i)
+                ).not.toBeInTheDocument()
+            );
+            expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+            expect(container.textContent).toBe("");
+        });
+
+        it("clears the not-streamed guidance and the processing overlay", async () => {
+            mockGetMirisStreamStatus.mockResolvedValueOnce(
+                status({ state: "notStreamed", mirisAssetUuid: null })
+            );
+            const first = render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() =>
+                expect(screen.getByText(/not yet streamed with miris/i)).toBeInTheDocument()
+            );
+            first.rerender(<MirisStreamViewerComponent {...baseProps} assetKey="" />);
+            await waitFor(() =>
+                expect(screen.queryByText(/not yet streamed with miris/i)).not.toBeInTheDocument()
+            );
+            first.unmount();
+
+            mockGetMirisStreamStatus.mockResolvedValueOnce(status({ state: "processing" }));
+            const second = render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() =>
+                expect(screen.getByText(/miris is preparing this asset/i)).toBeInTheDocument()
+            );
+            second.rerender(<MirisStreamViewerComponent {...baseProps} assetKey="" />);
+            await waitFor(() =>
+                expect(screen.queryByText(/miris is preparing this asset/i)).not.toBeInTheDocument()
+            );
+            expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
         });
     });
 

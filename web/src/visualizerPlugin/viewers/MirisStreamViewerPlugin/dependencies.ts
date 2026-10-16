@@ -37,7 +37,7 @@ export class MirisStreamDependencyManager {
      */
     static async loadMirisStream(): Promise<void> {
         if (MirisStreamDependencyManager.loaded) return;
-        MirisStreamDependencyManager.pending ??= (async () => {
+        const attempt = (MirisStreamDependencyManager.pending ??= (async () => {
             const { Miris } = await import("@miris-inc/core");
             const { useWebGPU } = await import("@miris-inc/three");
             const webGpu = useWebGPU();
@@ -46,9 +46,20 @@ export class MirisStreamDependencyManager {
             await import("@miris-inc/components");
             MirisStreamDependencyManager.loaded = true;
         })().finally(() => {
-            MirisStreamDependencyManager.pending = null;
-        });
-        await MirisStreamDependencyManager.pending;
+            if (MirisStreamDependencyManager.pending === attempt) {
+                MirisStreamDependencyManager.pending = null;
+            }
+        }));
+        await attempt;
+    }
+
+    /**
+     * Drops the in-flight load so the next `loadMirisStream()` starts a new attempt instead of
+     * joining one that never settled. The abandoned attempt still marks the SDK loaded if it
+     * eventually completes.
+     */
+    static abandonPendingLoad(): void {
+        MirisStreamDependencyManager.pending = null;
     }
 
     /**

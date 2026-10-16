@@ -65,6 +65,11 @@ const PROCESSING_POLL_INTERVAL_MS = 90_000;
 // a genuinely unreachable asset. Auth and CSP failures fire no event, so this is their signal.
 const STREAM_LOAD_TIMEOUT_MS = 60_000;
 
+// The SDK load awaits a WebGPU adapter request and three chunk fetches, any of which can stall
+// on a broken GPU process or a stalled connection without ever rejecting; 60s covers a cold
+// fetch of the SDK bundle on a slow link.
+const SDK_LOAD_TIMEOUT_MS = 60_000;
+
 function errorMessage(err: ViewerError): string {
     switch (err.kind) {
         case "NOT_CONFIGURED":
@@ -128,12 +133,17 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
 
     useEffect(() => {
         let cancelled = false;
+        let sdkLoadTimer: ReturnType<typeof setTimeout> | undefined;
 
         async function load() {
             try {
                 if (!assetKey) {
                     setStreamInfo(null);
                     setScene(null);
+                    setError(null);
+                    setProcessingState(null);
+                    setNotStreamed(false);
+                    setLoading(false);
                     return;
                 }
                 setLoading(true);
@@ -251,8 +261,23 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                 }
 
                 // 4. SDK custom elements and the device check, then the scene with this key
-                await MirisStreamDependencyManager.loadMirisStream();
-                if (cancelled) return;
+                try {
+                    const sdkLoadTimeout = new Promise<"timeout">((resolve) => {
+                        sdkLoadTimer = setTimeout(() => resolve("timeout"), SDK_LOAD_TIMEOUT_MS);
+                    });
+                    const sdkLoad = MirisStreamDependencyManager.loadMirisStream();
+                    // A load that rejects after losing the race must not surface as unhandled.
+                    sdkLoad.catch(() => undefined);
+                    const outcome = await Promise.race([sdkLoad, sdkLoadTimeout]);
+                    if (cancelled) return;
+                    if (outcome === "timeout") {
+                        MirisStreamDependencyManager.abandonPendingLoad();
+                        setError({ kind: "LOAD_FAILED" });
+                        return;
+                    }
+                } finally {
+                    clearTimeout(sdkLoadTimer);
+                }
                 if (!MirisStreamDependencyManager.isDeviceSupported()) {
                     setError({ kind: "DEVICE_UNSUPPORTED" });
                     return;
@@ -276,6 +301,7 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
 
         return () => {
             cancelled = true;
+            clearTimeout(sdkLoadTimer);
             if (pollIntervalRef.current) {
                 clearInterval(pollIntervalRef.current);
                 pollIntervalRef.current = null;
