@@ -1034,6 +1034,9 @@ missing constant is a gate no command can name, and an extra one names a gate no
 | `FEATURE_GOVCLOUD`                      | `"GOVCLOUD"`                      | Restricted partition     |
 | `FEATURE_ALLOWUNSAFEEVAL`               | `"ALLOWUNSAFEEVAL"`               | CSP allows `unsafe-eval` |
 | `FEATURE_LOCATIONSERVICES`              | `"LOCATIONSERVICES"`              | Location Service enabled |
+| `FEATURE_MIRIS_STREAMING`               | `"MIRIS_STREAMING"`               | Miris streaming viewer   |
+| `FEATURE_MIRIS_UPLOAD`                  | `"MIRIS_UPLOAD"`                  | Miris upload pipeline    |
+| `FEATURE_MIRIS_PER_VIEW_KEYS`           | `"MIRIS_PER_VIEW_KEYS"`           | Miris per-view keys      |
 | `FEATURE_ALBDEPLOY`                     | `"ALBDEPLOY"`                     | ALB deployment mode      |
 | `FEATURE_CLOUDFRONTDEPLOY`              | `"CLOUDFRONTDEPLOY"`              | CloudFront deployment    |
 | `FEATURE_NOOPENSEARCH`                  | `"NOOPENSEARCH"`                  | OpenSearch disabled      |

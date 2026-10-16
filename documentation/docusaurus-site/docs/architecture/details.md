@@ -278,6 +278,9 @@ Configuration values resolve through a four-tier fallback chain:
 | `GOVCLOUD`                      | AWS GovCloud deployment mode (also set for AWS European Sovereign Cloud deployments) |
 | `ALLOWUNSAFEEVAL`               | Allow `unsafe-eval` in Content Security Policy                                       |
 | `LOCATIONSERVICES`              | Amazon Location Service enabled                                                      |
+| `MIRIS_STREAMING`               | Miris Spatial Streaming viewer plugin enabled                                        |
+| `MIRIS_UPLOAD`                  | Miris auto-upload pipeline enabled                                                   |
+| `MIRIS_PER_VIEW_KEYS`           | Per-view Miris viewer keys enabled                                                   |
 | `ALBDEPLOY`                     | Application Load Balancer deployment mode                                            |
 | `CLOUDFRONTDEPLOY`              | Amazon CloudFront deployment mode                                                    |
 | `NOOPENSEARCH`                  | Amazon OpenSearch disabled                                                           |

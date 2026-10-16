@@ -416,6 +416,9 @@ Output includes total count, list of enabled feature names, and last updated tim
 | `GOVCLOUD`                      | GovCloud-specific functionality (also set for EU Sovereign Cloud deployments) |
 | `ALLOWUNSAFEEVAL`               | Allow unsafe eval operations                                                  |
 | `LOCATIONSERVICES`              | Location-based services and mapping                                           |
+| `MIRIS_STREAMING`               | Miris Spatial Streaming viewer plugin                                         |
+| `MIRIS_UPLOAD`                  | Miris auto-upload pipeline                                                    |
+| `MIRIS_PER_VIEW_KEYS`           | Per-view Miris viewer keys (no shared viewer key in the browser)              |
 | `ALBDEPLOY`                     | Application Load Balancer deployment mode                                     |
 | `CLOUDFRONTDEPLOY`              | Amazon CloudFront deployment mode                                             |
 | `NOOPENSEARCH`                  | Disable Amazon OpenSearch Service functionality                               |
