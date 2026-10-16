@@ -602,6 +602,10 @@ export function generateContentSecurityPolicy(
     if (config.app.miris.enabled) {
         connectSrc.push("https://*.miris.com");
         connectSrc.push("wss://*.miris.com");
+        // The Miris SDK loads part of its engine through a dynamic import of a blob: script URL.
+        if (!scriptSrc.includes("blob:")) {
+            scriptSrc.push("blob:");
+        }
     }
 
     //Add GeoLocation service URL if feature turned on

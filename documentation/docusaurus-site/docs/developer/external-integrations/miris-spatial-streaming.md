@@ -245,6 +245,7 @@ Because a `fileUpload` trigger fires once per matching file, a multi-file USD as
 
 -   `app.miris.enabled` must be `true`, with a valid `app.miris.viewerKey` in the default `static` viewer key mode, or with `app.miris.viewerKeyMode` set to `perView` and `app.miris.apiKeySecretArn` set.
 -   `app.webUi.allowUnsafeEvalFeatures` must be `true` — the Miris SDK uses WebAssembly and requires the `unsafe-eval` CSP directive. Review this with your security team.
+-   When `app.miris.enabled` is `true`, the Content Security Policy also lists `blob:` in `script-src`, because the Miris SDK loads part of its engine from a `blob:` script, and `https://*.miris.com` and `wss://*.miris.com` in `connect-src`. With Miris disabled the policy carries neither.
 -   The upload pipeline requires a Miris Integration Key stored in AWS Secrets Manager, referenced by `app.miris.apiKeySecretArn`.
 -   Browser support: Chrome 90+, Firefox 88+, Safari 14+, Edge 90+, with WebGL 2.0 and WebSocket support. HTTPS is mandatory.
 -   After upload, Miris processes an asset (typically 1–2 hours) before it is streamable.
