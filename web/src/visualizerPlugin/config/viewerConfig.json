@@ -381,7 +381,12 @@
             "supportsMultiFile": false,
             "canFullscreen": true,
             "priority": 0,
-            "dependencies": ["@miris-inc/three", "three"],
+            "dependencies": [
+                "@miris-inc/components",
+                "@miris-inc/core",
+                "@miris-inc/three",
+                "three"
+            ],
             "loadStrategy": "lazy",
             "category": "3d",
             "featuresEnabledRestriction": ["MIRIS_STREAMING"],

@@ -50,7 +50,9 @@ This software includes third party software subject to the following copyrights:
 | @hookform/resolvers                 | ^3.9.0        | MIT                     |
 | @mapbox/mapbox-gl-draw              | ^1.4.1        | ISC                     |
 | @maplibre/maplibre-gl-geocoder      | ^1.5.0        | ISC                     |
-| @miris-inc/three                    | 0.0.8-a58fecf | Apache-2.0              |
+| @miris-inc/components               | 0.0.8-1787ad9 | Apache-2.0              |
+| @miris-inc/core                     | 0.0.8-1787ad9 | Apache-2.0              |
+| @miris-inc/three                    | 0.0.8-1787ad9 | Apache-2.0              |
 | @monaco-editor/react                | ^4.6.0        | MIT                     |
 | @radix-ui/react-context-menu        | ^2.2.2        | MIT                     |
 | @radix-ui/react-dialog              | ^1.1.2        | MIT                     |
@@ -67,7 +69,7 @@ This software includes third party software subject to the following copyrights:
 | @turf/turf                          | ^6.5.0        | MIT                     |
 | @types/mapbox\_\_mapbox-gl-draw     | ^1.4.0        | MIT                     |
 | @types/styled-components            | ^5.1.21       | MIT                     |
-| @types/three                        | ^0.182.0      | MIT                     |
+| @types/three                        | ^0.185.4      | MIT                     |
 | @types/wicg-file-system-access      | 2020.9.6      | MIT                     |
 | arraybuffer-to-buffer               | ^0.0.7        | MIT                     |
 | autoprefixer                        | ^10.4.20      | MIT                     |
@@ -104,7 +106,7 @@ This software includes third party software subject to the following copyrights:
 | semver                              | ^7.5.2        | ISC                     |
 | styled-components                   | ^5.3.3        | MIT                     |
 | tailwindcss                         | ^3.4.14       | MIT                     |
-| three                               | ^0.182.0      | MIT                     |
+| three                               | ^0.185.1      | MIT                     |
 | tough-cookie                        | ^4.1.3        | BSD-3-Clause            |
 | typescript                          | ^5.0.0        | Apache-2.0              |
 | vite                                | ^8.0.16       | MIT                     |

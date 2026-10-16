@@ -2,8 +2,8 @@
  * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Miris Streaming Viewer styles. Canvas sizing is handled by Three.js /
- * parent layout.
+ * Miris Streaming Viewer styles. The <miris-scene> element fills the
+ * container and sizes its own canvas.
  */
 
 .container {
@@ -12,9 +12,10 @@
     height: 100%;
 }
 
-.canvas {
-    width: 100%;
-    height: 100%;
+/* React 18 does not map className to class on custom elements, so the scene is selected here. */
+.container > miris-scene {
+    position: absolute;
+    inset: 0;
     display: block;
 }
 

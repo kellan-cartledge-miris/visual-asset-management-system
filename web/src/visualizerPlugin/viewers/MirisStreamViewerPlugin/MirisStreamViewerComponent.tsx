@@ -2,13 +2,12 @@
  * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
+import type {} from "@miris-inc/components/react";
+import type { MirisScene, MirisStream } from "@miris-inc/components";
 import React, { useEffect, useRef, useState } from "react";
 import Alert from "@cloudscape-design/components/alert";
 import Box from "@cloudscape-design/components/box";
 import SpaceBetween from "@cloudscape-design/components/space-between";
-import { MirisScene, MirisStream } from "@miris-inc/three";
-import { PerspectiveCamera, Vector3, WebGLRenderer } from "three";
-import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { ViewerPluginProps } from "../../core/types";
 import {
     fetchFileInfo,
@@ -27,6 +26,7 @@ import {
     streamDisposition,
     toStatusFilePath,
 } from "./streamStatus";
+import { MirisStreamDependencyManager } from "./dependencies";
 import styles from "./MirisStreamViewer.module.css";
 
 type ViewerError =
@@ -37,7 +37,7 @@ type ViewerError =
     | { kind: "INVALID_UUID" }
     | { kind: "LOAD_FAILED" }
     | { kind: "STREAM_TIMEOUT"; uuid: string }
-    | { kind: "WEBGL_UNAVAILABLE" }
+    | { kind: "DEVICE_UNSUPPORTED" }
     | { kind: "MIRIS_PROCESSING_ERROR" };
 
 type ProcessingState = { state: string };
@@ -48,46 +48,22 @@ type StreamInfo = {
     sourceVersionId: string | null;
 };
 
+// A scene is rendered only once its viewer key exists: the SDK does not retry a stream that
+// started without one, so a new key mounts a new scene (`generation` is its React key).
+type SceneConfig = {
+    uuid: string;
+    viewerKey: string;
+    generation: number;
+};
+
 // Poll Miris status every 90s while an asset is still being prepared on the
 // Miris side. Typical promotion to streamable takes 1–2 hours.
 const PROCESSING_POLL_INTERVAL_MS = 90_000;
 
-/**
- * Position the camera so the streamed asset fits comfortably in the view, and set the
- * OrbitControls target to the asset center. Uses standard "fit to view" geometry:
- *   distance = (radius / sin(fov/2)) * padding
- * Camera is placed on a diagonal so the viewer sees three faces of the bounding box.
- * Mutates `camera` and `controls` in place; caller must already have wired them up.
- */
-function frameCameraToBounds(
-    bounds: { min: { x: number; y: number; z: number }; max: { x: number; y: number; z: number } },
-    camera: PerspectiveCamera,
-    controls: OrbitControls
-): void {
-    const center = new Vector3(
-        (bounds.min.x + bounds.max.x) / 2,
-        (bounds.min.y + bounds.max.y) / 2,
-        (bounds.min.z + bounds.max.z) / 2
-    );
-    const size = new Vector3(
-        bounds.max.x - bounds.min.x,
-        bounds.max.y - bounds.min.y,
-        bounds.max.z - bounds.min.z
-    );
-    const radius = size.length() / 2 || 1; // protect against zero-size bounds
-    const fovRad = (camera.fov * Math.PI) / 180;
-    const distance = (radius / Math.sin(fovRad / 2)) * 1.4; // 1.4 = padding factor
-
-    // Diagonal offset so the user sees the asset in 3/4 view, not flat-on.
-    const direction = new Vector3(1, 0.6, 1).normalize();
-    camera.position.copy(center).addScaledVector(direction, distance);
-    camera.near = Math.max(distance / 100, 0.01);
-    camera.far = distance * 100;
-    camera.updateProjectionMatrix();
-
-    controls.target.copy(center);
-    controls.update();
-}
+// First-frame load includes the WebSocket handshake, viewer key validation and the initial
+// fetch from the content CDN; 60s gives cold connections headroom while still failing fast on
+// a genuinely unreachable asset. Auth and CSP failures fire no event, so this is their signal.
+const STREAM_LOAD_TIMEOUT_MS = 60_000;
 
 function errorMessage(err: ViewerError): string {
     switch (err.kind) {
@@ -109,8 +85,8 @@ function errorMessage(err: ViewerError): string {
                 "The asset reached a streamable state but the first frame didn't arrive in time. " +
                 "Try reloading; if it keeps timing out, verify the asset still exists in app.miris.com."
             );
-        case "WEBGL_UNAVAILABLE":
-            return "Your browser does not support WebGL 2.0. Required browsers: Chrome 90+, Firefox 88+, Safari 14+, Edge 90+.";
+        case "DEVICE_UNSUPPORTED":
+            return "Miris streaming is not supported on this device: the browser's WebGL 2.0 support is unavailable or incomplete. Required browsers: Chrome 90+, Firefox 88+, Safari 14+, Edge 90+.";
         case "MIRIS_PROCESSING_ERROR":
             return "Miris processing failed. Check this asset in app.miris.com.";
     }
@@ -133,26 +109,21 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
     versionId,
     assetVersionId,
 }) => {
-    const containerRef = useRef<HTMLDivElement>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<ViewerError | null>(null);
     const [notStreamed, setNotStreamed] = useState(false);
     const [streamInfo, setStreamInfo] = useState<StreamInfo | null>(null);
     const [staleStream, setStaleStream] = useState(false);
     const [processingState, setProcessingState] = useState<ProcessingState | null>(null);
+    // Viewer key and asset of the rendered scene, held in memory for this open only.
+    const [scene, setScene] = useState<SceneConfig | null>(null);
     // Bumped when the status poll detects a state change so the main effect re-runs and
-    // sets up the renderer. The dep on this var is what triggers re-entry into load().
+    // mounts the scene. The dep on this var is what triggers re-entry into load().
     const [statusFlipTrigger, setStatusFlipTrigger] = useState(0);
 
-    // Refs to instantiated SDK / Three.js objects for cleanup
-    const sceneRef = useRef<MirisScene | null>(null);
-    const streamRef = useRef<MirisStream | null>(null);
-    const cameraRef = useRef<PerspectiveCamera | null>(null);
-    const rendererRef = useRef<WebGLRenderer | null>(null);
-    const controlsRef = useRef<OrbitControls | null>(null);
-    const loadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const resizeObserverRef = useRef<ResizeObserver | null>(null);
-    const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const sceneRef = useRef<MirisScene>(null);
+    const streamRef = useRef<MirisStream>(null);
+    const sceneGenerationRef = useRef(0);
     const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     useEffect(() => {
@@ -164,6 +135,7 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                 setLoading(true);
                 setError(null);
                 setNotStreamed(false);
+                setScene(null);
 
                 // 1. Stream status of the viewed file
                 const filePath = toStatusFilePath(assetKey);
@@ -236,8 +208,8 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                 }
                 setProcessingState(null);
 
-                // 3. Viewer key: minted per open in per-view mode (kept in this scope only),
-                // otherwise the shared key from the app config
+                // 3. Viewer key: minted per open in per-view mode (held in memory for this
+                // open only), otherwise the shared key from the app config
                 const appConfig = appCache.getItem("config") as
                     | { mirisViewerKey?: string; featuresEnabled?: string | string[] }
                     | undefined;
@@ -274,103 +246,12 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                     return;
                 }
 
-                // 4. WebGL renderer
-                let renderer: WebGLRenderer;
-                try {
-                    renderer = new WebGLRenderer({ antialias: true });
-                } catch (e) {
-                    if (!cancelled) setError({ kind: "WEBGL_UNAVAILABLE" });
-                    return;
-                }
-                rendererRef.current = renderer;
-
-                // 5. Scene + stream + camera + controls
-                const scene = new MirisScene({ viewerKey });
-                sceneRef.current = scene;
-
-                const stream = new MirisStream({ uuid });
-                streamRef.current = stream;
-                scene.add(stream as any);
-
-                const camera = new PerspectiveCamera(50, 1);
-                cameraRef.current = camera;
-
-                if (containerRef.current) {
-                    const { width, height } = containerRef.current.getBoundingClientRect();
-                    renderer.setSize(width, height);
-                    camera.aspect = width / height;
-                    camera.updateProjectionMatrix();
-                    try {
-                        containerRef.current.appendChild(renderer.domElement);
-                    } catch (_domErr) {
-                        // domElement may not be a real Node in test environments; skip append
-                    }
-                }
-
-                // Three.js OrbitControls — orbit + scroll-zoom + right-click-pan.
-                // Miris docs explicitly recommend this over MirisControls (drag-rotate only).
-                const controls = new OrbitControls(camera, renderer.domElement);
-                controls.enableDamping = true;
-                controls.dampingFactor = 0.08;
-                controls.enableZoom = true;
-                controls.enablePan = true;
-                controlsRef.current = controls;
-
-                // Provisional camera position — slightly off-origin so OrbitControls has a
-                // direction to look in before the scene loads. Refined by frameCameraToBounds
-                // on the 'sceneloaded' event below.
-                camera.position.set(0, 0, 5);
-                controls.target.set(0, 0, 0);
-                controls.update();
-
-                // 6. Load timing:
-                //   - 'streamloaded' clears the 10s timeout (first data arrived).
-                //   - 'sceneloaded' fires when the full hierarchy is resolved; that's when
-                //     stream.getBounds() returns the final WASM bounding box. Box3.setFromObject
-                //     does NOT work on Miris geometry — getBounds() is the only reliable path
-                //     (documented as a stable undocumented API in Miris technical docs).
-                // First-frame load includes WebSocket handshake + JWT validation +
-                // initial octree fetch from the content CDN; 60s gives cold connections
-                // headroom while still failing fast on a genuinely unreachable asset.
-                const loadTimer = setTimeout(() => {
-                    if (!cancelled) setError({ kind: "STREAM_TIMEOUT", uuid });
-                }, 60_000);
-                loadTimerRef.current = loadTimer;
-                stream.addEventListener("streamloaded", () => clearTimeout(loadTimer));
-                stream.addEventListener("sceneloaded", () => {
-                    if (cancelled) return;
-                    try {
-                        frameCameraToBounds(stream.getBounds(), camera, controls);
-                    } catch (e) {
-                        // getBounds() can throw if called before geometry is ready in
-                        // edge cases. Leaving the camera at its provisional position is
-                        // a graceful fallback — orbit/zoom still works.
-                        console.warn("Miris viewer: failed to fit camera to bounds", e);
-                    }
-                });
-
-                // 7. Animation loop
-                renderer.setAnimationLoop(() => {
-                    controls.update();
-                    renderer.render(scene as any, camera);
-                });
-
-                // 8. Debounced ResizeObserver
-                if (containerRef.current && typeof ResizeObserver !== "undefined") {
-                    const ro = new ResizeObserver((entries) => {
-                        if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
-                        resizeTimeoutRef.current = setTimeout(() => {
-                            const { width, height } = entries[0].contentRect;
-                            renderer.setSize(width, height);
-                            camera.aspect = width / height;
-                            camera.updateProjectionMatrix();
-                        }, 100);
-                    });
-                    ro.observe(containerRef.current);
-                    resizeObserverRef.current = ro;
-                }
-
-                if (!cancelled) setLoading(false);
+                // 4. SDK custom elements, then the scene with this key
+                await MirisStreamDependencyManager.loadMirisStream();
+                if (cancelled) return;
+                sceneGenerationRef.current += 1;
+                setScene({ uuid, viewerKey, generation: sceneGenerationRef.current });
+                setLoading(false);
             } catch (e) {
                 // Diagnostic logging — do NOT pass the viewer key here.
                 console.error("Miris viewer load failed", {
@@ -387,30 +268,38 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
 
         return () => {
             cancelled = true;
-            if (loadTimerRef.current) clearTimeout(loadTimerRef.current);
-            if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
             if (pollIntervalRef.current) {
                 clearInterval(pollIntervalRef.current);
                 pollIntervalRef.current = null;
             }
-            if (resizeObserverRef.current) {
-                resizeObserverRef.current.disconnect();
-                resizeObserverRef.current = null;
-            }
-            if (rendererRef.current) rendererRef.current.setAnimationLoop(null);
-            if (controlsRef.current) controlsRef.current.dispose();
-            if (streamRef.current) streamRef.current.removeFromParent();
-            if (rendererRef.current) {
-                rendererRef.current.renderLists.dispose();
-                rendererRef.current.dispose();
-            }
-            sceneRef.current = null;
-            streamRef.current = null;
-            controlsRef.current = null;
-            rendererRef.current = null;
-            cameraRef.current = null;
         };
     }, [assetId, databaseId, assetKey, versionId, statusFlipTrigger]);
+
+    // The scene element owns rendering, camera framing, resize and teardown. The stream's
+    // first data clears the load timeout; the scene's `error` event reports a WebGL shader
+    // failure. Any viewer error unmounts the scene, which releases its renderer.
+    const mountedScene = error ? null : scene;
+    useEffect(() => {
+        const sceneElement = sceneRef.current;
+        const streamElement = streamRef.current;
+        if (!mountedScene || !sceneElement || !streamElement) return;
+        const loadTimer = setTimeout(
+            () => setError({ kind: "STREAM_TIMEOUT", uuid: mountedScene.uuid }),
+            STREAM_LOAD_TIMEOUT_MS
+        );
+        const onStreamLoaded = () => clearTimeout(loadTimer);
+        const onSceneError = () => {
+            clearTimeout(loadTimer);
+            setError({ kind: "DEVICE_UNSUPPORTED" });
+        };
+        streamElement.addEventListener("streamloaded", onStreamLoaded);
+        sceneElement.addEventListener("error", onSceneError);
+        return () => {
+            clearTimeout(loadTimer);
+            streamElement.removeEventListener("streamloaded", onStreamLoaded);
+            sceneElement.removeEventListener("error", onSceneError);
+        };
+    }, [mountedScene]);
 
     // Stale-stream check. The host passes the viewed file version as `versionId`, but it can
     // be absent for the current version (e.g. a basic-mode listing, or before the host has
@@ -469,7 +358,18 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
     const streaming = !!streamInfo && !error && !loading && !processingState;
 
     return (
-        <div ref={containerRef} className={styles.container}>
+        <div className={styles.container}>
+            {mountedScene && (
+                <miris-scene
+                    key={mountedScene.generation}
+                    ref={sceneRef}
+                    viewer-key={mountedScene.viewerKey}
+                    camera-fit="contain"
+                >
+                    <miris-camera controls />
+                    <miris-stream ref={streamRef} uuid={mountedScene.uuid} controls />
+                </miris-scene>
+            )}
             {error && <div className={styles.errorOverlay}>{errorMessage(error)}</div>}
             {processingState && !error && (
                 <div className={styles.errorOverlay}>
