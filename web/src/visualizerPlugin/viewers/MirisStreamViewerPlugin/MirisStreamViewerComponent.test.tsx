@@ -290,7 +290,8 @@ describe("MirisStreamViewerComponent", () => {
             jest.useRealTimers();
         });
 
-        const neverSettles = () => mockLoadMirisStream.mockReturnValueOnce(new Promise(() => {}));
+        const neverSettles = () =>
+            mockLoadMirisStream.mockReturnValueOnce(new Promise<void>(() => undefined));
         const waitForSdkLoad = (calls: number) =>
             waitFor(() => expect(mockLoadMirisStream).toHaveBeenCalledTimes(calls));
 

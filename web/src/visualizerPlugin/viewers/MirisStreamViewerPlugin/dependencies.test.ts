@@ -2,6 +2,7 @@
  * Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
+import { waitFor } from "@testing-library/react";
 import type * as Dependencies from "./dependencies";
 
 // jsdom cannot evaluate the SDK, so all three packages are stand-ins. The real `@miris-inc/three`
@@ -13,6 +14,10 @@ const mockMiris = { tryUseShark: true };
 const mockGpu: { adapter: object | null } = { adapter: null };
 const mockEvents: string[] = [];
 let mockComponentsFail = false;
+// Each `import("@miris-inc/components")` takes the next gate, if any, and settles with it.
+// The stand-in module is thenable so the dynamic import itself can be held pending.
+const mockComponentsGates: Array<Promise<void>> = [];
+let mockComponentsImports = 0;
 
 jest.mock("@miris-inc/core", () => {
     mockEvents.push("core");
@@ -26,7 +31,14 @@ jest.mock("@miris-inc/three", () => {
 jest.mock("@miris-inc/components", () => {
     if (mockComponentsFail) throw new Error("chunk failed");
     mockEvents.push(`components tryUseShark=${mockMiris.tryUseShark}`);
-    return {};
+    return {
+        then: (resolve: (value: object) => void, reject: (reason: unknown) => void) => {
+            mockComponentsImports += 1;
+            const gate = mockComponentsGates.shift();
+            if (gate) gate.then(() => resolve({}), reject);
+            else resolve({});
+        },
+    };
 });
 
 const mockRemovePluginStylesheets = jest.fn();
@@ -172,11 +184,30 @@ describe("MirisStreamDependencyManager.loadMirisStream", () => {
 
     it("starts a new attempt after the pending load is abandoned, and a stale attempt does not clear it", async () => {
         const { MirisStreamDependencyManager } = freshModule();
+        let failA: (reason: Error) => void = () => undefined;
+        let openB: () => void = () => undefined;
+        mockComponentsGates.push(
+            new Promise<void>((_resolve, reject) => (failA = reject)),
+            new Promise<void>((resolve) => (openB = resolve))
+        );
+        mockComponentsImports = 0;
+
         const first = MirisStreamDependencyManager.loadMirisStream();
         MirisStreamDependencyManager.abandonPendingLoad();
         const second = MirisStreamDependencyManager.loadMirisStream();
+        await waitFor(() => expect(mockComponentsImports).toBe(2));
+
+        // The abandoned attempt fails, so it never marks the SDK loaded, and runs its finally
+        // while the second is still pending.
+        failA(new Error("stale attempt failed"));
+        await expect(first).rejects.toThrow("stale attempt failed");
+        const importsBefore = mockComponentsImports;
         const third = MirisStreamDependencyManager.loadMirisStream();
-        await Promise.all([first, second, third]);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(mockComponentsImports).toBe(importsBefore);
+
+        openB();
+        await expect(Promise.all([second, third])).resolves.toBeDefined();
         expect(getContext).toHaveBeenCalledTimes(2);
     });
 
