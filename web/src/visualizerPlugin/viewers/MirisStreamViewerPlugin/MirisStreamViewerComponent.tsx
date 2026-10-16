@@ -4,7 +4,7 @@
  */
 import type {} from "@miris-inc/components/react";
 import type { MirisScene, MirisStream } from "@miris-inc/components";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import Alert from "@cloudscape-design/components/alert";
 import Box from "@cloudscape-design/components/box";
 import SpaceBetween from "@cloudscape-design/components/space-between";
@@ -131,7 +131,11 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
 
         async function load() {
             try {
-                if (!assetKey) return;
+                if (!assetKey) {
+                    setStreamInfo(null);
+                    setScene(null);
+                    return;
+                }
                 setLoading(true);
                 setError(null);
                 setNotStreamed(false);
@@ -246,9 +250,13 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                     return;
                 }
 
-                // 4. SDK custom elements, then the scene with this key
+                // 4. SDK custom elements and the device check, then the scene with this key
                 await MirisStreamDependencyManager.loadMirisStream();
                 if (cancelled) return;
+                if (!MirisStreamDependencyManager.isDeviceSupported()) {
+                    setError({ kind: "DEVICE_UNSUPPORTED" });
+                    return;
+                }
                 sceneGenerationRef.current += 1;
                 setScene({ uuid, viewerKey, generation: sceneGenerationRef.current });
                 setLoading(false);
@@ -277,9 +285,10 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
 
     // The scene element owns rendering, camera framing, resize and teardown. The stream's
     // first data clears the load timeout; the scene's `error` event reports a WebGL shader
-    // failure. Any viewer error unmounts the scene, which releases its renderer.
+    // failure. Any viewer error unmounts the scene, which releases its renderer. The listeners
+    // attach in the commit, ahead of anything the elements dispatch once their async connect runs.
     const mountedScene = error ? null : scene;
-    useEffect(() => {
+    useLayoutEffect(() => {
         const sceneElement = sceneRef.current;
         const streamElement = streamRef.current;
         if (!mountedScene || !sceneElement || !streamElement) return;

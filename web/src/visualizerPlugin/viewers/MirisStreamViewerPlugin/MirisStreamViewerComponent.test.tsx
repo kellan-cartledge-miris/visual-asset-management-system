@@ -18,10 +18,12 @@ jest.mock("@miris-inc/components", () => ({}));
 jest.mock("./dependencies", () => ({
     MirisStreamDependencyManager: {
         loadMirisStream: jest.fn().mockResolvedValue(undefined),
+        isDeviceSupported: jest.fn().mockReturnValue(true),
         cleanup: jest.fn(),
     },
 }));
 const mockLoadMirisStream = MirisStreamDependencyManager.loadMirisStream as jest.Mock;
+const mockIsDeviceSupported = MirisStreamDependencyManager.isDeviceSupported as jest.Mock;
 
 // --- Mock the stream status and file info calls ---
 const mockGetMirisStreamStatus = jest.fn();
@@ -190,6 +192,15 @@ describe("MirisStreamViewerComponent", () => {
             expect(sceneElement()).toBeNull();
         });
 
+        it("removes the scene when the viewed file is cleared", async () => {
+            const view = render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitForScene();
+
+            view.rerender(<MirisStreamViewerComponent {...baseProps} assetKey="" />);
+            await waitFor(() => expect(sceneElement()).toBeNull());
+            expect(screen.queryByText("Scene stream")).not.toBeInTheDocument();
+        });
+
         it("removes the scene element on unmount", async () => {
             const { unmount } = render(<MirisStreamViewerComponent {...baseProps} />);
             await waitForScene();
@@ -245,6 +256,19 @@ describe("MirisStreamViewerComponent", () => {
             });
             expect(jest.getTimerCount()).toBe(0);
             consoleError.mockRestore();
+        });
+
+        it("fails at once without mounting a scene when the device cannot render", async () => {
+            jest.useFakeTimers();
+            mockIsDeviceSupported.mockReturnValueOnce(false);
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() =>
+                expect(screen.getByText(/not supported on this device/i)).toBeInTheDocument()
+            );
+            expect(mockLoadMirisStream).toHaveBeenCalledTimes(1);
+            expect(sceneElement()).toBeNull();
+            expect(streamElement()).toBeNull();
+            expect(jest.getTimerCount()).toBe(0);
         });
 
         it("shows the unsupported-device error when the scene reports an error", async () => {
