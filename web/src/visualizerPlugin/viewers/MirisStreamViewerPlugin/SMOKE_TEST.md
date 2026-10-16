@@ -111,6 +111,7 @@ Reopen `smoke-test.usdz`. Verify:
 ### 4b. Renderer selection and unsupported devices
 
 -   [ ] In a WebGPU browser the stream renders with the default engine.
+-   [ ] The browser console shows which engine started: `webgpu is available! initializing shark renderer` for WebGPU, `shark is turned off. initializing spork renderer` for WebGL 2. These lines come from the SDK and can change between SDK versions, so treat them as informational.
 -   [ ] Reload with `?shark=0` in the real query string, before the `#` (for example `https://<vams-host>/?shark=0#/...`). The stream renders with the WebGL 2 engine, and the framing and controls from step 4 behave the same.
 -   [ ] In a browser with no WebGPU adapter, the viewer selects the WebGL 2 engine on its own and streams.
 -   [ ] In a browser with neither WebGPU nor WebGL 2 (for example WebGL disabled in the browser settings), opening the file shows "Miris streaming is not supported on this device" immediately, not a blank panel or a 60-second wait.

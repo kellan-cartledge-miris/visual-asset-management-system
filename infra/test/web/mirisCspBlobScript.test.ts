@@ -64,7 +64,8 @@ describe("Miris blob: script source in the CSP", () => {
 });
 
 /**
- * The ALB carries the policy in one listener attribute capped at 1 KB, and Miris adds about 58 bytes.
+ * The ALB carries the policy in one listener attribute capped at 1 KB. Miris adds about 44 bytes (`blob:` and the `*.miris.com` hosts), about 58 with the
+ * `'unsafe-eval'` that `allowUnsafeEvalFeatures` adds and Miris requires.
  * The documented boundary (security.md, "Policy size on the Application Load Balancer path") is that a
  * Miris deployment on the ALB with a federated Cognito domain and Location Service in a 14-character
  * region does not fit. Moving the boundary should be a decision, so these pin both sides of it.

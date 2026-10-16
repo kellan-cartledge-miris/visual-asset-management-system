@@ -58,7 +58,7 @@ With `app.miris.enabled`, the Content Security Policy gains `blob:` in `script-s
 
 ### Troubleshooting
 
--   **The panel stays blank or shows "Miris streaming is not supported on this device"**: the browser grants neither a WebGPU adapter nor a WebGL 2 context. Enable hardware acceleration, or use a supported browser.
+-   **The panel shows "Miris streaming is not supported on this device"**: the browser grants neither a WebGPU adapter nor a WebGL 2 context, or the WebGL 2 engine could not compile its shaders. Enable hardware acceleration, or use a supported browser.
 -   **A render problem on a WebGPU browser**: reload with `?shark=0` to use the WebGL 2 engine.
 -   **"The Miris viewer failed to load"**: the viewer waits 60 seconds for the SDK to load and then stops. Check the Network tab for blocked or stalled SDK and `.wasm` requests and the console for CSP violations.
 -   **"Timed out waiting for Miris to start streaming"**: the stream sends no first frame within 60 seconds. An invalid or wrong-workspace viewer key and a blocked `*.miris.com` connection also surface this way, because they fire no event.
