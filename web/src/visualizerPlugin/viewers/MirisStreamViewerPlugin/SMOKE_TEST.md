@@ -100,7 +100,8 @@ Reopen `smoke-test.usdz`. Verify:
 -   [ ] `Smoke Test` appears as the overlay label.
 -   [ ] No "different version" banner is shown (no source version is recorded).
 -   [ ] **Fill and framing:** the scene fills the viewer panel, and the asset is framed and centered in view (the `<miris-scene camera-fit="contain">` element does the framing), not at the origin inside the asset. Resizing the window or the panel keeps the asset framed.
--   [ ] **Drag to orbit:** left-click drag orbits the camera around the asset center. The asset itself stays fixed; the camera moves.
+-   [ ] **Drag to orbit:** left-click drag orbits the camera around the asset center. The asset itself stays fixed; the camera moves. This holds whether the drag starts on the asset or on empty space.
+-   [ ] **Backdrop:** the viewer background stays black while the stream loads and after the asset appears.
 -   [ ] **Scroll to zoom:** mouse wheel / pinch zooms toward the orbit target.
 -   [ ] **Right-click drag to pan:** moves the orbit target through space.
 -   [ ] **Damping:** motion has a small inertial smoothing (release-and-keep-moving).

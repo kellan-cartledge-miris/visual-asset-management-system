@@ -402,7 +402,7 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                     camera-fit="contain"
                 >
                     <miris-camera controls />
-                    <miris-stream ref={streamRef} uuid={mountedScene.uuid} controls />
+                    <miris-stream ref={streamRef} uuid={mountedScene.uuid} />
                 </miris-scene>
             )}
             {error && <div className={styles.errorOverlay}>{errorMessage(error)}</div>}

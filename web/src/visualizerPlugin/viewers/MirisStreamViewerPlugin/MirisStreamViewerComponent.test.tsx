@@ -133,18 +133,16 @@ describe("MirisStreamViewerComponent", () => {
             expect(streamElement()).toHaveAttribute("uuid", VALID_UUID);
         });
 
-        it("enables camera and stream controls and never renders controls as false", async () => {
+        it("orbits the camera and leaves the asset fixed", async () => {
             render(<MirisStreamViewerComponent {...baseProps} />);
             const scene = await waitForScene();
-            const controlled = [
-                scene.querySelector("miris-camera"),
-                scene.querySelector("miris-stream"),
-            ];
-            for (const element of controlled) {
-                // The elements treat any present `controls` attribute as enabled.
-                expect(element).toHaveAttribute("controls");
-                expect(element?.getAttribute("controls")).not.toBe("false");
-            }
+            const camera = scene.querySelector("miris-camera");
+            // The elements treat any present `controls` attribute as enabled.
+            expect(camera).toHaveAttribute("controls");
+            expect(camera?.getAttribute("controls")).not.toBe("false");
+            // Stream controls rotate the asset about its own origin on the same drag that
+            // orbits the camera, so the stream carries no `controls` attribute at all.
+            expect(streamElement()).not.toHaveAttribute("controls");
         });
 
         it("registers the SDK elements before rendering the scene", async () => {
