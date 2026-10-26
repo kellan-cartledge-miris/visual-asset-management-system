@@ -185,6 +185,34 @@ const MIRIS_VIEWER_KEY_MODES = ["static", "perView"];
 /** Settings read from `app.miris` whose legacy location is `app.miris.upload` (config.ts: `resolveMirisLegacyAlias`). */
 const MIRIS_LEGACY_ALIAS_FIELDS = ["apiKeySecretArn", "mirisApiBaseUrl"];
 
+/** Shortest value accepted as `app.miris.viewerKey` (config.ts: `MIRIS_VIEWER_KEY_MIN_LENGTH`). */
+const MIRIS_VIEWER_KEY_MIN_LENGTH = 16;
+
+/** A complete Secrets Manager secret ARN, suffix included (config.ts: `MIRIS_SECRET_ARN_PATTERN`). */
+const MIRIS_SECRET_ARN_PATTERN =
+    /^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:\d{12}:secret:[A-Za-z0-9/_+=.@-]+-[A-Za-z0-9]{6}$/;
+
+/**
+ * File extensions the GLOBAL "Miris stream" file metadata schema accepts: the `fileKeyTypeRestriction`
+ * of infra/lib/nestedStacks/apiLambda/constructs/dynamodb-metadataschema-miris-stream.json, which
+ * config.ts reads directly (config.ts: `MIRIS_STREAM_SCHEMA_EXTENSIONS`).
+ */
+export const MIRIS_STREAM_SCHEMA_EXTENSIONS = [".usd", ".usda", ".usdc", ".usdz"];
+
+/** config.ts `parseMirisTriggerExtensions`: the extensions, or undefined when malformed. */
+function parseMirisTriggerExtensions(value: unknown): string[] | undefined {
+    if (typeof value !== "string") return undefined;
+    const extensions = value.split(",").map((extension) => extension.trim());
+    return extensions.every((extension) => /^\.[a-z0-9]+$/.test(extension))
+        ? extensions
+        : undefined;
+}
+
+/** config.ts `isPositiveInteger`. */
+function isPositiveInteger(value: unknown): boolean {
+    return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
 /** Miris enabled in per-view viewer key mode. An absent mode is filled with "static". */
 function mirisPerView(cfg: ConfigShape): boolean {
     return !!g(cfg, "app.miris.enabled") && g(cfg, "app.miris.viewerKeyMode") === "perView";
@@ -402,7 +430,8 @@ function usesPrivateSubnetPipeline(cfg: ConfigShape): boolean {
         !!g(cfg, "app.pipelines.useIsaacLabTraining.enabled") ||
         !!g(cfg, "app.pipelines.useNvidiaCosmos.enabled") ||
         !!g(cfg, "app.pipelines.useNvidiaCosmos3.enabled") ||
-        !!g(cfg, "app.pipelines.useNvidiaGr00t.enabled")
+        !!g(cfg, "app.pipelines.useNvidiaGr00t.enabled") ||
+        !!g(cfg, "app.miris.upload.enabled")
     );
 }
 
@@ -606,6 +635,12 @@ const VPC_REQUIRING_FEATURES: {
         label: "pipelines.useConversionCoordinateTransform",
         fieldPaths: ["app.pipelines.useConversionCoordinateTransform.enabled"],
         appliesWhen: (c) => !!g(c, "app.pipelines.useConversionCoordinateTransform.enabled"),
+    },
+    {
+        id: "vpc-required-miris-upload",
+        label: "miris.upload",
+        fieldPaths: ["app.miris.upload.enabled"],
+        appliesWhen: (c) => !!g(c, "app.miris.upload.enabled"),
     },
 ];
 
@@ -1410,14 +1445,15 @@ export const RULES: Rule[] = [
         severity: "error",
         fieldPaths: ["app.useGlobalVpc.optionalExternalPrivateSubnetIds"],
         // The private-subnet list is wider than the public-subnet one: every AWS Batch pipeline places
-        // its compute environment in private subnets, so Splat Toolbox, Isaac Lab Training and the
-        // three NVIDIA pipelines require one too, not only RapidPipeline and ModelOps.
+        // its compute environment in private subnets, so Splat Toolbox, Isaac Lab Training, the
+        // three NVIDIA pipelines and the Miris upload pipeline require one too, not only
+        // RapidPipeline and ModelOps.
         appliesWhen: (c) =>
             hasExternalVpc(c) &&
             usesPrivateSubnetPipeline(c) &&
             isUnset(g(c, "app.useGlobalVpc.optionalExternalPrivateSubnetIds")),
         message:
-            "Must define at least one private subnet ID when using an external VPC with a pipeline that requires private subnets (RapidPipeline, ModelOps, Splat Toolbox, Isaac Lab Training, or an NVIDIA pipeline).",
+            "Must define at least one private subnet ID when using an external VPC with a pipeline that requires private subnets (RapidPipeline, ModelOps, Splat Toolbox, Isaac Lab Training, an NVIDIA pipeline, or the Miris upload pipeline).",
     },
     {
         id: "vpc-public-subnets",
@@ -2169,15 +2205,6 @@ export const RULES: Rule[] = [
             "The Miris auto-upload pipeline requires Miris Spatial Streaming (app.miris.enabled). It records the Miris asset UUID in USD file metadata that the viewer streams.",
     },
     {
-        id: "miris-upload-unsafe-eval",
-        severity: "error",
-        fieldPaths: ["app.miris.upload.enabled", "app.webUi.allowUnsafeEvalFeatures"],
-        appliesWhen: (c) =>
-            g(c, "app.miris.upload.enabled") && !g(c, "app.webUi.allowUnsafeEvalFeatures"),
-        message:
-            "The Miris auto-upload pipeline requires app.webUi.allowUnsafeEvalFeatures = true.",
-    },
-    {
         id: "miris-upload-secret-required",
         severity: "error",
         fieldPaths: ["app.miris.apiKeySecretArn"],
@@ -2185,6 +2212,62 @@ export const RULES: Rule[] = [
             g(c, "app.miris.upload.enabled") && isUnset(g(c, "app.miris.apiKeySecretArn")),
         message:
             "The Miris auto-upload pipeline requires app.miris.apiKeySecretArn, the Secrets Manager ARN of the Miris Integration Key.",
+    },
+    // An absent upload field is filled with its default before these checks run.
+    ...(
+        [
+            ["taskTimeoutSeconds", "miris-upload-task-timeout"],
+            ["maxAssetSizeBytes", "miris-upload-max-asset-size"],
+        ] as const
+    ).map(
+        ([field, id]): Rule => ({
+            id,
+            severity: "error",
+            fieldPaths: [`app.miris.upload.${field}`],
+            appliesWhen: (c) => {
+                const value = g(c, `app.miris.upload.${field}`);
+                return (
+                    !!g(c, "app.miris.upload.enabled") &&
+                    !isAbsent(value) &&
+                    !isPositiveInteger(value)
+                );
+            },
+            message: `app.miris.upload.${field} must be a positive whole number.`,
+        })
+    ),
+    {
+        id: "miris-upload-trigger-extensions-format",
+        severity: "error",
+        fieldPaths: ["app.miris.upload.triggerExtensions"],
+        appliesWhen: (c) => {
+            const value = g(c, "app.miris.upload.triggerExtensions");
+            return (
+                !!g(c, "app.miris.upload.enabled") &&
+                !isAbsent(value) &&
+                parseMirisTriggerExtensions(value) === undefined
+            );
+        },
+        message:
+            'app.miris.upload.triggerExtensions must be a comma-separated list of lowercase file extensions, such as ".usd,.usdz".',
+    },
+    {
+        id: "miris-upload-trigger-extensions-schema",
+        severity: "error",
+        fieldPaths: ["app.miris.upload.triggerExtensions"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.miris.upload.enabled")) return false;
+            const extensions = parseMirisTriggerExtensions(
+                g(c, "app.miris.upload.triggerExtensions")
+            );
+            return (
+                extensions !== undefined &&
+                extensions.some((extension) => !MIRIS_STREAM_SCHEMA_EXTENSIONS.includes(extension))
+            );
+        },
+        message:
+            "app.miris.upload.triggerExtensions may only list extensions the Miris stream file metadata schema accepts (" +
+            MIRIS_STREAM_SCHEMA_EXTENSIONS.join(", ") +
+            ").",
     },
     {
         id: "miris-govcloud",
@@ -2236,11 +2319,21 @@ export const RULES: Rule[] = [
         fieldPaths: ["app.miris.viewerKey"],
         appliesWhen: (c) => {
             if (!g(c, "app.miris.enabled") || mirisPerView(c)) return false; // perView needs no viewer key
-            const key = g(c, "app.miris.viewerKey");
-            return isUnset(key) || String(key).length < 16;
+            return isUnset(g(c, "app.miris.viewerKey"));
         },
         message:
             "Miris Spatial Streaming in static viewer key mode requires app.miris.viewerKey. Generate one in the Miris Portal or via `miris viewerkey create`.",
+    },
+    {
+        id: "miris-viewerkey-short",
+        severity: "error",
+        fieldPaths: ["app.miris.viewerKey"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.miris.enabled") || mirisPerView(c)) return false;
+            const key = g(c, "app.miris.viewerKey");
+            return !isUnset(key) && String(key).length < MIRIS_VIEWER_KEY_MIN_LENGTH;
+        },
+        message: `app.miris.viewerKey is shorter than a Miris viewer key, which is at least ${MIRIS_VIEWER_KEY_MIN_LENGTH} characters. Check that the whole key was copied; Miris shows it only once at creation.`,
     },
     {
         id: "miris-perview-secret-required",
@@ -2249,6 +2342,20 @@ export const RULES: Rule[] = [
         appliesWhen: (c) => mirisPerView(c) && isUnset(g(c, "app.miris.apiKeySecretArn")),
         message:
             'app.miris.viewerKeyMode "perView" requires app.miris.apiKeySecretArn, the Secrets Manager ARN of the Miris Integration Key that mints the per-view viewer keys.',
+    },
+    // config.ts: "The Integration Key secret is read by the upload pipeline and by per-view key minting."
+    {
+        id: "miris-secret-arn-format",
+        severity: "error",
+        fieldPaths: ["app.miris.apiKeySecretArn"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.miris.enabled")) return false;
+            if (!g(c, "app.miris.upload.enabled") && !mirisPerView(c)) return false;
+            const arn = g(c, "app.miris.apiKeySecretArn");
+            return !isUnset(arn) && !MIRIS_SECRET_ARN_PATTERN.test(String(arn));
+        },
+        message:
+            "app.miris.apiKeySecretArn must be the complete ARN of a Secrets Manager secret, including the six-character suffix Secrets Manager appends to the secret name (arn:<partition>:secretsmanager:<region>:<account>:secret:<name>-AbCdEf).",
     },
     {
         id: "miris-unsafe-eval",

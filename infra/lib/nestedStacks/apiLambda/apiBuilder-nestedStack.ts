@@ -1244,7 +1244,6 @@ export class ApiBuilderNestedStack extends NestedStack {
             );
         }
 
-        //Nag Supressions
         // Scoped to the large-file dead-letter queue rather than the stack: the source queue
         // carries a redrive policy, so a queue added here later without one is still reported.
         NagSuppressions.addResourceSuppressions(

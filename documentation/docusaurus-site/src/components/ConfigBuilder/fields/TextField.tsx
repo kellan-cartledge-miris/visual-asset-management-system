@@ -49,6 +49,7 @@ export default function TextField({ field, value, invalid, onChange }: Props) {
                     value={stringValue}
                     placeholder={field.placeholder}
                     min={field.min}
+                    max={field.max}
                     onChange={(e) => {
                         if (isNumber) {
                             const raw = e.target.value;

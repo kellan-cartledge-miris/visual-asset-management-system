@@ -14,6 +14,7 @@ import { Resource, SynthResult, synthTemplate } from "../support/templateSynth";
 
 const CONFIG_HANDLER = "handlers.config.configService.lambda_handler";
 const PLACEHOLDER_VIEWER_KEY = "test-placeholder-viewer-key-000000";
+const SECRET_ARN = "arn:aws:secretsmanager:us-east-1:123456789012:secret:test-miris-api-key-AbCdEf";
 
 function enableMiris(viewerKeyMode: "static" | "perView") {
     return (c: any) => {
@@ -21,6 +22,7 @@ function enableMiris(viewerKeyMode: "static" | "perView") {
         c.app.miris.enabled = true;
         c.app.miris.viewerKey = PLACEHOLDER_VIEWER_KEY;
         c.app.miris.viewerKeyMode = viewerKeyMode;
+        c.app.miris.apiKeySecretArn = SECRET_ARN;
     };
 }
 
@@ -37,7 +39,7 @@ function recordsFeature(synth: SynthResult, feature: string): boolean {
 describe.each([
     ["static", true],
     ["perView", false],
-] as const)("Miris enabled, viewerKeyMode %s", (mode, serversViewerKey) => {
+] as const)("Miris enabled, viewerKeyMode %s", (mode, servesViewerKey) => {
     let synth: SynthResult;
 
     beforeAll(() => {
@@ -51,12 +53,12 @@ describe.each([
         const fns = configFunctions(synth);
         expect(fns).toHaveLength(1);
         expect(fns[0].properties.Environment.Variables.MIRIS_VIEWER_KEY).toBe(
-            serversViewerKey ? PLACEHOLDER_VIEWER_KEY : ""
+            servesViewerKey ? PLACEHOLDER_VIEWER_KEY : ""
         );
     });
 
     test("the MIRIS_PER_VIEW_KEYS switch is recorded only in perView mode", () => {
         expect(recordsFeature(synth, "MIRIS_STREAMING")).toBe(true);
-        expect(recordsFeature(synth, "MIRIS_PER_VIEW_KEYS")).toBe(!serversViewerKey);
+        expect(recordsFeature(synth, "MIRIS_PER_VIEW_KEYS")).toBe(!servesViewerKey);
     });
 });

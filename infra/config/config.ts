@@ -14,6 +14,7 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import { region_info } from "aws-cdk-lib";
 import { oidcSettings } from "./oidc-config";
 import { samlSettings } from "./saml-config";
+import mirisStreamSchema from "../lib/nestedStacks/apiLambda/constructs/dynamodb-metadataschema-miris-stream.json";
 
 dotenv.config();
 
@@ -211,9 +212,50 @@ function resolveConfigBool(name: string, ...sources: unknown[]): boolean {
 /** Viewer key modes accepted by `app.miris.viewerKeyMode`. */
 const MIRIS_VIEWER_KEY_MODES = ["static", "perView"];
 
+/** Shortest value accepted as `app.miris.viewerKey`. */
+const MIRIS_VIEWER_KEY_MIN_LENGTH = 16;
+
+/**
+ * A complete Secrets Manager secret ARN in any partition, including the six-character suffix
+ * Secrets Manager appends to the secret name. IAM grants name `app.miris.apiKeySecretArn` verbatim,
+ * so a partial ARN without the suffix matches no secret.
+ */
+const MIRIS_SECRET_ARN_PATTERN =
+    /^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:\d{12}:secret:[A-Za-z0-9/_+=.@-]+-[A-Za-z0-9]{6}$/;
+
+/** File extensions the GLOBAL "Miris stream" file metadata schema accepts (its `fileKeyTypeRestriction`). */
+const MIRIS_STREAM_SCHEMA_EXTENSIONS = mirisStreamSchema.fileKeyTypeRestriction.split(",");
+
+/** Defaults for `app.miris.upload`, each applied when its own field is absent. */
+const MIRIS_UPLOAD_DEFAULTS: ConfigPublic["app"]["miris"]["upload"] = {
+    enabled: false,
+    autoRegisterWithVAMS: true,
+    autoRegisterAutoTriggerOnFileUpload: true,
+    triggerExtensions: mirisStreamSchema.fileKeyTypeRestriction,
+    taskTimeoutSeconds: 1800,
+    maxAssetSizeBytes: 5_000_000_000,
+};
+
 /** A Miris string setting the operator left unset: missing, empty, or the template placeholder. */
 function isMirisValueUnset(value: unknown): boolean {
     return value === undefined || value === null || value === "" || value === "UNDEFINED";
+}
+
+/**
+ * Splits `app.miris.upload.triggerExtensions` into its extensions, or returns undefined when the
+ * value is not a comma-separated list of lowercase extensions such as ".usd,.usdz".
+ */
+function parseMirisTriggerExtensions(value: unknown): string[] | undefined {
+    if (typeof value !== "string") return undefined;
+    const extensions = value.split(",").map((extension) => extension.trim());
+    return extensions.every((extension) => /^\.[a-z0-9]+$/.test(extension))
+        ? extensions
+        : undefined;
+}
+
+/** True for a whole number greater than zero. */
+function isPositiveInteger(value: unknown): boolean {
+    return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
 /**
@@ -1089,14 +1131,13 @@ export function getConfig(app: cdk.App): Config {
     }
 
     if (config.app.miris.upload == undefined) {
-        config.app.miris.upload = {
-            enabled: false,
-            autoRegisterWithVAMS: true,
-            autoRegisterAutoTriggerOnFileUpload: true,
-            triggerExtensions: ".usd,.usda,.usdc,.usdz",
-            taskTimeoutSeconds: 1800,
-            maxAssetSizeBytes: 5_000_000_000,
-        };
+        config.app.miris.upload = <ConfigPublic["app"]["miris"]["upload"]>{};
+    }
+    const mirisUpload: Record<string, unknown> = config.app.miris.upload;
+    for (const [field, value] of Object.entries(MIRIS_UPLOAD_DEFAULTS)) {
+        if (mirisUpload[field] == undefined) {
+            mirisUpload[field] = value;
+        }
     }
 
     if (!MIRIS_VIEWER_KEY_MODES.includes(config.app.miris.viewerKeyMode)) {
@@ -1129,17 +1170,43 @@ export function getConfig(app: cdk.App): Config {
                     "cannot be viewed."
             );
         }
-        if (!config.app.webUi.allowUnsafeEvalFeatures) {
-            throw new Error(
-                "Configuration Error: app.miris.upload.enabled requires " +
-                    "app.webUi.allowUnsafeEvalFeatures = true (inherited Phase 1 gate)."
-            );
-        }
         if (isMirisValueUnset(config.app.miris.apiKeySecretArn)) {
             throw new Error(
                 "Configuration Error: app.miris.upload.enabled requires " +
                     "app.miris.apiKeySecretArn to be set to the Secrets " +
                     "Manager ARN of the Miris Integration Key."
+            );
+        }
+        for (const field of ["taskTimeoutSeconds", "maxAssetSizeBytes"] as const) {
+            const value: unknown = config.app.miris.upload[field];
+            if (!isPositiveInteger(value)) {
+                throw new Error(
+                    `Configuration Error: app.miris.upload.${field} must be a positive whole ` +
+                        `number; got ${JSON.stringify(value)}.`
+                );
+            }
+        }
+        const triggerExtensions = parseMirisTriggerExtensions(
+            config.app.miris.upload.triggerExtensions
+        );
+        if (triggerExtensions == undefined) {
+            throw new Error(
+                "Configuration Error: app.miris.upload.triggerExtensions must be a comma-separated " +
+                    'list of lowercase file extensions, such as ".usd,.usdz"; got ' +
+                    `${JSON.stringify(config.app.miris.upload.triggerExtensions)}.`
+            );
+        }
+        // The upload pipeline records its result in the Miris stream file metadata schema, which
+        // only applies to files whose extension its fileKeyTypeRestriction lists.
+        const unsupportedExtensions = triggerExtensions.filter(
+            (extension) => !MIRIS_STREAM_SCHEMA_EXTENSIONS.includes(extension)
+        );
+        if (unsupportedExtensions.length > 0) {
+            throw new Error(
+                "Configuration Error: app.miris.upload.triggerExtensions may only list extensions " +
+                    "the Miris stream file metadata schema accepts " +
+                    `(${MIRIS_STREAM_SCHEMA_EXTENSIONS.join(", ")}); got ` +
+                    `${unsupportedExtensions.join(", ")}.`
             );
         }
     }
@@ -1180,16 +1247,31 @@ export function getConfig(app: cdk.App): Config {
                         'app.miris.viewerKeyMode is "perView". Remove it from config.json.'
                 );
             }
-        } else if (
-            !config.app.miris.viewerKey ||
-            config.app.miris.viewerKey === "UNDEFINED" ||
-            config.app.miris.viewerKey === "" ||
-            config.app.miris.viewerKey.length < 16
-        ) {
+        } else if (isMirisValueUnset(config.app.miris.viewerKey)) {
             throw new Error(
                 "Configuration Error: app.miris.enabled requires " +
                     "app.miris.viewerKey. Generate one in the Miris Portal or via " +
                     "`miris viewerkey create`."
+            );
+        } else if (String(config.app.miris.viewerKey).length < MIRIS_VIEWER_KEY_MIN_LENGTH) {
+            const viewerKeyLength = String(config.app.miris.viewerKey).length;
+            throw new Error(
+                `Configuration Error: app.miris.viewerKey is ${viewerKeyLength} characters long; ` +
+                    `a Miris viewer key is at least ${MIRIS_VIEWER_KEY_MIN_LENGTH}. Check that ` +
+                    "the whole key was copied; Miris shows it only once at creation."
+            );
+        }
+        // The Integration Key secret is read by the upload pipeline and by per-view key minting.
+        if (
+            (config.app.miris.upload.enabled || config.app.miris.viewerKeyMode === "perView") &&
+            !MIRIS_SECRET_ARN_PATTERN.test(String(config.app.miris.apiKeySecretArn))
+        ) {
+            throw new Error(
+                "Configuration Error: app.miris.apiKeySecretArn must be the complete ARN of a " +
+                    "Secrets Manager secret, including the six-character suffix Secrets Manager " +
+                    "appends to the secret name " +
+                    "(arn:<partition>:secretsmanager:<region>:<account>:secret:<name>-AbCdEf); got " +
+                    `"${config.app.miris.apiKeySecretArn}".`
             );
         }
         if (!config.app.webUi.allowUnsafeEvalFeatures) {
@@ -1630,6 +1712,7 @@ export function getConfig(app: cdk.App): Config {
         vpcRequiringFeatures.push("pipelines.useNvidiaGr00t");
     if (config.app.pipelines.useConversionCoordinateTransform.enabled)
         vpcRequiringFeatures.push("pipelines.useConversionCoordinateTransform");
+    if (config.app.miris.upload.enabled) vpcRequiringFeatures.push("miris.upload");
 
     if (vpcRequiringFeatures.length > 0 && !config.app.useGlobalVpc.enabled) {
         throw new Error(
@@ -2170,7 +2253,8 @@ export function getConfig(app: cdk.App): Config {
             config.app.pipelines.useIsaacLabTraining.enabled ||
             config.app.pipelines.useNvidiaCosmos.enabled ||
             config.app.pipelines.useNvidiaCosmos3?.enabled ||
-            config.app.pipelines.useNvidiaGr00t.enabled
+            config.app.pipelines.useNvidiaGr00t.enabled ||
+            config.app.miris.upload.enabled
         ) {
             if (
                 !config.app.useGlobalVpc.optionalExternalPrivateSubnetIds ||

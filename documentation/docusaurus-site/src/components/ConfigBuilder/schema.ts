@@ -1570,7 +1570,7 @@ export const FIELDS: FieldMeta[] = [
         input: "text",
         section: "addons",
         advanced: true,
-        help: "Deployment-wide Miris viewer key, served to the frontend via /secure-config and used by the streaming SDK. Required in static mode and ignored in perView mode. Treat as a secret; Miris shows it only once at creation.",
+        help: "Deployment-wide Miris viewer key, served to the frontend via /secure-config and used by the streaming SDK. Required in static mode and ignored in perView mode. A viewer key authorizes streaming only and is meant to reach the browser; scope it with tags and an expiry. Miris shows it only once at creation.",
         visibleWhen: miris,
     },
     {
@@ -1580,6 +1580,7 @@ export const FIELDS: FieldMeta[] = [
         section: "addons",
         advanced: true,
         min: 1,
+        max: 60,
         help: "How long a minted viewer key can start new streams, from 1 to 60 minutes. A stream that is already open keeps playing after its key expires.",
         visibleWhen: mirisPerView,
     },
@@ -1589,8 +1590,9 @@ export const FIELDS: FieldMeta[] = [
         input: "text",
         section: "addons",
         advanced: true,
-        placeholder: "arn:aws:secretsmanager:us-east-1:123456789012:secret:miris-integration-key",
-        help: "Secrets Manager ARN holding the Miris Integration Key. Required by the upload pipeline, which creates assets, and by perView mode, which mints viewer keys. Integration Keys resolve to their owning Miris user's home workspace, so prefer a service account scoped to the shared workspace.",
+        placeholder:
+            "arn:aws:secretsmanager:us-east-1:123456789012:secret:miris-integration-key-AbCdEf",
+        help: "Complete Secrets Manager ARN, including the six-character suffix, of the secret holding the Miris Integration Key. Required by the upload pipeline, which creates assets, and by perView mode, which mints viewer keys. Integration Keys resolve to their owning Miris user's home workspace, so prefer a service account scoped to the shared workspace.",
         visibleWhen: mirisIntegrationKey,
     },
     {
@@ -1637,7 +1639,7 @@ export const FIELDS: FieldMeta[] = [
         section: "addons",
         advanced: true,
         placeholder: ".usd,.usda,.usdc,.usdz",
-        help: "Comma-separated list of extensions that trigger an upload.",
+        help: "Comma-separated list of lowercase extensions that trigger an upload. Each must be one the Miris stream file metadata schema accepts: .usd, .usda, .usdc, or .usdz.",
         visibleWhen: mirisUpload,
     },
     {
@@ -1646,6 +1648,8 @@ export const FIELDS: FieldMeta[] = [
         input: "number",
         section: "addons",
         advanced: true,
+        min: 1,
+        help: "How long, in seconds, the upload task may run. A positive whole number.",
         visibleWhen: mirisUpload,
     },
     {
@@ -1654,6 +1658,8 @@ export const FIELDS: FieldMeta[] = [
         input: "number",
         section: "addons",
         advanced: true,
+        min: 1,
+        help: "Largest source asset, in bytes, the pipeline uploads to Miris. A positive whole number.",
         visibleWhen: mirisUpload,
     },
 

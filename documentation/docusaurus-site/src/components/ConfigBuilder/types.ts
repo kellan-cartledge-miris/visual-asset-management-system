@@ -50,6 +50,8 @@ export interface FieldMeta {
     placeholder?: string;
     /** Optional numeric lower bound (UI hint only — validation is authoritative). */
     min?: number;
+    /** Optional numeric upper bound (UI hint only; validation is authoritative). */
+    max?: number;
     /** When present and returns false, the field is hidden from the form. */
     visibleWhen?: (cfg: ConfigShape) => boolean;
 }
