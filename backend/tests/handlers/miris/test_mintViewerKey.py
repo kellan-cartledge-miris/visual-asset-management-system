@@ -4,20 +4,24 @@
 """POST /database/{databaseId}/assets/{assetId}/miris/viewer-key
 
 A per-view viewer key is minted only after both authorization tiers allow it, only for the Miris
-asset recorded on the file itself, and only once its key ID is recorded in the key table. The key
-material is returned to the caller and appears in no log line, audit entry, table row or error.
+asset recorded on the file itself and tagged for this VAMS asset, and only once its key ID is
+recorded in the key table. The key material is returned to the caller and appears in no log line,
+audit entry, table row or error.
 """
 
 import json
 import logging
 import sys
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 from botocore.exceptions import ClientError
 
-from backend.backend.handlers.miris import mintViewerKey
+from backend.backend.handlers.miris import mintViewerKey, mirisIntegration
+
+from .conftest import FakeLambdaContext
 
 DATABASE_ID = "db-1"
 ASSET_ID = "asset-1"
@@ -81,6 +85,17 @@ def _enforcer(api=True, entity=True):
     return enforcer
 
 
+ASSET_TAG = f"vams-asset-{ASSET_ID}"
+DATABASE_TAG = f"vams-database-{DATABASE_ID}"
+
+
+def _asset_read(tags=("vams", ASSET_TAG, DATABASE_TAG), state="streamable"):
+    return (200, {"id": STORED_UUID, "state": state, "tags": list(tags)})
+
+
+BOUND = _asset_read()
+
+
 def _created(key_id=KEY_ID):
     return {
         "id": key_id,
@@ -98,7 +113,7 @@ class _FixedDatetime(datetime):
 
 
 def _invoke(event, miris_api, metadata_table=None, asset_table=None, key_table=None,
-            enforcer=None, audit=None, ttl_minutes="15"):
+            enforcer=None, audit=None, ttl_minutes="15", context=None):
     metadata_table = metadata_table if metadata_table is not None else _streamed()
     asset_table = asset_table if asset_table is not None else _asset_table()
     key_table = key_table if key_table is not None else MagicMock()
@@ -113,12 +128,16 @@ def _invoke(event, miris_api, metadata_table=None, asset_table=None, key_table=N
          patch.object(mintViewerKey, "viewer_key_ttl_minutes_setting", ttl_minutes), \
          patch.object(mintViewerKey, "datetime", _FixedDatetime), \
          patch.object(mintViewerKey.time, "time", return_value=FIXED_EPOCH_SECONDS):
-        response = mintViewerKey.lambda_handler(event, MagicMock())
+        response = mintViewerKey.lambda_handler(event, context or FakeLambdaContext())
     return response, json.loads(response["body"])
 
 
 def _creates(miris_api):
     return [c for c in miris_api.calls if c["method"] == "POST"]
+
+
+def _reads(miris_api):
+    return [c for c in miris_api.calls if c["method"] == "GET"]
 
 
 def _deletes(miris_api):
@@ -129,7 +148,7 @@ def _deletes(miris_api):
 class TestSuccess:
 
     def test_returns_the_key_and_its_expiry(self, miris_api):
-        miris_api.responses.append((200, _created()))
+        miris_api.responses.extend([BOUND, (200, _created())])
         response, body = _invoke(_event(), miris_api)
 
         assert response["statusCode"] == 200
@@ -141,13 +160,13 @@ class TestSuccess:
         }
 
     def test_the_response_is_not_cacheable(self, miris_api):
-        miris_api.responses.append((200, _created()))
+        miris_api.responses.extend([BOUND, (200, _created())])
         response, _ = _invoke(_event(), miris_api)
         directives = [d.strip() for d in response["headers"]["Cache-Control"].split(",")]
         assert "no-store" in directives
 
     def test_creates_exactly_one_key_scoped_to_the_files_asset(self, miris_api):
-        miris_api.responses.append((200, _created()))
+        miris_api.responses.extend([BOUND, (200, _created())])
         _invoke(_event(), miris_api)
 
         creates = _creates(miris_api)
@@ -159,18 +178,18 @@ class TestSuccess:
             "asset_ids": [STORED_UUID],
             "expires_at": "2026-10-15T19:04:28Z",
         }
-        assert miris_api.calls == creates
+        assert [c["method"] for c in miris_api.calls] == ["GET", "POST"]
 
     @pytest.mark.parametrize("ttl_minutes, expires_at", [("1", "2026-10-15T18:50:28Z"), ("60", "2026-10-15T19:49:28Z")])
     def test_the_expiry_follows_the_configured_ttl(self, miris_api, ttl_minutes, expires_at):
-        miris_api.responses.append((200, _created()))
+        miris_api.responses.extend([BOUND, (200, _created())])
         response, body = _invoke(_event(), miris_api, ttl_minutes=ttl_minutes)
         assert response["statusCode"] == 200
         assert body["expiresAt"] == expires_at
         assert _creates(miris_api)[0]["json"]["expires_at"] == expires_at
 
     def test_records_one_row_without_the_key_material(self, miris_api):
-        miris_api.responses.append((200, _created()))
+        miris_api.responses.extend([BOUND, (200, _created())])
         key_table = MagicMock()
         _invoke(_event(), miris_api, key_table=key_table)
 
@@ -194,7 +213,7 @@ class TestSuccess:
         assert VIEWER_KEY_MATERIAL not in json.dumps(kwargs)
 
     def test_audits_the_issuance_without_the_key_material(self, miris_api):
-        miris_api.responses.append((200, _created()))
+        miris_api.responses.extend([BOUND, (200, _created())])
         audit = MagicMock()
         event = _event()
         _invoke(event, miris_api, audit=audit)
@@ -215,7 +234,7 @@ class TestSuccess:
         assert VIEWER_KEY_MATERIAL not in json.dumps(audit.call_args.args[1:])
 
     def test_a_full_object_key_is_normalized_against_the_assets_root(self, miris_api):
-        miris_api.responses.append((200, _created()))
+        miris_api.responses.extend([BOUND, (200, _created())])
         response, body = _invoke(
             _event(f"/assets/{ASSET_ID}/folder/scene.usd"),
             miris_api,
@@ -226,7 +245,7 @@ class TestSuccess:
         assert body["filePath"] == "/folder/scene.usd"
 
     def test_a_client_supplied_uuid_is_ignored(self, miris_api):
-        miris_api.responses.append((200, _created()))
+        miris_api.responses.extend([BOUND, (200, _created())])
         response, body = _invoke(_event(body={"mirisAssetUuid": OTHER_UUID}), miris_api)
         assert response["statusCode"] == 200
         assert body["mirisAssetUuid"] == STORED_UUID
@@ -263,7 +282,7 @@ class TestAuthorization:
         assert miris_api.calls == []
 
     def test_tier2_is_checked_as_a_read_of_the_asset(self, miris_api):
-        miris_api.responses.append((200, _created()))
+        miris_api.responses.extend([BOUND, (200, _created())])
         enforcer = _enforcer()
         _invoke(_event(), miris_api, enforcer=enforcer)
         asset_arg, action = enforcer.enforce.call_args.args
@@ -310,6 +329,216 @@ class TestTheFilesStream:
         assert response["statusCode"] == 400
         assert body["state"] == "invalidUuid"
         assert miris_api.calls == []
+
+
+@pytest.mark.unit
+class TestBinding:
+    """The Miris asset must carry both `vams-asset-{assetId}` and `vams-database-{databaseId}`
+    before a key is minted for it."""
+
+    def test_the_asset_is_read_with_the_integration_key_before_the_create(self, miris_api):
+        miris_api.responses.extend([BOUND, (200, _created())])
+        response, _ = _invoke(_event(), miris_api)
+
+        assert response["statusCode"] == 200
+        assert [(c["method"], c["url"]) for c in miris_api.calls] == [
+            ("GET", f"{miris_api.base_url}/v1/asset/{STORED_UUID}"),
+            ("POST", f"{miris_api.base_url}/v1/asset-viewer-key"),
+        ]
+        assert miris_api.calls[0]["headers"]["Miris-API-Key"] == miris_api.integration_key
+
+    @pytest.mark.parametrize(
+        "tags",
+        [
+            (),
+            ("vams",),
+            (ASSET_TAG,),
+            (DATABASE_TAG,),
+            ("vams", "vams-asset-asset-2", DATABASE_TAG),
+            (f"{ASSET_TAG}-x", DATABASE_TAG),
+        ],
+        ids=["untagged", "vams-only", "asset-tag-only", "database-tag-only", "another-asset", "prefix-only"],
+    )
+    def test_an_unbound_asset_is_403_not_bound_and_nothing_is_minted(self, miris_api, tags):
+        miris_api.responses.append(_asset_read(tags=tags))
+        key_table = MagicMock()
+        audit = MagicMock()
+        response, body = _invoke(_event(), miris_api, key_table=key_table, audit=audit)
+
+        assert response["statusCode"] == 403
+        assert body["state"] == "notBound"
+        assert ASSET_TAG in body["message"] and DATABASE_TAG in body["message"]
+        assert "viewerKey" not in body
+        assert _creates(miris_api) == []
+        key_table.put_item.assert_not_called()
+        audit.assert_not_called()
+
+    def test_the_same_asset_id_in_another_database_is_403_not_bound(self, miris_api):
+        # The Miris asset belongs to asset-1 of db-2; this request is for asset-1 of db-1.
+        miris_api.responses.append(_asset_read(tags=("vams", ASSET_TAG, "vams-database-db-2")))
+        key_table = MagicMock()
+        response, body = _invoke(_event(), miris_api, key_table=key_table)
+
+        assert response["statusCode"] == 403
+        assert body["state"] == "notBound"
+        assert _creates(miris_api) == []
+        key_table.put_item.assert_not_called()
+
+    def test_a_missing_miris_asset_is_403_not_bound_and_nothing_is_minted(self, miris_api):
+        miris_api.responses.append(404)
+        key_table = MagicMock()
+        response, body = _invoke(_event(), miris_api, key_table=key_table)
+        assert response["statusCode"] == 403
+        assert body["state"] == "notBound"
+        assert _creates(miris_api) == []
+        key_table.put_item.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "outcome",
+        [(500, MIRIS_ERROR_BODY), (200, {"tags": [ASSET_TAG, DATABASE_TAG]}), (200, MIRIS_ERROR_BODY)],
+        ids=["500", "no-state", "non-json"],
+    )
+    def test_an_unreadable_asset_is_502_and_nothing_is_minted(self, miris_api, outcome):
+        miris_api.responses.append(outcome)
+        response, body = _invoke(_event(), miris_api)
+        assert response["statusCode"] == 502
+        assert MIRIS_ERROR_BODY not in response["body"]
+        assert _creates(miris_api) == []
+
+
+@pytest.fixture
+def clock(monkeypatch, miris_api):
+    """A controllable `time.monotonic`. `clock.per_request[method]` seconds pass during each
+    Miris request of that method."""
+    state = SimpleNamespace(now=1000.0, per_request={})
+    monkeypatch.setattr(mirisIntegration.time, "monotonic", lambda: state.now)
+    inner = mirisIntegration._get_session()
+
+    def request(method, url, **kwargs):
+        state.now += state.per_request.get(method, 0)
+        return inner.request(method, url, **kwargs)
+
+    monkeypatch.setattr(mirisIntegration, "_get_session", lambda: SimpleNamespace(request=request))
+    return state
+
+
+@pytest.mark.unit
+class TestRequestDeadline:
+
+    def test_too_little_time_left_is_504_without_a_miris_call(self, miris_api):
+        key_table = MagicMock()
+        response, body = _invoke(
+            _event(), miris_api, key_table=key_table, context=FakeLambdaContext(remaining_ms=2000)
+        )
+        assert response["statusCode"] == 504
+        assert "viewerKey" not in body
+        assert miris_api.calls == []
+        key_table.put_item.assert_not_called()
+
+    def test_a_deadline_reached_after_the_read_is_504_without_a_create(self, miris_api, clock):
+        clock.per_request["GET"] = 100
+        miris_api.responses.append(BOUND)
+        response, _ = _invoke(_event(), miris_api)
+        assert response["statusCode"] == 504
+        assert _creates(miris_api) == []
+
+    def test_each_call_fits_in_the_time_left(self, miris_api, clock):
+        clock.per_request["GET"] = 3
+        miris_api.responses.extend([BOUND, (200, _created())])
+        response, _ = _invoke(_event(), miris_api, context=FakeLambdaContext(remaining_ms=14000))
+
+        assert response["statusCode"] == 200
+        # The deadline is 11 s out: the read may use all 11 s, the create the 8 s left after it.
+        read, create = miris_api.calls
+        assert sum(read["timeout"]) == pytest.approx(11)
+        assert sum(create["timeout"]) == pytest.approx(8)
+
+    def test_a_key_without_material_is_deleted_even_after_the_deadline(self, miris_api, clock):
+        # The create answers after the request deadline, with a key ID but no key material.
+        clock.per_request["POST"] = 100
+        miris_api.responses.extend([BOUND, (200, {"id": KEY_ID}), 204])
+        key_table = MagicMock()
+        response, _ = _invoke(_event(), miris_api, key_table=key_table)
+
+        assert response["statusCode"] == 502
+        deletes = _deletes(miris_api)
+        assert [c["url"] for c in deletes] == [f"{miris_api.base_url}/v1/asset-viewer-key/{KEY_ID}"]
+        assert sum(deletes[0]["timeout"]) <= mirisIntegration._CLEANUP_GRACE_SECONDS
+        key_table.put_item.assert_not_called()
+
+    def test_an_unrecorded_key_is_deleted_even_after_the_deadline(self, miris_api, clock):
+        miris_api.responses.extend([BOUND, (200, _created()), 204])
+        key_table = MagicMock()
+
+        def put_after_the_deadline(**kwargs):
+            clock.now += 100
+            raise RuntimeError("boom")
+
+        key_table.put_item.side_effect = put_after_the_deadline
+        response, _ = _invoke(_event(), miris_api, key_table=key_table)
+
+        assert response["statusCode"] == 500
+        deletes = _deletes(miris_api)
+        assert [c["url"] for c in deletes] == [f"{miris_api.base_url}/v1/asset-viewer-key/{KEY_ID}"]
+        assert sum(deletes[0]["timeout"]) <= mirisIntegration._CLEANUP_GRACE_SECONDS
+
+
+@pytest.mark.unit
+class TestRobustness:
+
+    def test_a_redirect_on_the_asset_read_fails_closed(self, miris_api):
+        miris_api.responses.append((302, MIRIS_ERROR_BODY))
+        key_table = MagicMock()
+        response, body = _invoke(_event(), miris_api, key_table=key_table)
+
+        assert response["statusCode"] == 502
+        assert MIRIS_ERROR_BODY not in response["body"]
+        assert len(miris_api.calls) == 1
+        assert miris_api.calls[0]["allow_redirects"] is False
+        assert _creates(miris_api) == []
+        key_table.put_item.assert_not_called()
+
+    def test_a_request_received_long_ago_is_504_without_a_miris_call(self, miris_api):
+        event = _event()
+        # API Gateway received the request 27 s before the handler reads the clock.
+        event["requestContext"]["timeEpoch"] = int((FIXED_EPOCH_SECONDS - 27) * 1000)
+        response, _ = _invoke(event, miris_api)
+        assert response["statusCode"] == 504
+        assert miris_api.calls == []
+
+    def test_the_key_table_write_is_short(self):
+        config = mintViewerKey.miris_viewer_key_table.meta.client.meta.config
+        assert config.connect_timeout == 1
+        assert config.read_timeout == 2
+        assert config.retries["total_max_attempts"] == 2
+
+
+@pytest.mark.unit
+class TestKeyName:
+
+    def test_a_long_asset_id_is_hashed_into_a_capped_name(self, miris_api):
+        long_asset_id = "a" * 255
+        path = f"/database/{DATABASE_ID}/assets/{long_asset_id}/miris/viewer-key"
+        event = _event(path=path)
+        event["pathParameters"]["assetId"] = long_asset_id
+        table = _metadata_table({f"{DATABASE_ID}:{long_asset_id}:/scene.usd": {"miris_asset_uuid": STORED_UUID}})
+        miris_api.responses.extend([
+            (200, {"state": "streamable", "tags": [f"vams-asset-{long_asset_id}", DATABASE_TAG]}),
+            (200, _created()),
+        ])
+        response, _ = _invoke(event, miris_api, metadata_table=table)
+
+        assert response["statusCode"] == 200
+        name = _creates(miris_api)[0]["json"]["name"]
+        assert len(name) <= 128
+        assert long_asset_id not in name
+        assert name.startswith("vams:") and name.endswith(":1792090168500")
+
+    def test_names_of_different_long_identities_differ(self):
+        first = mirisIntegration.viewer_key_name(DATABASE_ID, "a" * 256, 1)
+        second = mirisIntegration.viewer_key_name(DATABASE_ID, "a" * 255 + "b", 1)
+        assert first != second
+        assert max(len(first), len(second)) <= mirisIntegration.MAX_VIEWER_KEY_NAME_LENGTH
 
 
 @pytest.mark.unit
@@ -369,7 +598,7 @@ class TestFailures:
         ids=["500", "400", "no-key", "non-json"],
     )
     def test_a_miris_failure_is_502_without_the_miris_body(self, miris_api, outcomes):
-        miris_api.responses.extend(outcomes)
+        miris_api.responses.extend([BOUND] + outcomes)
         key_table = MagicMock()
         audit = MagicMock()
         response, body = _invoke(_event(), miris_api, key_table=key_table, audit=audit)
@@ -383,7 +612,7 @@ class TestFailures:
     def test_a_transport_failure_is_502(self, miris_api):
         import requests
 
-        miris_api.responses.append(requests.ConnectionError(MIRIS_ERROR_BODY))
+        miris_api.responses.extend([BOUND, requests.ConnectionError(MIRIS_ERROR_BODY)])
         response, _ = _invoke(_event(), miris_api)
         assert response["statusCode"] == 502
         assert MIRIS_ERROR_BODY not in response["body"]
@@ -398,7 +627,7 @@ class TestFailures:
         ids=["duplicate-id", "throttled", "other"],
     )
     def test_a_failed_table_put_deletes_the_minted_key_and_is_500(self, miris_api, error):
-        miris_api.responses.extend([(200, _created()), 204])
+        miris_api.responses.extend([BOUND, (200, _created()), 204])
         key_table = MagicMock()
         key_table.put_item.side_effect = error
         audit = MagicMock()
@@ -411,7 +640,7 @@ class TestFailures:
         audit.assert_not_called()
 
     def test_a_key_returned_without_material_is_deleted_and_is_502(self, miris_api):
-        miris_api.responses.extend([(200, {"id": KEY_ID}), 204])
+        miris_api.responses.extend([BOUND, (200, {"id": KEY_ID}), 204])
         key_table = MagicMock()
         response, _ = _invoke(_event(), miris_api, key_table=key_table)
 
@@ -422,7 +651,7 @@ class TestFailures:
 
     def test_an_unexpected_failure_after_the_mint_logs_only_its_type(self, miris_api, log_recorder, caplog):
         caplog.set_level(logging.DEBUG)
-        miris_api.responses.append((200, _created()))
+        miris_api.responses.extend([BOUND, (200, _created())])
         audit = MagicMock(side_effect=RuntimeError(f"boom {VIEWER_KEY_MATERIAL}"))
         response, _ = _invoke(_event(), miris_api, audit=audit)
 
@@ -438,7 +667,7 @@ class TestFailures:
     def test_the_error_response_is_built_outside_the_exception(self, miris_api):
         """The 500 response writes an audit entry, and a failed write logs a traceback. Built while
         the exception is still being handled, that traceback would chain the exception's message."""
-        miris_api.responses.append((200, _created()))
+        miris_api.responses.extend([BOUND, (200, _created())])
         audit = MagicMock(side_effect=RuntimeError(f"boom {VIEWER_KEY_MATERIAL}"))
         handled_at_call = []
         real_internal_error = mintViewerKey.internal_error
@@ -454,13 +683,13 @@ class TestFailures:
         assert handled_at_call == [None]
 
     def test_the_catch_all_does_not_log_a_traceback(self, miris_api, log_recorder):
-        miris_api.responses.append((200, _created()))
+        miris_api.responses.extend([BOUND, (200, _created())])
         audit = MagicMock(side_effect=RuntimeError("boom"))
         _invoke(_event(), miris_api, audit=audit)
         assert not any(line.startswith("exception:") for line in log_recorder.lines)
 
     def test_a_failed_cleanup_delete_still_returns_500(self, miris_api):
-        miris_api.responses.extend([(200, _created()), (503, MIRIS_ERROR_BODY)])
+        miris_api.responses.extend([BOUND, (200, _created()), (503, MIRIS_ERROR_BODY)])
         key_table = MagicMock()
         key_table.put_item.side_effect = RuntimeError("boom")
         response, _ = _invoke(_event(), miris_api, key_table=key_table)
@@ -476,9 +705,9 @@ class TestNoKeyMaterialInLogs:
         failing_table = MagicMock()
         failing_table.put_item.side_effect = RuntimeError(f"boom {VIEWER_KEY_MATERIAL}")
         miris_api.responses.extend([
-            (200, _created()),                 # success
-            (200, _created()), (503, MIRIS_ERROR_BODY),  # put fails, cleanup delete fails
-            (500, MIRIS_ERROR_BODY),            # create fails
+            BOUND, (200, _created()),                 # success
+            BOUND, (200, _created()), (503, MIRIS_ERROR_BODY),  # put fails, cleanup delete fails
+            BOUND, (500, MIRIS_ERROR_BODY),            # create fails
         ])
 
         _invoke(_event(), miris_api)

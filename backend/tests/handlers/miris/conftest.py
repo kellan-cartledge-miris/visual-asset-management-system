@@ -1,7 +1,8 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fakes for the Miris Integration API client: Secrets Manager, the HTTP seam, and the loggers."""
+"""Fakes for the Miris Integration API client: Secrets Manager, the HTTP seam, the Lambda context
+and the loggers."""
 
 import json
 from types import SimpleNamespace
@@ -36,7 +37,7 @@ def miris_response(status_code, body=""):
 
 @pytest.fixture
 def miris_api(monkeypatch):
-    """Configure the client and replace Secrets Manager and `requests.request`.
+    """Configure the client and replace Secrets Manager and the shared HTTP session.
 
     Append to `responses` an int status, a `(status, body)` tuple (a dict body is JSON), or an
     exception to raise; each request consumes one. `calls` records every request as a dict of its method, URL and kwargs.
@@ -61,7 +62,7 @@ def miris_api(monkeypatch):
             return miris_response(*outcome)
         return miris_response(outcome)
 
-    monkeypatch.setattr(mirisIntegration.requests, "request", fake_request)
+    monkeypatch.setattr(mirisIntegration, "_get_session", lambda: SimpleNamespace(request=fake_request))
     yield SimpleNamespace(
         integration_key=INTEGRATION_KEY,
         secret_arn=SECRET_ARN,
@@ -71,6 +72,16 @@ def miris_api(monkeypatch):
         responses=responses,
     )
     mirisIntegration._invalidate_api_key_cache()
+
+
+class FakeLambdaContext:
+    """A Lambda context reporting a fixed remaining time."""
+
+    def __init__(self, remaining_ms=30000):
+        self.remaining_ms = remaining_ms
+
+    def get_remaining_time_in_millis(self):
+        return self.remaining_ms
 
 
 class LogRecorder:

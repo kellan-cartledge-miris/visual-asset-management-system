@@ -25,10 +25,14 @@ States:
 
     notStreamed    `miris_asset_uuid` is absent or empty. Miris is not called.
     invalidUuid    `miris_asset_uuid` is set but is not a UUID. Miris is not called.
+    notBound       Miris has no such asset (404), or the asset lacks either tag that binds it
+                   to this VAMS asset, `vams-asset-{assetId}` and `vams-database-{databaseId}`
+                   (perView mode only).
     unknown        The processing state could not be established. Either no viewer key or
                    Miris API base URL is configured (Miris is not called), or Miris was
-                   unreachable, returned 404 or another non-2xx status, or returned a payload
-                   without a usable `state`.
+                   unreachable, did not answer before the request deadline, returned a non-2xx
+                   status (the viewer API's 404 included), or returned a payload without a
+                   usable `state`.
     processing     The viewer API answered 400, which it does while Miris prepares the asset
                    (static mode only).
     <Miris state>  The processing state reported by Miris, passed through as is:
@@ -39,10 +43,11 @@ How the probe authenticates follows `MIRIS_VIEWER_KEY_MODE`:
 
   - static (the default): the deployment-wide viewer key (`MIRIS_VIEWER_KEY`), the same
     credential the frontend streams with, against the viewer API. It sees exactly the assets the
-    viewer can stream.
-  - perView: no deployment-wide viewer key exists, so the probe reads the asset with the Miris
-    Integration Key (`GET /v1/asset/{uuid}`, see `mirisIntegration`). The Integration Key resolves
-    to its owning Miris user's workspace, which must be the workspace holding the assets.
+    viewer can stream. The viewer API reports no tags.
+  - perView: no deployment-wide viewer key exists, so the probe reads the asset and its tags
+    with the Miris Integration Key (`GET /v1/asset/{uuid}`, see `mirisIntegration`). The
+    Integration Key resolves to its owning Miris user's workspace, which must be the workspace
+    holding the assets.
 
 The probe is advisory and must never block streaming. Everything short of a definitive Miris
 processing failure is reported as `unknown`, and the response still carries the UUID so the
@@ -56,7 +61,6 @@ import os
 import re
 
 import boto3
-import requests
 from aws_lambda_powertools.utilities.parser import ValidationError, parse
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from botocore.config import Config
@@ -80,6 +84,7 @@ from models.miris import (
     MIRIS_DISPLAY_NAME_KEY,
     MIRIS_SOURCE_VERSION_ID_KEY,
     MIRIS_UPLOADED_AT_KEY,
+    STATE_NOT_BOUND,
     STATE_PROCESSING,
     STATE_UNKNOWN,
     GetMirisAssetStatusRequestModel,
@@ -89,6 +94,7 @@ from models.miris import (
 from . import mirisIntegration
 from .streamMetadata import (
     file_path_for_asset,
+    load_readable_asset,
     read_stream_metadata,
     stream_uuid,
     unusable_uuid_state,
@@ -103,7 +109,6 @@ claims_and_roles = {}
 try:
     asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
     asset_file_metadata_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
-    miris_api_base_url = os.environ.get("MIRIS_API_BASE_URL", "").strip().rstrip("/")
     # Deployment-wide Miris viewer key, the same credential the frontend streams with (static mode).
     miris_viewer_key = os.environ.get("MIRIS_VIEWER_KEY", "").strip()
     miris_viewer_key_mode = os.environ.get("MIRIS_VIEWER_KEY_MODE", "static").strip()
@@ -136,7 +141,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             return authorization_error()
 
         if method == "GET" and API_MIRIS_ASSET_STATUS.matches(path):
-            return _handle_get(event)
+            return _handle_get(event, context)
         return validation_error(body={"message": "Method not allowed"}, event=event)
 
     except ValidationError as v:
@@ -150,7 +155,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         return internal_error(event=event)
 
 
-def _handle_get(event):
+def _handle_get(event, context):
     path_params = event.get("pathParameters") or {}
     query_params = event.get("queryStringParameters") or {}
 
@@ -165,19 +170,11 @@ def _handle_get(event):
     database_id = request_model.databaseId
     asset_id = request_model.assetId
 
-    # Tier-2: must have GET access to the parent asset
-    asset = asset_table.get_item(
-        Key={"databaseId": database_id, "assetId": asset_id}
-    ).get("Item")
-    if not asset:
-        return general_error(body={"message": "Asset not found"}, event=event)
-
-    # Casbin policies on asset objects key off object__type='asset'; the
-    # DynamoDB record doesn't carry that field, so annotate before enforce().
-    asset["object__type"] = "asset"
-    casbin_enforcer = CasbinEnforcer(claims_and_roles)
-    if not casbin_enforcer.enforce(asset, "GET"):
-        return authorization_error()
+    asset, denied = load_readable_asset(
+        asset_table, CasbinEnforcer(claims_and_roles), database_id, asset_id, event
+    )
+    if denied:
+        return denied
 
     # A full object key is reduced against this asset's own root key only.
     file_path = file_path_for_asset(asset, asset_id, request_model.filePath)
@@ -193,12 +190,14 @@ def _handle_get(event):
         sourceVersionId=stream_metadata.get(MIRIS_SOURCE_VERSION_ID_KEY),
         uploadedAt=stream_metadata.get(MIRIS_UPLOADED_AT_KEY),
         displayName=stream_metadata.get(MIRIS_DISPLAY_NAME_KEY),
-        state=_stream_state(miris_asset_uuid),
+        state=_stream_state(
+            miris_asset_uuid, database_id, asset_id, mirisIntegration.request_deadline(context, event)
+        ),
     )
     return success(body=response.dict())
 
 
-def _stream_state(miris_asset_uuid: str) -> str:
+def _stream_state(miris_asset_uuid: str, database_id: str, asset_id: str, deadline: float) -> str:
     """Resolve the response `state` for the UUID stored on the file."""
     unusable_state = unusable_uuid_state(miris_asset_uuid)
     if unusable_state is not None:
@@ -207,73 +206,50 @@ def _stream_state(miris_asset_uuid: str) -> str:
         return unusable_state
 
     if miris_viewer_key_mode == VIEWER_KEY_MODE_PER_VIEW:
-        return _integration_processing_state(miris_asset_uuid)
-
-    if not miris_viewer_key or not miris_api_base_url:
-        logger.warning("Miris viewer key or API base URL is not configured")
-        return STATE_UNKNOWN
-
-    return _miris_processing_state(miris_asset_uuid)
+        return _integration_processing_state(miris_asset_uuid, database_id, asset_id, deadline)
+    return _viewer_processing_state(miris_asset_uuid, deadline)
 
 
-def _miris_processing_state(miris_asset_uuid: str) -> str:
-    """Ask the Miris viewer API for the asset's processing state.
-
-    The key goes in a header, never the query string: a `?viewerKey=` URL leaks the
-    credential into anything that records URLs, and `requests` embeds the full URL in its
-    exception messages.
-    """
-    url = f"{miris_api_base_url}/viewer/v1/asset/{miris_asset_uuid}"
-    try:
-        r = requests.get(
-            url,
-            headers={"Miris-Viewer-Key": miris_viewer_key},
-            timeout=15,
-        )
-    except requests.RequestException as e:
-        logger.warning(f"Miris API connection failure: {e}")
-        return STATE_UNKNOWN
-
-    if r.status_code == 404:
-        # Not visible to the viewer key. This is not proof the asset is gone: it also covers
-        # an asset still being ingested and any workspace-visibility drift.
-        logger.warning(f"Miris viewer API returned 404 for {miris_asset_uuid}")
-        return STATE_UNKNOWN
-    if r.status_code == 400:
-        # Miris answers 400 until a freshly uploaded asset has finished processing.
-        logger.info(f"Miris viewer API returned 400 for {miris_asset_uuid}, asset is processing")
-        return STATE_PROCESSING
-    if r.status_code >= 300:
-        logger.error(
-            f"Miris API returned {r.status_code} for {miris_asset_uuid}: {r.text[:200]}"
-        )
-        return STATE_UNKNOWN
-
-    try:
-        body = r.json()
-    except ValueError:
-        logger.error(f"Miris API returned non-JSON for {miris_asset_uuid}: {r.text[:200]}")
-        return STATE_UNKNOWN
-
-    state = body.get("state") if isinstance(body, dict) else None
-    if not isinstance(state, str) or not _MIRIS_STATE_PATTERN.fullmatch(state):
-        logger.warning("Miris viewer API response contained no usable state")
-        return STATE_UNKNOWN
-    return state
-
-
-def _integration_processing_state(miris_asset_uuid: str) -> str:
-    """Ask the Miris Integration API for the asset's processing state (perView mode)."""
-    try:
-        state = mirisIntegration.get_asset_state(miris_asset_uuid)
-    except mirisIntegration.MirisIntegrationError as e:
-        logger.warning(f"Miris asset read failed for {miris_asset_uuid}: {e}")
-        return STATE_UNKNOWN
-
-    if state is None:
-        logger.warning(f"Miris has no asset {miris_asset_uuid}")
-        return STATE_UNKNOWN
+def _usable_state(state: str) -> str:
     if not _MIRIS_STATE_PATTERN.fullmatch(state):
         logger.warning("Miris asset response contained no usable state")
         return STATE_UNKNOWN
     return state
+
+
+def _viewer_processing_state(miris_asset_uuid: str, deadline: float) -> str:
+    """Ask the Miris viewer API, with the deployment-wide viewer key, for the processing state."""
+    try:
+        state = mirisIntegration.get_viewer_asset_state(miris_asset_uuid, miris_viewer_key, deadline=deadline)
+    except mirisIntegration.MirisIntegrationError as e:
+        if e.status_code == 400:
+            # Miris answers 400 until a freshly uploaded asset has finished processing.
+            logger.info(f"Miris viewer API returned 400 for {miris_asset_uuid}, asset is processing")
+            return STATE_PROCESSING
+        logger.warning(f"Miris viewer asset read failed for {miris_asset_uuid}: {e}")
+        return STATE_UNKNOWN
+
+    if state is None:
+        # Not visible to the viewer key. This is not proof the asset is gone: it also covers
+        # an asset still being ingested and any workspace-visibility drift.
+        logger.warning(f"Miris viewer API returned 404 for {miris_asset_uuid}")
+        return STATE_UNKNOWN
+    return _usable_state(state)
+
+
+def _integration_processing_state(miris_asset_uuid: str, database_id: str, asset_id: str,
+                                  deadline: float) -> str:
+    """Ask the Miris Integration API for the asset's processing state and binding (perView mode)."""
+    try:
+        miris_asset = mirisIntegration.get_asset(miris_asset_uuid, deadline=deadline)
+    except mirisIntegration.MirisIntegrationError as e:
+        logger.warning(f"Miris asset read failed for {miris_asset_uuid}: {e}")
+        return STATE_UNKNOWN
+
+    if miris_asset is None:
+        logger.warning(f"Miris has no asset {miris_asset_uuid}")
+        return STATE_NOT_BOUND
+    if not mirisIntegration.is_bound_to_asset(miris_asset.tags, database_id, asset_id):
+        logger.warning(f"Miris asset {miris_asset_uuid} is not tagged for {database_id}/{asset_id}")
+        return STATE_NOT_BOUND
+    return _usable_state(miris_asset.state)

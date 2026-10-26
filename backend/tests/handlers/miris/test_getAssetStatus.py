@@ -8,18 +8,25 @@ enforced before any metadata read, and every outcome maps onto the documented st
 """
 
 import json
+import logging
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
 
-from backend.backend.handlers.miris import getAssetStatus
+from backend.backend.handlers.miris import getAssetStatus, mirisIntegration
+
+from .conftest import FakeLambdaContext
 
 DATABASE_ID = "db-1"
 ASSET_ID = "asset-1"
 STORED_UUID = "8d65af7c-5412-404b-a494-fbd2cdb62442"
 OTHER_UUID = "bc336bab-e3e4-4c50-bd00-9d6cbbd9f194"
 ROUTE_PATH = f"/database/{DATABASE_ID}/assets/{ASSET_ID}/miris/asset-status"
+BINDING_TAG = f"vams-asset-{ASSET_ID}"
+DATABASE_TAG = f"vams-database-{DATABASE_ID}"
+RESPONSE_BODY = "miris-response-body-must-not-surface"
 SORT_KEY_FIELD = "databaseId:assetId:filePath"
 
 
@@ -97,21 +104,28 @@ def _stream_row(uuid=STORED_UUID, **overrides):
 
 
 def _invoke(event, metadata_table=None, asset_table=None, enforcer=None, miris_get=None,
-            viewer_key="viewer-key-0000000000", base_url="https://app.miris.com"):
+            viewer_key="viewer-key-0000000000", base_url="https://app.miris.com", viewer_api=True,
+            context=None):
+    """Invoke the handler. With `viewer_api`, the shared session answers every request with
+    `miris_get(url, **kwargs)`; otherwise the `miris_api` fixture's session stays in place."""
     metadata_table = metadata_table if metadata_table is not None else _metadata_table()
     asset_table = asset_table if asset_table is not None else _asset_table()
     enforcer = enforcer if enforcer is not None else _enforcer()
     miris_get = miris_get if miris_get is not None else MagicMock(
         return_value=_miris_response(body={"state": "streamable"})
     )
+    session = SimpleNamespace(request=lambda method, url, **kwargs: miris_get(url, **kwargs))
     with patch.object(getAssetStatus, "asset_file_metadata_table", metadata_table), \
          patch.object(getAssetStatus, "asset_table", asset_table), \
          patch.object(getAssetStatus, "CasbinEnforcer", return_value=enforcer), \
          patch.object(getAssetStatus, "request_to_claims", return_value={"tokens": ["user"], "roles": []}), \
-         patch.object(getAssetStatus, "miris_viewer_key", viewer_key), \
-         patch.object(getAssetStatus, "miris_api_base_url", base_url), \
-         patch.object(getAssetStatus.requests, "get", miris_get):
-        response = getAssetStatus.lambda_handler(event, MagicMock())
+         patch.object(getAssetStatus, "miris_viewer_key", viewer_key):
+        if viewer_api:
+            with patch.object(mirisIntegration, "MIRIS_API_BASE_URL", base_url), \
+                 patch.object(mirisIntegration, "_get_session", return_value=session):
+                response = getAssetStatus.lambda_handler(event, context or FakeLambdaContext())
+        else:
+            response = getAssetStatus.lambda_handler(event, context or FakeLambdaContext())
     body = json.loads(response["body"])
     return response["statusCode"], body, metadata_table, miris_get
 
@@ -135,7 +149,9 @@ class TestResponseShapeAndStates:
         miris_get.assert_called_once()
         args, kwargs = miris_get.call_args
         assert args[0] == f"https://app.miris.com/viewer/v1/asset/{STORED_UUID}"
-        assert kwargs["headers"] == {"Miris-Viewer-Key": "viewer-key-0000000000"}
+        assert kwargs["headers"]["Miris-Viewer-Key"] == "viewer-key-0000000000"
+        assert "Miris-API-Key" not in kwargs["headers"]
+        assert sum(kwargs["timeout"]) <= mirisIntegration._REQUEST_BUDGET_SECONDS
 
     @pytest.mark.parametrize("miris_state", ["preview", "error", "failed"])
     def test_other_miris_states_are_passed_through(self, miris_state):
@@ -243,6 +259,46 @@ class TestMirisFailuresAreUnknown:
 
 
 @pytest.mark.unit
+class TestViewerProbe:
+
+    def test_no_response_body_reaches_the_logs(self, log_recorder, caplog):
+        caplog.set_level(logging.DEBUG)
+        table = _metadata_table({f"{DATABASE_ID}:{ASSET_ID}:/scene.usd": _stream_row()})
+        for miris_get in (
+            MagicMock(return_value=_miris_response(status_code=500, text=RESPONSE_BODY)),
+            MagicMock(return_value=_miris_response(status_code=200, text=RESPONSE_BODY)),
+            MagicMock(side_effect=requests.ConnectionError(RESPONSE_BODY)),
+        ):
+            status, body, _, _ = _invoke(_event(), metadata_table=table, miris_get=miris_get)
+            assert status == 200
+            assert body["state"] == "unknown"
+
+        # Control: each failure was logged.
+        assert "HTTP 500" in log_recorder.text()
+        assert "no state" in log_recorder.text()
+        assert "ConnectionError" in log_recorder.text()
+        for text in (log_recorder.text(), caplog.text):
+            assert RESPONSE_BODY not in text
+            assert "viewer-key-0000000000" not in text
+
+    def test_too_little_time_left_is_unknown_without_a_request(self):
+        table = _metadata_table({f"{DATABASE_ID}:{ASSET_ID}:/scene.usd": _stream_row()})
+        status, body, _, miris_get = _invoke(
+            _event(), metadata_table=table, context=FakeLambdaContext(remaining_ms=2000)
+        )
+        assert status == 200
+        assert body["state"] == "unknown"
+        assert body["mirisAssetUuid"] == STORED_UUID
+        miris_get.assert_not_called()
+
+    def test_tags_are_not_checked_in_static_mode(self):
+        table = _metadata_table({f"{DATABASE_ID}:{ASSET_ID}:/scene.usd": _stream_row()})
+        miris_get = MagicMock(return_value=_miris_response(body={"state": "streamable", "tags": []}))
+        _, body, _, _ = _invoke(_event(), metadata_table=table, miris_get=miris_get)
+        assert body["state"] == "streamable"
+
+
+@pytest.mark.unit
 class TestUuidComesOnlyFromTheFile:
 
     def test_reads_exactly_the_four_keys_for_exactly_this_file(self):
@@ -277,6 +333,7 @@ class TestUuidComesOnlyFromTheFile:
         assert body["state"] == "notStreamed"
         miris_get.assert_not_called()
 
+    @pytest.mark.temporary  # pins the removal of the /miris/asset-status/{mirisAssetUuid} route
     def test_the_removed_uuid_route_is_not_dispatched(self):
         event = _event(path=f"{ROUTE_PATH}/{OTHER_UUID}", extra_path={"mirisAssetUuid": OTHER_UUID})
         status, _, table, miris_get = _invoke(event)
@@ -442,17 +499,20 @@ class TestPerViewModeUsesTheIntegrationApi:
     """In perView mode no deployment-wide viewer key exists, so the state comes from the
     Integration API (`GET /v1/asset/{uuid}` with the Integration Key)."""
 
-    def _invoke_per_view(self, miris_api, metadata_table=None):
+    def _invoke_per_view(self, miris_api, metadata_table=None, context=None):
         table = metadata_table if metadata_table is not None else _metadata_table(
             {f"{DATABASE_ID}:{ASSET_ID}:/scene.usd": _stream_row()}
         )
         viewer_get = MagicMock()
         with patch.object(getAssetStatus, "miris_viewer_key_mode", "perView"):
-            status, body, _, _ = _invoke(_event(), metadata_table=table, miris_get=viewer_get, viewer_key="")
+            status, body, _, _ = _invoke(
+                _event(), metadata_table=table, miris_get=viewer_get, viewer_key="",
+                viewer_api=False, context=context,
+            )
         return status, body, viewer_get
 
     def test_the_state_is_read_with_the_integration_key(self, miris_api):
-        miris_api.responses.append((200, {"id": STORED_UUID, "state": "streamable"}))
+        miris_api.responses.append((200, {"id": STORED_UUID, "state": "streamable", "tags": ["vams", BINDING_TAG, DATABASE_TAG]}))
         status, body, viewer_get = self._invoke_per_view(miris_api)
 
         assert status == 200
@@ -467,14 +527,20 @@ class TestPerViewModeUsesTheIntegrationApi:
 
     @pytest.mark.parametrize("miris_state", ["preview", "processing", "error", "failed"])
     def test_other_states_are_passed_through(self, miris_api, miris_state):
-        miris_api.responses.append((200, {"state": miris_state}))
+        miris_api.responses.append((200, {"state": miris_state, "tags": [BINDING_TAG, DATABASE_TAG]}))
         _, body, _ = self._invoke_per_view(miris_api)
         assert body["state"] == miris_state
 
     @pytest.mark.parametrize(
         "outcome",
-        [404, (500, "boom"), (400, "bad"), (200, {"state": "x" * 200}), (200, {"name": "none"}), (200, "<html>")],
-        ids=["404", "500", "400", "malformed-state", "no-state", "non-json"],
+        [
+            (500, "boom"),
+            (400, "bad"),
+            (200, {"state": "x" * 200, "tags": [BINDING_TAG, DATABASE_TAG]}),
+            (200, {"name": "none", "tags": [BINDING_TAG, DATABASE_TAG]}),
+            (200, "<html>"),
+        ],
+        ids=["500", "400", "malformed-state", "no-state", "non-json"],
     )
     def test_indeterminate_outcomes_are_unknown(self, miris_api, outcome):
         miris_api.responses.append(outcome)
@@ -482,6 +548,51 @@ class TestPerViewModeUsesTheIntegrationApi:
         assert status == 200
         assert body["state"] == "unknown"
         assert body["mirisAssetUuid"] == STORED_UUID
+
+    @pytest.mark.parametrize(
+        "tags",
+        [
+            [],
+            None,
+            ["vams"],
+            [BINDING_TAG],
+            [DATABASE_TAG],
+            ["vams", "vams-asset-asset-2", DATABASE_TAG],
+            ["vams", BINDING_TAG, "vams-database-db-2"],
+            [f"{BINDING_TAG}-x", DATABASE_TAG],
+        ],
+        ids=["empty", "null", "vams-only", "asset-tag-only", "database-tag-only", "another-asset",
+             "same-asset-id-other-database", "prefix-only"],
+    )
+    def test_an_unbound_asset_is_not_bound(self, miris_api, tags):
+        miris_api.responses.append((200, {"state": "streamable", "tags": tags}))
+        status, body, _ = self._invoke_per_view(miris_api)
+        assert status == 200
+        assert body["state"] == "notBound"
+        assert body["mirisAssetUuid"] == STORED_UUID
+
+    def test_a_missing_miris_asset_is_not_bound(self, miris_api):
+        miris_api.responses.append(404)
+        status, body, _ = self._invoke_per_view(miris_api)
+        assert status == 200
+        assert body["state"] == "notBound"
+        assert body["mirisAssetUuid"] == STORED_UUID
+
+    def test_a_request_received_long_ago_is_unknown_without_a_request(self, miris_api, monkeypatch):
+        monkeypatch.setattr(mirisIntegration.time, "time", lambda: 5000.0)
+        table = _metadata_table({f"{DATABASE_ID}:{ASSET_ID}:/scene.usd": _stream_row()})
+        event = _event()
+        event["requestContext"]["timeEpoch"] = int((5000.0 - 27) * 1000)
+        with patch.object(getAssetStatus, "miris_viewer_key_mode", "perView"):
+            status, body, _, _ = _invoke(event, metadata_table=table, viewer_key="", viewer_api=False)
+        assert status == 200
+        assert body["state"] == "unknown"
+        assert miris_api.calls == []
+
+    def test_too_little_time_left_is_unknown_without_a_request(self, miris_api):
+        _, body, _ = self._invoke_per_view(miris_api, context=FakeLambdaContext(remaining_ms=2000))
+        assert body["state"] == "unknown"
+        assert miris_api.calls == []
 
     def test_a_transport_failure_is_unknown(self, miris_api):
         miris_api.responses.append(requests.ConnectionError("unreachable"))
@@ -506,7 +617,7 @@ class TestPerViewModeUsesTheIntegrationApi:
     def test_static_mode_does_not_use_the_integration_api(self, miris_api):
         table = _metadata_table({f"{DATABASE_ID}:{ASSET_ID}:/scene.usd": _stream_row()})
         with patch.object(getAssetStatus, "miris_viewer_key_mode", "static"):
-            _, body, _, viewer_get = _invoke(_event(), metadata_table=table)
+            _, body, _, viewer_get = _invoke(_event(), metadata_table=table, base_url=miris_api.base_url)
         assert body["state"] == "streamable"
         viewer_get.assert_called_once()
         assert miris_api.calls == []

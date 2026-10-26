@@ -9,13 +9,8 @@
 
 from typing import Optional
 
-from pydantic import Field, validator
-
-from aws_lambda_powertools.utilities.parser import BaseModel  # noqa: F401
-try:  # pragma: no cover — runtime-dependent branch
-    from aws_lambda_powertools.utilities.parser import root_validator
-except ImportError:  # pragma: no cover
-    from pydantic import root_validator  # type: ignore[assignment]
+from aws_lambda_powertools.utilities.parser import BaseModel, root_validator, validator
+from pydantic import Field
 
 from common.validators import validate, trim_name
 from models.metadata import MAX_FILE_PATH_LENGTH
@@ -36,6 +31,9 @@ MIRIS_STREAM_METADATA_KEYS = (
 # States the endpoint reports itself; any other value is a Miris processing state.
 STATE_NOT_STREAMED = "notStreamed"
 STATE_INVALID_UUID = "invalidUuid"
+# The Miris asset is missing or lacks the `vams-asset-{assetId}` and `vams-database-{databaseId}`
+# tags that bind it to the VAMS asset.
+STATE_NOT_BOUND = "notBound"
 STATE_UNKNOWN = "unknown"
 # The viewer API answers 400 for an asset Miris is still preparing.
 STATE_PROCESSING = "processing"
@@ -57,7 +55,7 @@ class MirisFileRequestModel(BaseModel, extra="ignore"):
     _trim_ids = validator("databaseId", "assetId", pre=True, allow_reuse=True)(trim_name)
 
     @root_validator(skip_on_failure=True)
-    def _validate_fields(cls, values):  # noqa: N805 — pydantic signature
+    def _validate_fields(cls, values):
         file_path = values.get("filePath", "")
         if not file_path.startswith("/"):
             file_path = "/" + file_path

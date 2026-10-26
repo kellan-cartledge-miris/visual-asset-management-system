@@ -466,7 +466,7 @@ describe("MirisStreamViewerComponent", () => {
             mockGetMirisStreamStatus.mockResolvedValue(status({ state: "notBound" }));
             render(<MirisStreamViewerComponent {...baseProps} />);
             await waitFor(() => expect(screen.getByText(NOT_BOUND_TEXT)).toBeInTheDocument());
-            expect(screen.getByText(/vams-asset-asset-1/)).toBeInTheDocument();
+            expect(screen.getByText(/vams-asset-asset-1 and vams-database-db-1/)).toBeInTheDocument();
             expect(mockLoadMirisStream).not.toHaveBeenCalled();
             expect(mockMintMirisViewerKey).not.toHaveBeenCalled();
             expect(sceneElement()).toBeNull();

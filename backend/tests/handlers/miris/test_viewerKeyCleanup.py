@@ -7,6 +7,8 @@ stream record's SequenceNumber."""
 
 import logging
 
+import pytest
+
 from backend.backend.handlers.miris import viewerKeyCleanup
 
 KEY_A = "3f2b8c1e-9a4d-4e7f-8b6a-1c2d3e4f5a6b"
@@ -110,6 +112,41 @@ def test_an_invalid_key_id_is_skipped_without_an_http_call(miris_api, log_record
     text = log_recorder.text()
     assert "Skipping stream record 100" in text
     assert "Skipping stream record 101" in text
+
+
+def _without_sequence_number(key_id, event_id):
+    record = _record(key_id, "unused")
+    del record["dynamodb"]["SequenceNumber"]
+    record["eventID"] = event_id
+    return record
+
+
+def test_a_record_without_a_sequence_number_is_still_deleted(miris_api):
+    miris_api.responses.append(204)
+
+    assert _invoke(_without_sequence_number(KEY_A, "event-a")) == {"batchItemFailures": []}
+    assert _deleted_urls(miris_api) == [f"{miris_api.base_url}/v1/asset-viewer-key/{KEY_A}"]
+
+
+def test_a_failed_record_without_a_sequence_number_retries_the_whole_batch(miris_api, log_recorder):
+    miris_api.responses.extend([503, 204, 503])
+
+    with pytest.raises(viewerKeyCleanup.UnreportableRecordFailure):
+        _invoke(
+            _without_sequence_number(KEY_A, "event-a"),
+            _record(KEY_B, "101"),
+            _record(KEY_A, "102"),
+        )
+
+    # Every record in the batch was still attempted before the batch failed.
+    assert len(miris_api.calls) == 3
+    assert "Stream record event-a has no SequenceNumber" in log_recorder.text()
+
+
+def test_an_invalid_record_without_a_sequence_number_is_skipped_by_event_id(miris_api, log_recorder):
+    assert _invoke(_without_sequence_number("not-a-key", "event-x")) == {"batchItemFailures": []}
+    assert miris_api.calls == []
+    assert "Skipping stream record event-x" in log_recorder.text()
 
 
 def test_an_empty_event_reports_no_failures(miris_api):

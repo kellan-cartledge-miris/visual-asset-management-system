@@ -7,6 +7,10 @@ file (per-view viewer key mode). The Miris asset UUID is read server side from t
 (`miris_asset_uuid`), exactly as the stream status endpoint reads it; the request carries no UUID.
 `filePath` accepts the same forms as the status endpoint.
 
+Before a key is minted, the Miris asset is read with the Miris Integration Key and must carry
+both tags `vams-asset-{assetId}` and `vams-database-{databaseId}` that bind it to this VAMS asset.
+A Miris asset without both tags, or one Miris reports as missing (404), is `notBound`.
+
 The key is created with the Miris Integration Key, with no tags and the one asset ID, and expires
 `MIRIS_VIEWER_KEY_TTL_MINUTES` minutes after it is minted. Each key is recorded in
 MirisViewerKeyStorageTable under its Miris key ID, with a `ttl` one hour after its expiry; the
@@ -23,10 +27,12 @@ Response body (200, `Cache-Control: no-cache, no-store`):
 Errors:
 
     400  invalid request, missing asset, or `miris_asset_uuid` is not a UUID (`state: invalidUuid`)
-    403  Tier 1 or Tier 2 denial
+    403  Tier 1 or Tier 2 denial, or the Miris asset is missing or lacks the asset's binding tags
+         (`state: notBound`)
     404  the file records no Miris stream (`state: notStreamed`)
     500  the key could not be recorded (the minted key is deleted from Miris), or misconfiguration
-    502  Miris did not create the key
+    502  Miris could not be read or did not create the key
+    504  the request deadline passed before Miris answered
 
 Authorization is two-tier:
   - Tier 1: enforceAPI on the route (POST)
@@ -61,6 +67,7 @@ from models.common import (
 )
 from models.miris import (
     STATE_INVALID_UUID,
+    STATE_NOT_BOUND,
     STATE_NOT_STREAMED,
     MintMirisViewerKeyRequestModel,
     MintMirisViewerKeyResponseModel,
@@ -69,6 +76,7 @@ from models.miris import (
 from . import mirisIntegration
 from .streamMetadata import (
     file_path_for_asset,
+    load_readable_asset,
     read_stream_metadata,
     stream_uuid,
     unusable_uuid_state,
@@ -76,6 +84,11 @@ from .streamMetadata import (
 
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
 dynamodb = boto3.resource("dynamodb", config=retry_config)
+# The key row is written after the key is minted, late in the request, so its write is short.
+key_table_config = Config(
+    connect_timeout=1, read_timeout=2, retries={"total_max_attempts": 2, "mode": "standard"}
+)
+key_table_dynamodb = boto3.resource("dynamodb", config=key_table_config)
 logger = safeLogger(service_name="MirisMintViewerKey")
 
 claims_and_roles = {}
@@ -92,7 +105,7 @@ except Exception:
 
 asset_table = dynamodb.Table(asset_storage_table_name)
 asset_file_metadata_table = dynamodb.Table(asset_file_metadata_table_name)
-miris_viewer_key_table = dynamodb.Table(miris_viewer_key_table_name)
+miris_viewer_key_table = key_table_dynamodb.Table(miris_viewer_key_table_name)
 
 # Rows outlive the key by this long, so TTL never removes a row for a key that is still valid.
 _ROW_TTL_GRACE_SECONDS = 3600
@@ -115,7 +128,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             return authorization_error()
 
         if method == "POST" and API_MIRIS_VIEWER_KEY.matches(path):
-            return _handle_post(event)
+            return _handle_post(event, context)
         return validation_error(body={"message": "Method not allowed"}, event=event)
 
     except ValidationError as v:
@@ -155,7 +168,15 @@ def _viewer_key_ttl_minutes() -> int:
     return ttl_minutes
 
 
-def _handle_post(event):
+def _deadline_response(event):
+    return general_error(
+        status_code=504,
+        body={"message": "Miris did not answer in time"},
+        event=event,
+    )
+
+
+def _handle_post(event, context):
     path_params = event.get("pathParameters") or {}
     body = _request_body(event)
 
@@ -170,19 +191,11 @@ def _handle_post(event):
     database_id = request_model.databaseId
     asset_id = request_model.assetId
 
-    # Tier-2: must have GET access to the parent asset
-    asset = asset_table.get_item(
-        Key={"databaseId": database_id, "assetId": asset_id}
-    ).get("Item")
-    if not asset:
-        return general_error(body={"message": "Asset not found"}, event=event)
-
-    # Casbin policies on asset objects key off object__type='asset'; the
-    # DynamoDB record doesn't carry that field, so annotate before enforce().
-    asset["object__type"] = "asset"
-    casbin_enforcer = CasbinEnforcer(claims_and_roles)
-    if not casbin_enforcer.enforce(asset, "GET"):
-        return authorization_error()
+    asset, denied = load_readable_asset(
+        asset_table, CasbinEnforcer(claims_and_roles), database_id, asset_id, event
+    )
+    if denied:
+        return denied
 
     file_path = file_path_for_asset(asset, asset_id, request_model.filePath)
     stream_metadata = read_stream_metadata(
@@ -210,12 +223,49 @@ def _handle_post(event):
         logger.error("MIRIS_VIEWER_KEY_TTL_MINUTES is not a whole number of minutes from 1 to 60")
         return internal_error(event=event)
 
+    deadline = mirisIntegration.request_deadline(context, event)
+    try:
+        miris_asset = mirisIntegration.get_asset(miris_asset_uuid, deadline=deadline)
+    except mirisIntegration.MirisDeadlineExceeded:
+        logger.error(f"Request deadline passed before Miris asset {miris_asset_uuid} was read")
+        return _deadline_response(event)
+    except mirisIntegration.MirisIntegrationError as e:
+        logger.error(f"Miris asset read failed for {miris_asset_uuid}: {e}")
+        return general_error(
+            status_code=502,
+            body={"message": "Miris could not be reached"},
+            event=event,
+        )
+    if miris_asset is None or not mirisIntegration.is_bound_to_asset(
+        miris_asset.tags, database_id, asset_id
+    ):
+        logger.warning(
+            f"Miris asset {miris_asset_uuid} is missing or not tagged for {database_id}/{asset_id}"
+        )
+        asset_tag, database_tag = mirisIntegration.binding_tags(database_id, asset_id)
+        return general_error(
+            status_code=403,
+            body={
+                "message": (
+                    f"The file's Miris asset is not bound to this asset: it must exist and carry"
+                    f" the tags {asset_tag} and {database_tag}"
+                ),
+                "state": STATE_NOT_BOUND,
+            },
+            event=event,
+        )
+
     now = datetime.now(timezone.utc).replace(microsecond=0)
     expires_at = now + timedelta(minutes=ttl_minutes)
-    name = f"vams:{database_id}:{asset_id}:{int(time.time() * 1000)}"
+    name = mirisIntegration.viewer_key_name(database_id, asset_id, int(time.time() * 1000))
 
     try:
-        minted = mirisIntegration.create_viewer_key(miris_asset_uuid, expires_at, name)
+        minted = mirisIntegration.create_viewer_key(
+            miris_asset_uuid, expires_at, name, deadline=deadline, context=context
+        )
+    except mirisIntegration.MirisDeadlineExceeded:
+        logger.error(f"Request deadline passed before a viewer key was created for {miris_asset_uuid}")
+        return _deadline_response(event)
     except mirisIntegration.MirisIntegrationError as e:
         logger.error(f"Miris viewer key create failed for {miris_asset_uuid}: {e}")
         return general_error(
@@ -246,7 +296,7 @@ def _handle_post(event):
         logger.error(f"Could not record Miris viewer key {minted.key_id} ({type(e).__name__})")
     # Handled outside the except block, so no later traceback chains the put failure.
     if not recorded:
-        _delete_unrecorded_key(minted.key_id)
+        _delete_unrecorded_key(minted.key_id, context)
         return internal_error(event=event)
 
     log_auth_other(
@@ -272,10 +322,11 @@ def _handle_post(event):
     return success(body=response.dict())
 
 
-def _delete_unrecorded_key(key_id: str) -> None:
-    """Delete a minted key that has no table row, so nothing would ever clean it up."""
+def _delete_unrecorded_key(key_id: str, context) -> None:
+    """Delete a minted key that has no table row, so nothing would ever clean it up. The delete
+    gets its own short grace period, so it is attempted even after the request deadline."""
     try:
-        mirisIntegration.delete_viewer_key(key_id)
+        mirisIntegration.delete_viewer_key(key_id, deadline=mirisIntegration.cleanup_deadline(context))
         logger.info(f"Deleted unrecorded Miris viewer key {key_id}")
     except Exception as e:
         logger.error(f"Could not delete unrecorded Miris viewer key {key_id} ({type(e).__name__})")

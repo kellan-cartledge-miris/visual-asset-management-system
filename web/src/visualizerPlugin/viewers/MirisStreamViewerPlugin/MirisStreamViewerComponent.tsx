@@ -36,7 +36,7 @@ type ViewerError =
     | { kind: "MINT_FORBIDDEN" }
     | { kind: "MINT_FAILED" }
     | { kind: "INVALID_UUID" }
-    | { kind: "NOT_BOUND"; assetId: string }
+    | { kind: "NOT_BOUND"; databaseId: string; assetId: string }
     | { kind: "LOAD_FAILED" }
     | { kind: "STREAM_TIMEOUT"; uuid: string }
     | { kind: "DEVICE_UNSUPPORTED" }
@@ -86,9 +86,10 @@ function errorMessage(err: ViewerError): string {
             return "This file's miris_asset_uuid metadata is not a valid UUID. Correct it in the file's metadata, or run Stream with Miris again.";
         case "NOT_BOUND":
             return (
-                "The Miris asset recorded for this file is not linked to this VAMS asset: it " +
-                `does not carry the vams-asset-${err.assetId} tag. Run Stream with Miris on this ` +
-                "file again, or add that tag to the Miris asset."
+                "The Miris asset recorded for this file is not linked to this VAMS asset: it must " +
+                `exist in the Miris workspace and carry the vams-asset-${err.assetId} and ` +
+                `vams-database-${err.databaseId} tags. Run Stream with Miris on this file again, ` +
+                "or add those tags to the Miris asset."
             );
         case "LOAD_FAILED":
             return "The Miris viewer failed to load. Try again.";
@@ -187,7 +188,7 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                     return;
                 }
                 if (disposition === "notBound") {
-                    setError({ kind: "NOT_BOUND", assetId });
+                    setError({ kind: "NOT_BOUND", databaseId, assetId });
                     return;
                 }
                 if (disposition === "failed") {
@@ -260,7 +261,7 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                         } else if (mintResult[2] === 403) {
                             setError(
                                 streamDisposition(mintResult[3] ?? "") === "notBound"
-                                    ? { kind: "NOT_BOUND", assetId }
+                                    ? { kind: "NOT_BOUND", databaseId, assetId }
                                     : { kind: "MINT_FORBIDDEN" }
                             );
                         } else {

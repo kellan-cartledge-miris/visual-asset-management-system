@@ -6,12 +6,15 @@ caching and rotation, and that no key or response body reaches a log line or exc
 
 import logging
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 import requests
 
 from backend.backend.handlers.miris import mirisIntegration
 from backend.backend.handlers.miris.mirisIntegration import MirisIntegrationError
+
+from .conftest import FakeLambdaContext
 
 KEY_ID = "3f2b8c1e-9a4d-4e7f-8b6a-1c2d3e4f5a6b"
 RESPONSE_BODY = "miris-response-body-must-not-surface"
@@ -343,27 +346,57 @@ class TestCreateViewerKey:
             assert RESPONSE_BODY not in text
 
 
-class TestGetAssetState:
-    def test_sends_one_get_for_the_asset_and_returns_its_state(self, miris_api):
-        miris_api.responses.append((200, {"id": ASSET_UUID, "state": "streamable"}))
+VAMS_ASSET_ID = "asset-1"
+VAMS_DATABASE_ID = "db-1"
+BINDING_TAG = f"vams-asset-{VAMS_ASSET_ID}"
+DATABASE_TAG = f"vams-database-{VAMS_DATABASE_ID}"
+VIEWER_KEY = "static-viewer-key-do-not-log"
 
-        assert mirisIntegration.get_asset_state(ASSET_UUID) == "streamable"
 
+class TestGetAsset:
+    def test_sends_one_get_and_returns_the_state_and_tags(self, miris_api):
+        miris_api.responses.append(
+            (200, {"id": ASSET_UUID, "state": "streamable", "tags": ["vams", BINDING_TAG]})
+        )
+
+        asset = mirisIntegration.get_asset(ASSET_UUID)
+
+        assert asset == ("streamable", ("vams", BINDING_TAG))
+        state, tags = asset
+        assert state == "streamable"
+        assert tags == ("vams", BINDING_TAG)
         assert len(miris_api.calls) == 1
         call = miris_api.calls[0]
         assert call["method"] == "GET"
         assert call["url"] == f"{miris_api.base_url}/v1/asset/{ASSET_UUID}"
         assert call["headers"]["Miris-API-Key"] == miris_api.integration_key
+        assert call["timeout"] == mirisIntegration._REQUEST_TIMEOUT_SECONDS
 
     def test_404_returns_none(self, miris_api):
         miris_api.responses.append(404)
-        assert mirisIntegration.get_asset_state(ASSET_UUID) is None
+        assert mirisIntegration.get_asset(ASSET_UUID) is None
+
+    @pytest.mark.parametrize(
+        "body", [{"state": "preview", "tags": None}, {"state": "preview"}], ids=["null", "absent"]
+    )
+    def test_null_or_absent_tags_are_no_tags(self, miris_api, body):
+        miris_api.responses.append((200, body))
+        assert mirisIntegration.get_asset(ASSET_UUID) == ("preview", ())
+
+    def test_non_string_tags_are_dropped(self, miris_api):
+        miris_api.responses.append((200, {"state": "preview", "tags": [BINDING_TAG, 7, None]}))
+        assert mirisIntegration.get_asset(ASSET_UUID).tags == (BINDING_TAG,)
+
+    def test_tags_that_are_not_a_list_raise(self, miris_api):
+        miris_api.responses.append((200, {"state": "preview", "tags": BINDING_TAG}))
+        with pytest.raises(MirisIntegrationError, match="no tag list"):
+            mirisIntegration.get_asset(ASSET_UUID)
 
     @pytest.mark.parametrize("status", [400, 409, 500, 503])
     def test_other_statuses_raise(self, miris_api, status):
         miris_api.responses.append((status, RESPONSE_BODY))
         with pytest.raises(MirisIntegrationError) as raised:
-            mirisIntegration.get_asset_state(ASSET_UUID)
+            mirisIntegration.get_asset(ASSET_UUID)
         assert raised.value.status_code == status
         assert RESPONSE_BODY not in str(raised.value)
 
@@ -373,9 +406,290 @@ class TestGetAssetState:
     def test_a_response_without_a_string_state_raises(self, miris_api, body):
         miris_api.responses.append((200, body))
         with pytest.raises(MirisIntegrationError, match="no state"):
-            mirisIntegration.get_asset_state(ASSET_UUID)
+            mirisIntegration.get_asset(ASSET_UUID)
 
     def test_a_non_uuid_raises_without_a_request(self, miris_api):
         with pytest.raises(MirisIntegrationError, match="not a UUID"):
-            mirisIntegration.get_asset_state("../v1/asset-viewer-key")
+            mirisIntegration.get_asset("../v1/asset-viewer-key")
         assert miris_api.calls == []
+
+
+class TestBinding:
+    def test_the_binding_tags_name_the_vams_asset_and_its_database(self):
+        assert mirisIntegration.binding_tags(VAMS_DATABASE_ID, VAMS_ASSET_ID) == (BINDING_TAG, DATABASE_TAG)
+
+    def test_bound_with_both_exact_tags(self):
+        assert mirisIntegration.is_bound_to_asset(("vams", BINDING_TAG, DATABASE_TAG), VAMS_DATABASE_ID, VAMS_ASSET_ID)
+
+    @pytest.mark.parametrize(
+        "tags",
+        [
+            (),
+            ("vams",),
+            (BINDING_TAG,),
+            (DATABASE_TAG,),
+            (BINDING_TAG, "vams-database-db-2"),
+            ("vams-asset-asset-2", DATABASE_TAG),
+            (f"{BINDING_TAG}x", DATABASE_TAG),
+            (BINDING_TAG, f"{DATABASE_TAG}x"),
+            (BINDING_TAG.upper(), DATABASE_TAG),
+        ],
+        ids=["none", "vams-only", "asset-only", "database-only", "other-database", "other-asset",
+             "asset-suffix", "database-suffix", "case"],
+    )
+    def test_not_bound_without_both_exact_tags(self, tags):
+        assert not mirisIntegration.is_bound_to_asset(tags, VAMS_DATABASE_ID, VAMS_ASSET_ID)
+
+
+class TestGetViewerAssetState:
+    def test_sends_one_get_with_the_viewer_key_header_and_the_shared_timeout(self, miris_api):
+        miris_api.responses.append((200, {"id": ASSET_UUID, "state": "streamable"}))
+
+        assert mirisIntegration.get_viewer_asset_state(ASSET_UUID, VIEWER_KEY) == "streamable"
+
+        assert len(miris_api.calls) == 1
+        call = miris_api.calls[0]
+        assert call["method"] == "GET"
+        assert call["url"] == f"{miris_api.base_url}/viewer/v1/asset/{ASSET_UUID}"
+        assert call["headers"]["Miris-Viewer-Key"] == VIEWER_KEY
+        assert "Miris-API-Key" not in call["headers"]
+        assert VIEWER_KEY not in call["url"]
+        assert call["timeout"] == mirisIntegration._REQUEST_TIMEOUT_SECONDS
+        miris_api.secretsmanager.get_secret_value.assert_not_called()
+
+    def test_404_returns_none(self, miris_api):
+        miris_api.responses.append(404)
+        assert mirisIntegration.get_viewer_asset_state(ASSET_UUID, VIEWER_KEY) is None
+
+    @pytest.mark.parametrize("status", [400, 401, 403, 500])
+    def test_other_statuses_raise_with_the_status_code_only(self, miris_api, status):
+        miris_api.responses.append((status, RESPONSE_BODY))
+        with pytest.raises(MirisIntegrationError) as raised:
+            mirisIntegration.get_viewer_asset_state(ASSET_UUID, VIEWER_KEY)
+        assert raised.value.status_code == status
+        assert RESPONSE_BODY not in str(raised.value)
+        assert len(miris_api.calls) == 1
+
+    @pytest.mark.parametrize("body", [{"name": "x"}, RESPONSE_BODY], ids=["no-state", "non-json"])
+    def test_a_response_without_a_string_state_raises(self, miris_api, body):
+        miris_api.responses.append((200, body))
+        with pytest.raises(MirisIntegrationError, match="no state") as raised:
+            mirisIntegration.get_viewer_asset_state(ASSET_UUID, VIEWER_KEY)
+        assert RESPONSE_BODY not in str(raised.value)
+
+    @pytest.mark.parametrize("viewer_key", ["", None])
+    def test_no_viewer_key_raises_without_a_request(self, miris_api, viewer_key):
+        with pytest.raises(MirisIntegrationError, match="viewer key"):
+            mirisIntegration.get_viewer_asset_state(ASSET_UUID, viewer_key)
+        assert miris_api.calls == []
+
+    def test_a_non_uuid_raises_without_a_request(self, miris_api):
+        with pytest.raises(MirisIntegrationError, match="not a UUID"):
+            mirisIntegration.get_viewer_asset_state("../x", VIEWER_KEY)
+        assert miris_api.calls == []
+
+    def test_no_response_body_or_key_reaches_the_logs(self, miris_api, log_recorder, caplog):
+        caplog.set_level(logging.DEBUG)
+        miris_api.responses.extend([
+            (500, RESPONSE_BODY),
+            (200, RESPONSE_BODY),
+            requests.ConnectionError(f"{RESPONSE_BODY} {VIEWER_KEY}"),
+        ])
+        for _ in range(3):
+            with pytest.raises(MirisIntegrationError):
+                mirisIntegration.get_viewer_asset_state(ASSET_UUID, VIEWER_KEY)
+
+        assert len(miris_api.calls) == 3
+        for text in (log_recorder.text(), caplog.text):
+            assert RESPONSE_BODY not in text
+            assert VIEWER_KEY not in text
+
+
+class TestRequestDeadline:
+    def test_a_long_running_lambda_is_held_to_the_request_budget(self, monkeypatch):
+        monkeypatch.setattr(mirisIntegration.time, "monotonic", lambda: 1000.0)
+        deadline = mirisIntegration.request_deadline(FakeLambdaContext(remaining_ms=300000))
+        assert deadline == 1000.0 + mirisIntegration._REQUEST_BUDGET_SECONDS
+
+    def test_the_deadline_keeps_a_margin_before_the_lambda_timeout(self, monkeypatch):
+        monkeypatch.setattr(mirisIntegration.time, "monotonic", lambda: 1000.0)
+        deadline = mirisIntegration.request_deadline(FakeLambdaContext(remaining_ms=10000))
+        assert deadline == 1000.0 + 10 - mirisIntegration._DEADLINE_MARGIN_SECONDS
+
+    def test_no_context_gets_the_request_budget(self, monkeypatch):
+        monkeypatch.setattr(mirisIntegration.time, "monotonic", lambda: 1000.0)
+        assert mirisIntegration.request_deadline(None) == 1000.0 + mirisIntegration._REQUEST_BUDGET_SECONDS
+
+    def test_a_passed_deadline_raises_without_a_request(self, miris_api):
+        deadline = mirisIntegration.request_deadline(FakeLambdaContext(remaining_ms=1000))
+        with pytest.raises(mirisIntegration.MirisDeadlineExceeded):
+            mirisIntegration.get_asset(ASSET_UUID, deadline=deadline)
+        assert miris_api.calls == []
+        assert issubclass(mirisIntegration.MirisDeadlineExceeded, MirisIntegrationError)
+
+    @pytest.mark.parametrize(
+        "remaining, expected",
+        [(60, (5, 15)), (20, (5, 15)), (16, (4, 12)), (8, (2, 6)), (1, (0.25, 0.75))],
+    )
+    def test_connect_plus_read_never_exceeds_the_time_left(self, monkeypatch, remaining, expected):
+        monkeypatch.setattr(mirisIntegration.time, "monotonic", lambda: 1000.0)
+        timeout = mirisIntegration._call_timeout(1000.0 + remaining)
+        assert timeout == pytest.approx(expected)
+        assert sum(timeout) <= remaining
+
+    def test_less_than_the_minimum_call_time_raises(self, monkeypatch):
+        monkeypatch.setattr(mirisIntegration.time, "monotonic", lambda: 1000.0)
+        with pytest.raises(mirisIntegration.MirisDeadlineExceeded):
+            mirisIntegration._call_timeout(1000.0 + 0.9)
+
+    def test_the_request_timeout_is_cut_to_the_time_left(self, miris_api, monkeypatch):
+        monkeypatch.setattr(mirisIntegration.time, "monotonic", lambda: 1000.0)
+        miris_api.responses.append((200, {"state": "preview", "tags": []}))
+        mirisIntegration.get_asset(ASSET_UUID, deadline=1000.0 + 8)
+        assert miris_api.calls[0]["timeout"] == pytest.approx((2, 6))
+
+    def test_the_secret_is_not_read_unless_the_bounded_read_and_a_call_fit(self, miris_api, monkeypatch):
+        monkeypatch.setattr(mirisIntegration.time, "monotonic", lambda: 1000.0)
+        needed = mirisIntegration._SECRET_READ_BOUND_SECONDS + mirisIntegration._MIN_CALL_SECONDS
+        with pytest.raises(mirisIntegration.MirisDeadlineExceeded):
+            mirisIntegration.get_asset(ASSET_UUID, deadline=1000.0 + needed - 0.1)
+        miris_api.secretsmanager.get_secret_value.assert_not_called()
+        assert miris_api.calls == []
+
+    def test_a_cached_key_needs_no_time_for_the_secret_read(self, miris_api, monkeypatch):
+        miris_api.responses.extend([(200, {"state": "preview", "tags": []})] * 2)
+        mirisIntegration.get_asset(ASSET_UUID)
+        monkeypatch.setattr(mirisIntegration.time, "monotonic", lambda: 1000.0)
+        mirisIntegration.get_asset(ASSET_UUID, deadline=1000.0 + 2)
+        assert len(miris_api.calls) == 2
+        miris_api.secretsmanager.get_secret_value.assert_called_once()
+
+    def test_the_secrets_manager_client_is_bounded(self):
+        import boto3
+
+        client = boto3.client(
+            "secretsmanager", region_name="us-east-1", config=mirisIntegration._secrets_config
+        )
+        resolved = client.meta.config
+        assert resolved.connect_timeout == 1
+        assert resolved.read_timeout == 2
+        # Two attempts in total: the first and one retry.
+        assert resolved.retries["total_max_attempts"] == 2
+        assert resolved.retries["mode"] == "standard"
+        # 2 x (1 s connect + 2 s read) + at most 1 s of backoff before the retry.
+        assert mirisIntegration._SECRET_READ_BOUND_SECONDS == 7
+
+    def test_an_api_gateway_receipt_long_ago_shortens_the_deadline(self, monkeypatch):
+        monkeypatch.setattr(mirisIntegration.time, "monotonic", lambda: 1000.0)
+        monkeypatch.setattr(mirisIntegration.time, "time", lambda: 5000.0)
+        event = {"requestContext": {"timeEpoch": int((5000.0 - 20) * 1000)}}
+        deadline = mirisIntegration.request_deadline(FakeLambdaContext(remaining_ms=30000), event)
+        # 29 s - 20 s elapsed - 3 s margin.
+        assert deadline == pytest.approx(1000.0 + 6)
+
+    def test_a_fresh_receipt_keeps_the_request_budget(self, monkeypatch):
+        monkeypatch.setattr(mirisIntegration.time, "monotonic", lambda: 1000.0)
+        monkeypatch.setattr(mirisIntegration.time, "time", lambda: 5000.0)
+        event = {"requestContext": {"timeEpoch": 5000 * 1000}}
+        deadline = mirisIntegration.request_deadline(FakeLambdaContext(remaining_ms=300000), event)
+        assert deadline == 1000.0 + mirisIntegration._REQUEST_BUDGET_SECONDS
+
+    def test_the_lambdas_remaining_time_still_caps_a_fresh_receipt(self, monkeypatch):
+        monkeypatch.setattr(mirisIntegration.time, "monotonic", lambda: 1000.0)
+        monkeypatch.setattr(mirisIntegration.time, "time", lambda: 5000.0)
+        event = {"requestContext": {"timeEpoch": 5000 * 1000}}
+        deadline = mirisIntegration.request_deadline(FakeLambdaContext(remaining_ms=8000), event)
+        assert deadline == 1000.0 + 8 - mirisIntegration._DEADLINE_MARGIN_SECONDS
+
+    @pytest.mark.parametrize(
+        "event",
+        [None, {}, {"requestContext": {}}, {"requestContext": {"timeEpoch": "x"}}]
+        + [
+            {"requestContext": {"timeEpoch": value}}
+            for value in (-5, 0, float("-inf"), float("inf"), float("nan"), 10**400, True, 5000)
+        ],
+    )
+    def test_without_a_usable_receipt_time_the_budget_applies(self, monkeypatch, event):
+        monkeypatch.setattr(mirisIntegration.time, "monotonic", lambda: 1000.0)
+        monkeypatch.setattr(mirisIntegration.time, "time", lambda: 5000.0)
+        deadline = mirisIntegration.request_deadline(FakeLambdaContext(remaining_ms=300000), event)
+        assert deadline == 1000.0 + mirisIntegration._REQUEST_BUDGET_SECONDS
+
+    def test_the_cleanup_deadline_ignores_the_request_deadline(self, monkeypatch):
+        monkeypatch.setattr(mirisIntegration.time, "monotonic", lambda: 1000.0)
+        assert mirisIntegration.cleanup_deadline(FakeLambdaContext(remaining_ms=30000)) == (
+            1000.0 + mirisIntegration._CLEANUP_GRACE_SECONDS
+        )
+
+    def test_the_cleanup_deadline_stays_inside_the_lambdas_remaining_time(self, monkeypatch):
+        monkeypatch.setattr(mirisIntegration.time, "monotonic", lambda: 1000.0)
+        deadline = mirisIntegration.cleanup_deadline(FakeLambdaContext(remaining_ms=2000))
+        assert deadline == 1000.0 + 2 - mirisIntegration._CLEANUP_MARGIN_SECONDS
+
+    def test_an_auth_retry_is_not_sent_once_the_deadline_has_passed(self, miris_api, monkeypatch):
+        clock = {"now": 1000.0}
+        monkeypatch.setattr(mirisIntegration.time, "monotonic", lambda: clock["now"])
+        inner = mirisIntegration._get_session()
+
+        def request_taking_9_5_seconds(method, url, **kwargs):
+            clock["now"] += 9.5
+            return inner.request(method, url, **kwargs)
+
+        monkeypatch.setattr(
+            mirisIntegration, "_get_session", lambda: SimpleNamespace(request=request_taking_9_5_seconds)
+        )
+        miris_api.responses.extend([401, 204])
+        with pytest.raises(mirisIntegration.MirisDeadlineExceeded):
+            mirisIntegration.delete_viewer_key(KEY_ID, deadline=1010.0)
+        assert len(miris_api.calls) == 1
+
+
+class TestRedirects:
+    @pytest.mark.parametrize("status", [301, 302, 307, 308])
+    def test_an_integration_redirect_raises_and_nothing_is_sent_onward(self, miris_api, status):
+        miris_api.responses.append((status, RESPONSE_BODY))
+        with pytest.raises(MirisIntegrationError) as raised:
+            mirisIntegration.get_asset(ASSET_UUID)
+        assert raised.value.status_code == status
+        assert RESPONSE_BODY not in str(raised.value)
+        # One request, to Miris only, sent with redirects off.
+        assert [c["url"] for c in miris_api.calls] == [f"{miris_api.base_url}/v1/asset/{ASSET_UUID}"]
+        assert miris_api.calls[0]["allow_redirects"] is False
+
+    def test_a_viewer_redirect_raises_and_nothing_is_sent_onward(self, miris_api):
+        miris_api.responses.append(302)
+        with pytest.raises(MirisIntegrationError) as raised:
+            mirisIntegration.get_viewer_asset_state(ASSET_UUID, VIEWER_KEY)
+        assert raised.value.status_code == 302
+        assert len(miris_api.calls) == 1
+        assert miris_api.calls[0]["allow_redirects"] is False
+
+    def test_redirects_are_off_for_every_call(self, miris_api):
+        miris_api.responses.extend([204, (200, _created()), (200, {"state": "x", "tags": []}), (200, {"state": "x"})])
+        mirisIntegration.delete_viewer_key(KEY_ID)
+        mirisIntegration.create_viewer_key(ASSET_UUID, EXPIRES_AT, "n")
+        mirisIntegration.get_asset(ASSET_UUID)
+        mirisIntegration.get_viewer_asset_state(ASSET_UUID, VIEWER_KEY)
+        assert [c["allow_redirects"] for c in miris_api.calls] == [False] * 4
+
+    def test_the_real_session_does_not_follow_a_redirect(self, monkeypatch):
+        """Against the real `requests` session: a 302 to another host is not followed, so neither
+        key header reaches that host."""
+        sent = []
+
+        def fake_send(self, request, **kwargs):
+            sent.append(request.url)
+            response = requests.Response()
+            response.status_code = 302
+            response.headers["Location"] = "https://attacker.example/steal"
+            response.url = request.url
+            response.request = request
+            return response
+
+        monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", fake_send)
+        monkeypatch.setattr(mirisIntegration, "_session", None)
+        monkeypatch.setattr(mirisIntegration, "MIRIS_API_BASE_URL", "https://miris.example.test")
+
+        with pytest.raises(MirisIntegrationError):
+            mirisIntegration.get_viewer_asset_state(ASSET_UUID, VIEWER_KEY)
+        assert sent == [f"https://miris.example.test/viewer/v1/asset/{ASSET_UUID}"]

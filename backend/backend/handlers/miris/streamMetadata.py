@@ -1,14 +1,16 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Reads the Miris stream recorded on one asset file, shared by the Miris API handlers.
+"""Loads the asset and reads the Miris stream recorded on one of its files, shared by the Miris
+API handlers.
 
 The stream is described by the `miris_*` keys in the asset file metadata table, keyed by exactly
 one databaseId, assetId and asset-relative filePath. A request never supplies the Miris asset UUID
 itself, so a caller can only reach a stream that the file references.
 """
-from typing import Optional
+from typing import Optional, Tuple
 
 from common.validators import validate
+from models.common import authorization_error, general_error
 from models.miris import (
     MIRIS_ASSET_UUID_KEY,
     MIRIS_STREAM_METADATA_KEYS,
@@ -16,6 +18,25 @@ from models.miris import (
     STATE_NOT_STREAMED,
     asset_relative_file_path,
 )
+
+
+def load_readable_asset(asset_table, casbin_enforcer, database_id: str, asset_id: str,
+                        event) -> Tuple[Optional[dict], Optional[dict]]:
+    """Tier 2: load the asset and check that the caller may read it (GET).
+
+    Returns `(asset, None)` when the read is allowed, or `(None, response)` with a 400 for an
+    asset that does not exist or a 403 for a denied read.
+    """
+    asset = asset_table.get_item(Key={"databaseId": database_id, "assetId": asset_id}).get("Item")
+    if not asset:
+        return None, general_error(body={"message": "Asset not found"}, event=event)
+
+    # Casbin policies on asset objects key off object__type='asset'; the
+    # DynamoDB record doesn't carry that field, so annotate before enforce().
+    asset["object__type"] = "asset"
+    if not casbin_enforcer.enforce(asset, "GET"):
+        return None, authorization_error()
+    return asset, None
 
 
 def file_path_for_asset(asset: dict, asset_id: str, request_file_path: str) -> str:

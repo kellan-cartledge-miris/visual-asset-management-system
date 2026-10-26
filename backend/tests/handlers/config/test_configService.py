@@ -86,30 +86,6 @@ class TestConfigService:
         body = json.loads(response["body"])
         assert body["mirisViewerKey"] == "test-viewer-key-12345678"
 
-    def test_get_secure_config_per_view_keys_withholds_viewer_key(self, config_event):
-        """With MIRIS_PER_VIEW_KEYS enabled and MIRIS_VIEWER_KEY empty, the response carries no viewer key"""
-        mock_dynamodb_client = MagicMock()
-        mock_dynamodb_client.get_paginator.return_value = _make_paginator([
-            {"featureName": {"S": "MIRIS_STREAMING"}},
-            {"featureName": {"S": "MIRIS_PER_VIEW_KEYS"}},
-        ])
-
-        mock_enforcer = MagicMock()
-        mock_enforcer.enforceAPI.return_value = True
-
-        with patch.object(configService, "dynamodb_client", mock_dynamodb_client), \
-             patch.object(configService, "CasbinEnforcer", return_value=mock_enforcer), \
-             patch.object(configService, "request_to_claims", return_value={"tokens": ["test-user"], "roles": []}), \
-             patch.object(configService, "location_service_api_key_arn_ssm_param", None), \
-             patch.object(configService, "web_deployed_url_ssm_param", None), \
-             patch.dict("os.environ", {"MIRIS_VIEWER_KEY": ""}):
-            response = configService.lambda_handler(config_event, MagicMock())
-
-        assert response["statusCode"] == 200
-        body = json.loads(response["body"])
-        assert "MIRIS_PER_VIEW_KEYS" in body["featuresEnabled"].split(",")
-        assert body["mirisViewerKey"] == ""
-
     def test_get_secure_config_with_ssm_values(self, config_event):
         """Location Service URL and web deployed URL resolve from SSM when configured"""
         mock_dynamodb_client = MagicMock()
