@@ -670,6 +670,7 @@ class TestRedirects:
         mirisIntegration.create_viewer_key(ASSET_UUID, EXPIRES_AT, "n")
         mirisIntegration.get_asset(ASSET_UUID)
         mirisIntegration.get_viewer_asset_state(ASSET_UUID, VIEWER_KEY)
+        assert len(miris_api.calls) == 4
         assert [c["allow_redirects"] for c in miris_api.calls] == [False] * 4
 
     def test_the_real_session_does_not_follow_a_redirect(self, monkeypatch):

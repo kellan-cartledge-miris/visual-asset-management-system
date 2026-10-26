@@ -91,6 +91,10 @@ DELIBERATE_DEPARTURES = {
     ("handlers/workflows/workflowTriggerService.py", "lookup_retry_config"),
     # The executeWorkflowV2 Invoke is not idempotent: a retry would launch a duplicate execution.
     ("handlers/workflows/sfn/workflowTriggerDispatch.py", "invoke_config"),
+    # The Miris viewer-key mint answers inside API Gateway's 29 s limit: its key-table write and
+    # integration-key read take short timeouts and two attempts so the request deadline holds.
+    ("handlers/miris/mintViewerKey.py", "key_table_config"),
+    ("handlers/miris/mirisIntegration.py", "_secrets_config"),
 }
 
 
