@@ -164,7 +164,7 @@ def lambda_handler(event, context):
             return {"statusCode": 200, "body": "Skipped (gate)"}
 
         claim = (resolved["inputOutputS3AssetAuxiliaryFilesPath"],
-                 resolved["assetId"], asset_version_id)
+                 resolved["assetId"], asset_version_id, mirisClaim.owner_id(external_task_token))
 
         execute_pipeline(
             resolved,

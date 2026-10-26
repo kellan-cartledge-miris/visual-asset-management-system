@@ -5,6 +5,7 @@ import os
 import sys
 
 import pytest
+from unittest.mock import MagicMock
 import responses
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -212,3 +213,203 @@ def test_redact_response_is_pure():
     original = {"secret_key": "SK"}
     _redact_response(original)
     assert original == {"secret_key": "SK"}
+
+
+def _client(**kwargs):
+    from miris_uploader import MirisClient
+
+    sleeps = []
+    client = MirisClient(BASE, KEY, sleep=sleeps.append, **kwargs)
+    return client, sleeps
+
+
+@responses.activate
+def test_get_asset_retries_transient_5xx_with_backoff():
+    for status in (502, 503):
+        responses.add(responses.GET, f"{BASE}/v1/asset/{UUID}", json={}, status=status)
+    responses.add(responses.GET, f"{BASE}/v1/asset/{UUID}", json={"id": UUID, "state": "preview"})
+
+    client, sleeps = _client()
+    assert client.get_asset(UUID)["state"] == "preview"
+    assert len(responses.calls) == 3
+    # Exponential: each wait at least as long as the one before it.
+    assert len(sleeps) == 2 and 0 < sleeps[0] <= sleeps[1]
+
+
+@responses.activate
+def test_get_asset_retries_connection_errors():
+    import requests
+
+    responses.add(responses.GET, f"{BASE}/v1/asset/{UUID}",
+                  body=requests.ConnectionError("connection reset"))
+    responses.add(responses.GET, f"{BASE}/v1/asset/{UUID}", json={"id": UUID, "state": "preview"})
+
+    client, sleeps = _client()
+    assert client.get_asset(UUID)["state"] == "preview"
+    assert len(sleeps) == 1
+
+
+@responses.activate
+def test_get_asset_gives_up_after_the_attempt_limit():
+    from miris_uploader import MirisError
+
+    responses.add(responses.GET, f"{BASE}/v1/asset/{UUID}", json={}, status=503)
+
+    client, sleeps = _client(max_attempts=3)
+    with pytest.raises(MirisError, match="503"):
+        client.get_asset(UUID)
+    assert len(responses.calls) == 3
+    assert len(sleeps) == 2
+
+
+@responses.activate
+def test_get_asset_does_not_retry_a_4xx():
+    from miris_uploader import MirisError
+
+    responses.add(responses.GET, f"{BASE}/v1/asset/{UUID}", json={"detail": "nope"}, status=404)
+
+    client, sleeps = _client()
+    with pytest.raises(MirisError, match="404"):
+        client.get_asset(UUID)
+    assert len(responses.calls) == 1
+    assert sleeps == []
+
+
+@responses.activate
+def test_poll_survives_a_transient_error_between_polls():
+    responses.add(responses.GET, f"{BASE}/v1/asset/{UUID}", json={"state": "processing_preview"})
+    responses.add(responses.GET, f"{BASE}/v1/asset/{UUID}", json={}, status=500)
+    responses.add(responses.GET, f"{BASE}/v1/asset/{UUID}", json={"state": "preview"})
+
+    client, _ = _client()
+    result = client.poll_until_terminal(UUID, timeout_seconds=10, poll_interval_seconds=0)
+    assert result["state"] == "preview"
+
+
+@responses.activate
+def test_mark_upload_complete_retries_transient_5xx():
+    responses.add(responses.PUT, f"{BASE}/v1/content/{UUID}", json={}, status=500)
+    responses.add(responses.PUT, f"{BASE}/v1/content/{UUID}", json={"id": UUID})
+
+    client, _ = _client()
+    client.mark_upload_complete(UUID)
+    assert len(responses.calls) == 2
+
+
+@responses.activate
+def test_start_upload_is_not_retried():
+    # POST /v1/content creates an asset; a retry after a response was lost would create a second one.
+    from miris_uploader import MirisError
+
+    responses.add(responses.POST, f"{BASE}/v1/content", json={}, status=503)
+
+    client, sleeps = _client()
+    with pytest.raises(MirisError):
+        client.start_upload(name="m", content_path="m.usdz", total_bytes=1, tags=[])
+    assert len(responses.calls) == 1
+    assert sleeps == []
+
+
+@responses.activate
+def test_trigger_generate_best_effort_returns_none_on_connection_error():
+    import requests
+
+    responses.add(responses.POST, f"{BASE}/v1/asset/{UUID}/generate",
+                  body=requests.ConnectionError("connection reset"))
+
+    client, _ = _client()
+    assert client.trigger_generate_best_effort(UUID) is None
+
+
+@responses.activate
+def test_trigger_generate_best_effort_returns_none_on_5xx_and_unreadable_body():
+    responses.add(responses.POST, f"{BASE}/v1/asset/{UUID}/generate", json={}, status=500)
+    responses.add(responses.POST, f"{BASE}/v1/asset/{UUID}/generate", body="not json", status=200)
+
+    client, _ = _client()
+    assert client.trigger_generate_best_effort(UUID) is None
+    assert client.trigger_generate_best_effort(UUID) is None
+
+
+@responses.activate
+def test_delete_asset_issues_delete_and_reports_success():
+    responses.add(responses.DELETE, f"{BASE}/v1/asset/{UUID}", status=204)
+
+    client, _ = _client()
+    assert client.delete_asset(UUID) is True
+    assert responses.calls[0].request.method == "DELETE"
+    assert responses.calls[0].request.headers["Miris-Integration-Key"] == KEY
+
+
+@responses.activate
+def test_delete_asset_failure_returns_false_rather_than_raising():
+    responses.add(responses.DELETE, f"{BASE}/v1/asset/{UUID}", json={}, status=401)
+
+    client, _ = _client()
+    assert client.delete_asset(UUID) is False
+
+
+@responses.activate
+@pytest.mark.parametrize("method,call", [
+    ("GET", lambda c: c.get_asset(UUID)),
+    ("PUT", lambda c: c.mark_upload_complete(UUID)),
+    ("DELETE", lambda c: c.delete_asset(UUID)),
+])
+def test_idempotent_calls_retry_a_response_cut_off_mid_body(method, call):
+    import requests
+
+    url = f"{BASE}/v1/content/{UUID}" if method == "PUT" else f"{BASE}/v1/asset/{UUID}"
+    responses.add(method, url, body=requests.exceptions.ChunkedEncodingError("connection broken"))
+    responses.add(method, url, json={"id": UUID, "state": "preview"}, status=200)
+
+    client, sleeps = _client()
+    assert call(client)
+    assert len(responses.calls) == 2
+    assert len(sleeps) == 1
+
+
+@responses.activate
+def test_start_upload_does_not_retry_a_response_cut_off_mid_body():
+    import requests
+    from miris_uploader import MirisError
+
+    responses.add(responses.POST, f"{BASE}/v1/content",
+                  body=requests.exceptions.ChunkedEncodingError("connection broken"))
+
+    client, sleeps = _client()
+    with pytest.raises(MirisError):
+        client.start_upload(name="m", content_path="m.usdz", total_bytes=1, tags=[])
+    assert len(responses.calls) == 1
+    assert sleeps == []
+
+
+@responses.activate
+def test_a_malformed_request_is_not_retried():
+    import requests
+    from miris_uploader import MirisError
+
+    responses.add(responses.GET, f"{BASE}/v1/asset/{UUID}",
+                  body=requests.exceptions.InvalidURL("bad url"))
+
+    client, sleeps = _client()
+    with pytest.raises(MirisError):
+        client.get_asset(UUID)
+    assert sleeps == []
+
+
+@responses.activate
+def test_an_unreadable_asset_body_is_a_miris_error():
+    from miris_uploader import MirisError
+
+    responses.add(responses.GET, f"{BASE}/v1/asset/{UUID}", body="<html>", status=200)
+
+    client, _ = _client()
+    with pytest.raises(MirisError, match="unreadable"):
+        client.get_asset(UUID)
+
+
+def test_delete_asset_never_raises():
+    client, _ = _client()
+    client._session = MagicMock()
+    client._session.request.side_effect = RuntimeError("unexpected")
+    assert client.delete_asset(UUID) is False

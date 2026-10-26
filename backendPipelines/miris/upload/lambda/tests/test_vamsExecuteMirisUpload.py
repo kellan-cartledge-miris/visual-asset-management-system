@@ -6,6 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from conftest import claim_held_by
+
 # This module's boto3 clients are constructed at import time from AWS_REGION. Set it
 # defensively so this test file does not depend on the ambient shell environment.
 os.environ.setdefault("AWS_REGION", "us-east-1")
@@ -144,6 +146,7 @@ def test_failure_after_claim_releases_it(handler):
          patch.object(handler, "s3_client") as s3, \
          patch.object(handler, "sfn_client"), \
          patch.object(handler, "lambda_client") as lc:
+        claim_held_by(s3, "tok-1")
         lc.invoke.side_effect = [
             {"StatusCode": 200,
              "Payload": MagicMock(read=lambda: json.dumps({"gate": "proceed"}).encode())},

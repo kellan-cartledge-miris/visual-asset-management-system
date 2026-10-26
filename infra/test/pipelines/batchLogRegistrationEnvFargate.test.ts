@@ -24,6 +24,10 @@ import { PcPotreeViewerConstruct } from "../../lib/nestedStacks/pipelines/previe
 import { Metadata3dLabelingConstruct } from "../../lib/nestedStacks/pipelines/genAi/metadata3dLabeling/constructs/metadata3dLabeling-construct";
 import { CoordinateTransformConstruct } from "../../lib/nestedStacks/pipelines/conversion/coordinateTransform/constructs/coordinateTransform-construct";
 import { makePipelineHarness } from "../support/pipelineConstructHarness";
+import { MIRIS_TEST_APP_CONTEXT, newMirisCoreStack } from "../support/mirisCoreStack";
+import { newTestApp } from "../support/testApp";
+import * as cdk from "aws-cdk-lib";
+import * as s3AssetBuckets from "../../lib/helper/s3AssetBuckets";
 import {
     declaredStageNames,
     jobDefinitionRefOf,
@@ -301,6 +305,47 @@ describe("conversion/coordinateTransform executeBatchJob registration environmen
                 "lambda",
                 "executeBatchJob.py"
             )
+        );
+    });
+});
+
+describe("miris/upload openMirisUploadPipeline registration environment", () => {
+    let template: Template;
+
+    beforeAll(() => {
+        // The Miris lambda builders need the full storage resources, so the construct is read from
+        // the nested stack of a Miris-enabled core stack rather than from the per-construct harness.
+        // The asset-bucket registry is module-level: clear the harness buckets of the suites above.
+        s3AssetBuckets.getS3AssetBucketRecords().length = 0;
+        const app = newTestApp({ context: MIRIS_TEST_APP_CONTEXT });
+        // With a customer managed key, so the vended group's encryption is asserted as for the peers.
+        const stack = newMirisCoreStack(app, "Miris upload registration environment", (c) => {
+            c.app.useKmsCmkEncryption.enabled = true;
+        });
+        const nested = stack.node
+            .findChild("PipelineBuilder")
+            .node.findChild("MirisUploadBuilderNestedStack") as cdk.NestedStack;
+        template = Template.fromStack(nested);
+    });
+
+    test("registers the vended group its job definition writes to, under the job definition's own stream prefix", () => {
+        const env = registeringLambdaEnv(template, "openMirisUploadPipeline.lambda_handler");
+        const jobDefinitionId = expectDerivedJobDefinitionName(
+            template,
+            env.BATCH_JOB_DEFINITION_NAME
+        );
+        expectVendedGroupRegistration(
+            template,
+            jobDefinitionId,
+            env.BATCH_JOB_LOG_GROUP_NAME,
+            env.BATCH_JOB_LOG_GROUP_ARN
+        );
+    });
+
+    test("every stage name the producer declares is a state of the machine", () => {
+        expectDeclaredStagesInAsl(
+            template,
+            path.join(PRODUCERS, "miris", "upload", "lambda", "openMirisUploadPipeline.py")
         );
     });
 });

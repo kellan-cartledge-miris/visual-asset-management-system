@@ -39,3 +39,16 @@ def _make_customLogging_stub():
 _customLogging_stub = _make_customLogging_stub()
 sys.modules.setdefault("customLogging", _customLogging_stub)
 sys.modules.setdefault("customLogging.logger", _customLogging_stub)
+
+
+def claim_held_by(s3_mock, task_token):
+    """Make a mocked S3 client return a claim recorded by the execution holding `task_token`."""
+    import io
+    import json
+
+    import mirisClaim
+
+    s3_mock.get_object.side_effect = lambda **_: {
+        "Body": io.BytesIO(json.dumps({"owner": mirisClaim.owner_id(task_token)}).encode())
+    }
+    return s3_mock

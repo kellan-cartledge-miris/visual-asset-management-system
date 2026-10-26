@@ -15,6 +15,7 @@ existing one, which is how the loose form spread in the first place.
 """
 
 import importlib.util
+import json
 import os
 import sys
 import types
@@ -48,7 +49,17 @@ PIPELINES = (
     ("pcPotreeViewer", "backendPipelines/preview/pcPotreeViewer",
      "infra/lib/nestedStacks/pipelines/preview/pcPotreeViewer/constructs/"
      "pcPotreeViewer-construct.ts"),
+    # Configured per deployment (app.miris.upload.triggerExtensions); the shipped template carries
+    # the default the construct passes through.
+    ("mirisUpload", "backendPipelines/miris/upload",
+     "infra/config/config.template.commercial.json"),
 )
+
+# A pipeline whose open handler is not named openPipeline.py.
+HANDLER_FILES = {"mirisUpload": "openMirisUploadPipeline.py"}
+
+# The config path of an allow list that a deployment configures rather than a construct declares.
+CONFIGURED_ALLOW_LISTS = {"mirisUpload": ("app", "miris", "upload", "triggerExtensions")}
 
 PIPELINE_IDS = [name for name, _, _ in PIPELINES]
 
@@ -67,7 +78,7 @@ _LISTED = (".stl", ".obj", ".glb", ".STL", ".Obj")
 _TOKEN = "tok-extension-gate"
 
 # customLogging is a per-pipeline package with an identical logger in each. Stubbed once so loading
-# seven handlers does not depend on which pipeline's copy sys.path resolves first.
+# every handler does not depend on which pipeline's copy sys.path resolves first.
 if "customLogging" not in sys.modules:
     _cl_pkg = types.ModuleType("customLogging")
     _cl_logger = types.ModuleType("customLogging.logger")
@@ -96,7 +107,7 @@ def _load(name, lambda_dir_rel, allowed=_ALLOWED):
     under a unique name and asserting the origin is what rules that out.
     """
     lambda_dir = os.path.join(_REPO_ROOT, *lambda_dir_rel.split("/"), "lambda")
-    path = os.path.join(lambda_dir, "openPipeline.py")
+    path = os.path.join(lambda_dir, HANDLER_FILES.get(name, "openPipeline.py"))
     assert os.path.isfile(path), path
 
     # Each handler reads these at import, so they only need to hold while the module executes. They are
@@ -166,16 +177,21 @@ def _invoke(mod, file_uri):
     return resp, start, send_failure
 
 
-def _cdk_allow_list(construct_rel):
+def _cdk_allow_list(construct_rel, name=None):
     """The allow-list string the pipeline's construct passes to its openPipeline builder.
 
     Collects every quoted segment of the declaration so a value written across several lines reads
-    the same as a single-line one.
+    the same as a single-line one. A configured allow list is read from the shipped config template.
     """
     path = os.path.join(_REPO_ROOT, *construct_rel.split("/"))
     assert os.path.isfile(path), path
     with open(path, encoding="utf-8") as fh:
         source = fh.read()
+    if name in CONFIGURED_ALLOW_LISTS:
+        value = json.loads(source)
+        for key in CONFIGURED_ALLOW_LISTS[name]:
+            value = value[key]
+        return value
     match = re.search(r"const allowed(?:Input)?(?:File)?Extensions\s*=\s*([^;]*);", source)
     assert match, f"no allow-list declaration found in {path}"
     return "".join(re.findall(r'"([^"]*)"', match.group(1)))
@@ -234,7 +250,7 @@ class TestExtensionGate:
         has no cross-comma substring, so the cases above would be exercising a shape the deployment
         never has.
         """
-        allowed = _cdk_allow_list(construct)
+        allowed = _cdk_allow_list(construct, name)
 
         assert "," in allowed, allowed
         members = [member.strip() for member in allowed.split(",")]

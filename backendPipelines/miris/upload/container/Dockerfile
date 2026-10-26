@@ -2,23 +2,27 @@
 # SPDX-License-Identifier: Apache-2.0
 FROM python:3.12-slim
 
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
 WORKDIR /opt/miris-upload
 
-# Install runtime deps. We pin so the container build is reproducible.
+# Runtime dependencies, pinned so the container build is reproducible.
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the application
-COPY __init__.py .
-COPY __main__.py .
-COPY entrypoint.sh .
-COPY config.json .
-COPY miris_uploader.py .
-COPY stream_metadata.py .
-COPY upload_config.py .
-COPY usd_packager.py .
+COPY __init__.py __main__.py entrypoint.sh miris_uploader.py stream_metadata.py upload_config.py usd_packager.py ./
 COPY utils/ utils/
+# Normalize read bits: COPY preserves the build host's umask, so a hardened checkout (umask 077/027)
+# leaves these root-owned 600/640 and unreadable to the non-root USER below.
+RUN chmod -R a+rX /opt/miris-upload && chmod a+x entrypoint.sh
 
-RUN chmod +x entrypoint.sh
+# The runtime user, and the one path it writes: /workdir holds the downloaded asset and the
+# packaged upload.
+RUN useradd --create-home --uid 10001 --user-group mirisupload && \
+    mkdir -p /workdir && \
+    chown mirisupload:mirisupload /workdir
+
+USER mirisupload
 
 ENTRYPOINT ["./entrypoint.sh"]

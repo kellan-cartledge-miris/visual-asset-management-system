@@ -87,7 +87,7 @@ test("Core stack synthesizes with the Miris upload pipeline enabled", () => {
     ) as any;
     const definition = JSON.stringify(stateMachine.Properties.DefinitionString);
     expect(definition).toContain("MirisUploadEndFailure");
-    expect(definition).toContain("States.JsonToString($.error)");
+    expect(definition).toContain("$.error.Cause");
 
     // The pipeline reads the Integration Key secret and the API base URL from app.miris.
     const secretArn = createMirisMockConfig().app.miris.apiKeySecretArn;

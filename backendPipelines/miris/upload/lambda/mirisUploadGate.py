@@ -25,7 +25,6 @@ would otherwise skip the upload and strand a claim that nothing releases.
 Per-database scoping is NOT handled here: a database-scoped trigger fires only for uploads in its
 own database, which VAMS resolves natively during trigger matching.
 """
-import hashlib
 import json
 import os
 
@@ -33,7 +32,7 @@ import boto3
 from botocore.config import Config
 from customLogging.logger import safeLogger
 
-from mirisClaim import claim_location
+from mirisClaim import claim_location, owner_id
 
 logger = safeLogger(service="MirisUploadGate")
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
@@ -46,16 +45,6 @@ def _parse_body(event):
     if isinstance(body, str):
         body = json.loads(body)
     return body
-
-
-def _owner_id(task_token):
-    """Claim owner for this execution: stable across retries of this lambda, unique per fan-out.
-
-    A digest rather than the token itself, since the token can complete the workflow task.
-    """
-    if not task_token:
-        return ""
-    return hashlib.sha256(task_token.encode("utf-8")).hexdigest()
 
 
 def _claim_is_ours(bucket, key, owner):
@@ -94,7 +83,7 @@ def lambda_handler(event, context):
     asset_id = body.get("assetId", "")
     asset_version_id = body.get("assetVersionId", "")
     task_token = body.get("sfnExternalTaskToken", "") or ""
-    owner = _owner_id(task_token)
+    owner = owner_id(task_token)
 
     bucket, key = claim_location(
         body.get("inputOutputS3AssetAuxiliaryFilesPath", ""), asset_id, asset_version_id)

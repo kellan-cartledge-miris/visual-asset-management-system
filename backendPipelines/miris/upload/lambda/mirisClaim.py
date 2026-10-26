@@ -11,6 +11,8 @@ The key is deterministic on the asset and its version and sits at the auxiliary 
 auxiliary URI — its prefix is scoped to the workflow execution, so folding the prefix into the
 key would give every fanned-out execution a different key and defeat the dedup entirely.
 """
+import hashlib
+import json
 import os
 
 CLAIM_PREFIX = os.environ.get("MIRIS_UPLOAD_CLAIM_PREFIX", "locks/miris-upload")
@@ -31,8 +33,33 @@ def claim_location(aux_uri, asset_id, asset_version_id):
     return bucket, f"{CLAIM_PREFIX}/{asset_id}/{version}.claim"
 
 
-def release_claim(s3_client, logger, aux_uri, asset_id, asset_version_id):
+def owner_id(task_token):
+    """Claim owner for an execution: stable across retries of one execution, unique per fan-out.
+
+    A digest rather than the token itself, since the token can complete the workflow task.
+    """
+    if not task_token:
+        return ""
+    return hashlib.sha256(task_token.encode("utf-8")).hexdigest()
+
+
+def claim_owner(s3_client, bucket, key):
+    """The owner recorded in the claim at `key`; None when there is no readable claim there."""
+    try:
+        existing = json.loads(s3_client.get_object(Bucket=bucket, Key=key)["Body"].read())
+    except Exception:
+        return None
+    if not isinstance(existing, dict):
+        return None
+    return existing.get("owner", "") or ""
+
+
+def release_claim(s3_client, logger, aux_uri, asset_id, asset_version_id, owner):
     """Delete the claim so a later trigger or manual run can upload this asset version again.
+
+    Only the execution that wrote the claim releases it: a failed run can be reported more than
+    once (its failure branch, then the execution-ended rule), and by then a retried run may hold a
+    new claim at the same key. `owner` is this execution's `owner_id`.
 
     Best-effort: a failed release must not mask the failure that prompted it. Returns True when
     a delete was issued.
@@ -40,6 +67,13 @@ def release_claim(s3_client, logger, aux_uri, asset_id, asset_version_id):
     bucket, key = claim_location(aux_uri, asset_id, asset_version_id)
     if not bucket:
         logger.info("No claim location to release")
+        return False
+    held_by = claim_owner(s3_client, bucket, key)
+    if held_by is None:
+        logger.info(f"No claim to release at s3://{bucket}/{key}")
+        return False
+    if held_by != (owner or ""):
+        logger.info(f"Claim s3://{bucket}/{key} is held by another execution; leaving it")
         return False
     try:
         s3_client.delete_object(Bucket=bucket, Key=key)

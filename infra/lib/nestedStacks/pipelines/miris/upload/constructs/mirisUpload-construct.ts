@@ -6,7 +6,8 @@
 import * as cdk from "aws-cdk-lib";
 import { Duration, Stack } from "aws-cdk-lib";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
-import * as ecs from "aws-cdk-lib/aws-ecs";
+import * as events from "aws-cdk-lib/aws-events";
+import * as eventsTargets from "aws-cdk-lib/aws-events-targets";
 import * as iam from "aws-cdk-lib/aws-iam";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import * as logs from "aws-cdk-lib/aws-logs";
@@ -25,6 +26,7 @@ import { Service } from "../../../../../helper/service-helper";
 import {
     NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
     generateUniqueNameHash,
+    grantExternalAssetBucketKmsKeys,
     kmsKeyPolicyStatementGenerator,
 } from "../../../../../helper/security";
 import {
@@ -47,6 +49,46 @@ export interface MirisUploadConstructProps extends cdk.StackProps {
 
 const defaultProps: Partial<MirisUploadConstructProps> = {};
 
+/**
+ * The container's work beyond the Miris processing wait (`taskTimeoutSeconds`): downloading and
+ * packaging the asset, the upload itself and writing the stream metadata.
+ */
+export const MIRIS_UPLOAD_CONTAINER_OVERHEAD_SECONDS = 1200;
+
+/**
+ * Time the state machine allows beyond the Batch attempt: the job queue wait and the construct and
+ * end Lambdas. The state machine must outlast the attempt, or its own timeout ends the execution
+ * while the job still runs and no end state reports to the outer workflow.
+ */
+export const MIRIS_UPLOAD_ORCHESTRATION_MARGIN_SECONDS = 1800;
+
+/**
+ * IAM5 `appliesTo` patterns, anchored and narrow enough that no wildcard ARN can satisfy them. A
+ * partition is the `<AWS::Partition>` token or a literal `aws*` partition; a bucket segment takes
+ * bucket-name characters only.
+ */
+const PARTITION = "(<AWS::Partition>|aws[a-z-]*)";
+const REGION = "(<AWS::Region>|[a-z]{2}(-[a-z]+)+-[0-9]+)";
+const ACCOUNT = "(<AWS::AccountId>|[0-9]{12})";
+const BUCKET_NAME = "[a-z0-9][a-z0-9.-]*";
+
+/**
+ * The job role's object grants: the asset bucket this deployment creates (its storage-stack
+ * logical id `AssetBucket<hash>`, never the auxiliary bucket or a bucket policy) at the root prefix,
+ * and an imported external bucket under its configured prefix.
+ */
+export const MIRIS_UPLOAD_JOB_ROLE_OBJECT_REGEXES = [
+    "/^Resource::<AssetBucket[0-9A-F]{8}\\.Arn>/(pipelines/)?\\*$/g",
+    `/^Resource::arn:${PARTITION}:s3:::${BUCKET_NAME}/([^*?/]+/)*\\*$/g`,
+];
+
+/** Batch job definitions and jobs in this deployment's own Region and account. */
+export const MIRIS_UPLOAD_BATCH_JOB_DEFINITION_REGEX = `/^Resource::arn:${PARTITION}:batch:${REGION}:${ACCOUNT}:job-definition/\\*$/g`;
+export const MIRIS_UPLOAD_BATCH_JOB_REGEX = `/^Resource::arn:${PARTITION}:batch:${REGION}:${ACCOUNT}:job/\\*$/g`;
+
+/** The inner execution statuses whose end the state machine's own states cannot report. */
+export const MIRIS_UPLOAD_UNREPORTED_EXECUTION_STATUSES = ["FAILED", "TIMED_OUT", "ABORTED"];
+
 export class MirisUploadConstruct extends Construct {
     public pipelineVamsLambdaFunctionName: string;
 
@@ -59,47 +101,45 @@ export class MirisUploadConstruct extends Construct {
         const account = Stack.of(this).account;
 
         /**
-         * Batch IAM Roles
-         * The container needs: read from all VAMS asset buckets, Secrets Manager for the API key,
-         * and Step Functions task token callbacks.
+         * Batch IAM roles
+         *
+         * The job role reads the asset from the asset buckets, writes the stream metadata under the
+         * run's output path (`{baseAssetsPrefix}pipelines/...` in the default asset bucket) and reads
+         * the Integration Key secret. The execution role only pulls the image and writes logs.
          */
-        // Asset-bucket policy: read the source file AND write the stream metadata file to
-        // outputS3AssetMetadataPath (which lives in the asset bucket). Same pattern as
-        // splatToolbox — "input" is a misnomer; this policy covers both directions.
-        const inputBucketPolicy = new iam.PolicyDocument({
-            statements: [
-                ...s3AssetBuckets.getS3AssetBucketRecords().map((record) => {
-                    const prefix = record.prefix || "/";
-                    const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
-                    return new iam.PolicyStatement({
+        const assetBucketPolicy = new iam.PolicyDocument({
+            statements: s3AssetBuckets.getS3AssetBucketRecords().flatMap((record) => {
+                const prefix = record.prefix || "/";
+                // {bucketArn}/{prefix}: the leading slash is stripped so the separator after the
+                // bucket ARN is always present (the root prefix yields {bucketArn}/).
+                const objectPrefix = (prefix.endsWith("/") ? prefix : prefix + "/").replace(
+                    /^\/+/,
+                    ""
+                );
+                return [
+                    new iam.PolicyStatement({
                         effect: iam.Effect.ALLOW,
-                        actions: [
-                            "s3:GetObject",
-                            "s3:GetObjectVersion",
-                            "s3:HeadObject",
-                            "s3:ListBucket",
-                            "s3:PutObject",
-                        ],
-                        resources: [
-                            record.bucket.bucketArn,
-                            `${record.bucket.bucketArn}${normalizedPrefix}*`,
-                        ],
-                    });
-                }),
-            ],
+                        actions: ["s3:ListBucket"],
+                        resources: [record.bucket.bucketArn],
+                    }),
+                    new iam.PolicyStatement({
+                        effect: iam.Effect.ALLOW,
+                        actions: ["s3:GetObject", "s3:GetObjectVersion"],
+                        resources: [`${record.bucket.bucketArn}/${objectPrefix}*`],
+                    }),
+                    new iam.PolicyStatement({
+                        effect: iam.Effect.ALLOW,
+                        actions: ["s3:PutObject"],
+                        resources: [`${record.bucket.bucketArn}/${objectPrefix}pipelines/*`],
+                    }),
+                ];
+            }),
         });
-
-        const outputBucketPolicy = new iam.PolicyDocument({
-            statements: [
-                new iam.PolicyStatement({
-                    actions: ["s3:PutObject"],
-                    resources: [
-                        props.storageResources.s3.assetAuxiliaryBucket.bucketArn,
-                        `${props.storageResources.s3.assetAuxiliaryBucket.bucketArn}/*`,
-                    ],
-                }),
-            ],
-        });
+        if (props.storageResources.encryption.kmsKey) {
+            assetBucketPolicy.addStatements(
+                kmsKeyPolicyStatementGenerator(props.storageResources.encryption.kmsKey)
+            );
+        }
 
         const secretsPolicy = new iam.PolicyDocument({
             statements: [
@@ -111,37 +151,8 @@ export class MirisUploadConstruct extends Construct {
             ],
         });
 
-        const stateTaskPolicy = new iam.PolicyDocument({
-            statements: [
-                new iam.PolicyStatement({
-                    actions: [
-                        "states:SendTaskSuccess",
-                        "states:SendTaskFailure",
-                        "states:SendTaskHeartbeat",
-                    ],
-                    resources: [`arn:${ServiceHelper.Partition()}:states:${region}:${account}:*`],
-                }),
-            ],
-        });
-
-        // Add KMS key access if a key is configured
-        if (props.storageResources.encryption.kmsKey) {
-            inputBucketPolicy.addStatements(
-                kmsKeyPolicyStatementGenerator(props.storageResources.encryption.kmsKey)
-            );
-            outputBucketPolicy.addStatements(
-                kmsKeyPolicyStatementGenerator(props.storageResources.encryption.kmsKey)
-            );
-        }
-
         const containerExecutionRole = new iam.Role(this, "MirisUploadContainerExecutionRole", {
             assumedBy: Service("ECS_TASKS").Principal,
-            inlinePolicies: {
-                InputBucketPolicy: inputBucketPolicy,
-                OutputBucketPolicy: outputBucketPolicy,
-                SecretsPolicy: secretsPolicy,
-                StateTaskPolicy: stateTaskPolicy,
-            },
             managedPolicies: [
                 iam.ManagedPolicy.fromAwsManagedPolicyName(
                     "service-role/AmazonECSTaskExecutionRolePolicy"
@@ -153,10 +164,8 @@ export class MirisUploadConstruct extends Construct {
         const containerJobRole = new iam.Role(this, "MirisUploadContainerJobRole", {
             assumedBy: Service("ECS_TASKS").Principal,
             inlinePolicies: {
-                InputBucketPolicy: inputBucketPolicy,
-                OutputBucketPolicy: outputBucketPolicy,
+                AssetBucketPolicy: assetBucketPolicy,
                 SecretsPolicy: secretsPolicy,
-                StateTaskPolicy: stateTaskPolicy,
             },
             managedPolicies: [
                 iam.ManagedPolicy.fromAwsManagedPolicyName(
@@ -165,6 +174,28 @@ export class MirisUploadConstruct extends Construct {
                 iam.ManagedPolicy.fromAwsManagedPolicyName("AWSXrayWriteOnlyAccess"),
             ],
         });
+        // Customer managed keys of external asset buckets (no-op when none are configured).
+        grantExternalAssetBucketKmsKeys(containerJobRole);
+
+        // The container's stdout/stderr: a named vended group under the /aws/vendedlogs/Pipelines/
+        // prefix the execution-service role is granted to read, KMS-encrypted and retained for a year.
+        const containerLogGroup = new logs.LogGroup(this, "MirisUploadBatchJobLogGroup", {
+            logGroupName:
+                "/aws/vendedlogs/Pipelines/MirisUpload" +
+                generateUniqueNameHash(
+                    props.config.env.coreStackName,
+                    props.config.env.account,
+                    "MirisUploadBatchJobLogGroup",
+                    10
+                ),
+            encryptionKey: props.storageResources.encryption.kmsKey,
+            retention: logs.RetentionDays.ONE_YEAR,
+            removalPolicy: cdk.RemovalPolicy.DESTROY,
+        });
+
+        const attemptDurationSeconds =
+            props.config.app.miris.upload.taskTimeoutSeconds +
+            MIRIS_UPLOAD_CONTAINER_OVERHEAD_SECONDS;
 
         /**
          * AWS Batch Fargate compute environment + job definition
@@ -179,6 +210,7 @@ export class MirisUploadConstruct extends Construct {
                 securityGroups: props.pipelineSecurityGroups,
                 jobRole: containerJobRole,
                 executionRole: containerExecutionRole,
+                logGroup: containerLogGroup,
                 imageAssetPath: path.join(
                     "..",
                     "..",
@@ -193,18 +225,12 @@ export class MirisUploadConstruct extends Construct {
                 dockerfileName: "Dockerfile",
                 batchJobDefinitionName:
                     "MirisUploadJob" + props.config.name + "_" + props.config.app.baseStackName,
-                // Right-size for an I/O-bound workload (S3 download + Miris API HTTPS
-                // upload + state polling). x86_64 is required: usd-core ships no
-                // aarch64 Linux wheel, so ARM64/Graviton cannot install it.
+                // Sized for an I/O-bound workload (S3 download, HTTPS upload, state polling) on the
+                // construct's default x86_64 platform: usd-core ships no aarch64 Linux wheel.
                 cpu: 1,
                 memoryMiB: 2048,
                 ephemeralStorageGiB: 21,
-                dockerPlatform: cdk.aws_ecr_assets.Platform.LINUX_AMD64,
-                fargateCpuArchitecture: ecs.CpuArchitecture.X86_64,
-                // Matches the state machine timeout that encloses this RUN_JOB (.sync) submission.
-                attemptDuration: Duration.seconds(
-                    props.config.app.miris.upload.taskTimeoutSeconds + 1200
-                ),
+                attemptDuration: Duration.seconds(attemptDurationSeconds),
             }
         );
 
@@ -217,6 +243,9 @@ export class MirisUploadConstruct extends Construct {
          *          └─────────┬─────────┘
          *                    ▼
          *   endFailureTask (SendTaskFailure + claim release) → failState
+         *
+         * A timed-out or stopped execution reaches neither end task; the execution-ended rule below
+         * runs the same end Lambda for it.
          */
         const constructFn = buildConstructMirisUploadPipelineFunction(
             this,
@@ -274,8 +303,8 @@ export class MirisUploadConstruct extends Construct {
             payload: sfn.TaskInput.fromObject({
                 "externalSfnTaskToken.$": "$.externalSfnTaskToken",
                 status: "failed",
-                error: "MirisUploadFailed",
-                "cause.$": "States.JsonToString($.error)",
+                "errorType.$": "$.error.Error",
+                "errorCause.$": "$.error.Cause",
                 "assetId.$": "$.assetId",
                 "assetVersionId.$": "$.assetVersionId",
                 "inputOutputS3AssetAuxiliaryFilesPath.$": "$.inputOutputS3AssetAuxiliaryFilesPath",
@@ -300,6 +329,7 @@ export class MirisUploadConstruct extends Construct {
          * CloudWatch Log Group for the inner state machine
          */
         const stateMachineLogGroup = new logs.LogGroup(this, "MirisUploadStateMachineLogGroup", {
+            encryptionKey: props.storageResources.encryption.kmsKey,
             logGroupName:
                 "/aws/vendedlogs/VAMSstateMachine-MirisUploadPipeline" +
                 generateUniqueNameHash(
@@ -317,7 +347,9 @@ export class MirisUploadConstruct extends Construct {
          */
         const stateMachine = new sfn.StateMachine(this, "MirisUploadInnerStateMachine", {
             definitionBody: sfn.DefinitionBody.fromChainable(sfnDefinition),
-            timeout: Duration.seconds(props.config.app.miris.upload.taskTimeoutSeconds + 1200),
+            timeout: Duration.seconds(
+                attemptDurationSeconds + MIRIS_UPLOAD_ORCHESTRATION_MARGIN_SECONDS
+            ),
             logs: {
                 destination: stateMachineLogGroup,
                 includeExecutionData: true,
@@ -326,8 +358,44 @@ export class MirisUploadConstruct extends Construct {
             tracingEnabled: true,
         });
 
+        // Stopping the execution cancels the .sync Batch task, which terminates the running job; the
+        // BatchSubmitJob task grants only batch:SubmitJob. DescribeJobs has no resource type; job ids
+        // are generated at submit time, so TerminateJob is scoped to this account's jobs.
+        stateMachine.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["batch:DescribeJobs"],
+                resources: ["*"],
+            })
+        );
+        stateMachine.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["batch:TerminateJob"],
+                resources: [`arn:${ServiceHelper.Partition()}:batch:${region}:${account}:job/*`],
+            })
+        );
+
+        // An execution that times out or is stopped never reaches its own end states, so its end is
+        // reported from the status change: the end Lambda releases the claim and fails the outer
+        // workflow's task token. A FAILED execution whose failure branch already reported meets a
+        // closed token, which the Lambda treats as done.
+        new events.Rule(this, "MirisUploadExecutionEndedRule", {
+            description:
+                "Releases the Miris upload claim and fails the workflow task when the inner execution ends unreported",
+            eventPattern: {
+                source: ["aws.states"],
+                detailType: ["Step Functions Execution Status Change"],
+                detail: {
+                    status: MIRIS_UPLOAD_UNREPORTED_EXECUTION_STATUSES,
+                    stateMachineArn: [stateMachine.stateMachineArn],
+                },
+            },
+            targets: [new eventsTargets.LambdaFunction(endFn, { retryAttempts: 2 })],
+        });
+
         /**
-         * Open pipeline Lambda — starts the inner SFN execution
+         * Open pipeline Lambda: starts the inner SFN execution
          */
         const openFn = buildOpenMirisUploadPipelineFunction(
             this,
@@ -337,12 +405,16 @@ export class MirisUploadConstruct extends Construct {
             props.vpc,
             props.pipelineSubnets,
             stateMachine.stateMachineArn,
-            stateMachineLogGroup
+            stateMachineLogGroup,
+            {
+                jobDefinitionName: batchPipeline.batchJobDefinition.jobDefinitionName,
+                logGroup: containerLogGroup,
+            }
         );
         stateMachine.grantStartExecution(openFn);
 
         /**
-         * VAMS execute Lambda — entry point registered with VAMS pipeline system
+         * VAMS execute Lambda: the entry point registered with the VAMS pipeline system
          */
         const vamsExecuteFn = buildVamsExecuteMirisUploadFunction(
             this,
@@ -355,8 +427,8 @@ export class MirisUploadConstruct extends Construct {
         );
 
         /**
-         * Gate Lambda — invoked by the outer workflow before vamsExecute to check
-         * whether the pipeline should run for this asset/database combination
+         * Gate Lambda: invoked by vamsExecute to claim the asset's upload, so the per-file trigger
+         * fan-out runs one upload
          */
         const gateFn = buildMirisUploadGateFunction(
             this,
@@ -366,7 +438,6 @@ export class MirisUploadConstruct extends Construct {
             props.vpc,
             props.pipelineSubnets
         );
-        // Wire gate function name into the vamsExecute environment so it can invoke it
         vamsExecuteFn.addEnvironment("MIRIS_UPLOAD_GATE_FUNCTION_NAME", gateFn.functionName);
         gateFn.grantInvoke(vamsExecuteFn);
 
@@ -406,22 +477,14 @@ export class MirisUploadConstruct extends Construct {
         /**
          * CDK Nag suppressions
          */
-        const nagReason =
-            "Intended solution. The Miris upload pipeline lambda and container roles need " +
-            "appropriate access to S3 and Step Functions for pipeline orchestration.";
-
-        // IAM4: container roles use AWS-managed policies (ECS task execution + X-Ray write).
-        // Same pattern as splatToolbox.
         NagSuppressions.addResourceSuppressions(
             containerExecutionRole,
             [
-                {
-                    id: "AwsSolutions-IAM4",
-                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
-                },
+                { id: "AwsSolutions-IAM4", reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED },
                 {
                     id: "AwsSolutions-IAM5",
-                    reason: nagReason,
+                    reason: "ecr:GetAuthorizationToken, which the ECS agent calls to pull the container image, supports no resource-level permissions.",
+                    appliesTo: ["Resource::*"],
                 },
             ],
             true
@@ -430,13 +493,21 @@ export class MirisUploadConstruct extends Construct {
         NagSuppressions.addResourceSuppressions(
             containerJobRole,
             [
+                { id: "AwsSolutions-IAM4", reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED },
                 {
-                    id: "AwsSolutions-IAM4",
-                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
+                    id: "AwsSolutions-IAM5",
+                    reason:
+                        "The container reads the asset's files, whose keys are known only at run time, " +
+                        "under each asset bucket's VAMS prefix, and writes the stream metadata only under " +
+                        "that prefix's pipelines/ run-output area.",
+                    // A bucket this deployment creates renders as a GetAtt, an imported external
+                    // bucket as the literal ARN from config.
+                    appliesTo: MIRIS_UPLOAD_JOB_ROLE_OBJECT_REGEXES.map((regex) => ({ regex })),
                 },
                 {
                     id: "AwsSolutions-IAM5",
-                    reason: nagReason,
+                    reason: "Encrypt and decrypt with the deployment's own KMS key; the wildcards are the GenerateDataKey and ReEncrypt action families on that one key.",
+                    appliesTo: [{ regex: "/^Action::kms:(GenerateDataKey|ReEncrypt)\\*$/g" }],
                 },
             ],
             true
@@ -451,19 +522,22 @@ export class MirisUploadConstruct extends Construct {
                     reason:
                         "BatchSubmitJob grants SubmitJob on job-definition/* because Batch authorizes " +
                         "the revision-qualified ARN; Region and account are pinned, the queue is its own ARN.",
-                    appliesTo: [
-                        {
-                            regex: "/^Resource::arn:<AWS::Partition>:batch:.+:job-definition/\\*$/g",
-                        },
-                    ],
+                    appliesTo: [{ regex: MIRIS_UPLOAD_BATCH_JOB_DEFINITION_REGEX }],
                 },
                 {
                     id: "AwsSolutions-IAM5",
                     reason:
                         "Step Functions log delivery (logs:*LogDelivery*, PutResourcePolicy, " +
-                        "DescribeLogGroups) and X-Ray trace write support no resource-level " +
-                        "permissions, so Resource must be '*'.",
+                        "DescribeLogGroups), X-Ray trace write and batch:DescribeJobs support no " +
+                        "resource-level permissions, so Resource must be '*'.",
                     appliesTo: ["Resource::*"],
+                },
+                {
+                    id: "AwsSolutions-IAM5",
+                    reason:
+                        "Cancelling the .sync Batch task terminates a job whose id is generated at submit " +
+                        "time; Region and account are pinned.",
+                    appliesTo: [{ regex: MIRIS_UPLOAD_BATCH_JOB_REGEX }],
                 },
             ],
             true

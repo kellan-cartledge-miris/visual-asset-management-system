@@ -14,7 +14,7 @@ import sys
 import boto3
 from botocore.config import Config
 
-from miris_uploader import MirisClient, _redact_response
+from miris_uploader import MirisClient, MirisError, _redact_response
 from stream_metadata import (
     build_stream_metadata_body,
     metadata_object_key,
@@ -30,6 +30,17 @@ from usd_packager import (
 from utils.secrets import get_miris_integration_key
 
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
+
+# Exit codes. The pipelineEnd lambda maps each to the failure reason the workflow shows
+# (EXIT_CODE_REASONS); an uncaught exception exits 1.
+EXIT_USAGE = 2
+EXIT_UNSUPPORTED_EXTENSION = 3
+EXIT_TOO_LARGE = 4
+EXIT_UNRESOLVED_REFERENCES = 5
+EXIT_ROOT_NOT_FOUND = 6
+EXIT_NO_METADATA_OUTPUT = 7
+EXIT_MIRIS_FAILED = 8
+EXIT_MIRIS_TIMEOUT = 9
 
 _USD_MEDIA_TYPES = {
     ".usd": "model/vnd.usd",
@@ -93,15 +104,97 @@ def _download_asset_folder(
     return total, root_version_id
 
 
+def _put_artifact(start, upload_local, upload_filename, content_type):
+    """SigV4 PUT of the artifact to the temporary upload location POST /v1/content returned.
+
+    The object key MUST match the declared content_path verbatim: Miris resolves the asset's
+    materials and textures by content_path, so a percent-encoded key (e.g. "Coral%20House.usdz" for
+    content_path "Coral House.usdz") makes Miris extract geometry but silently drop materials.
+    boto3 handles wire-level encoding; the logical Key stays raw.
+    """
+    temp_bucket, temp_prefix = _stripped_upload_path(start["upload_path"])
+    temp_key = f"{temp_prefix}/{upload_filename}"
+    temp_s3 = boto3.client(
+        "s3",
+        endpoint_url=start["endpoint_url"],
+        region_name=start["region"],
+        aws_access_key_id=start["access_key_id"],
+        aws_secret_access_key=start["secret_key"],
+        aws_session_token=start["session_token"],
+        config=retry_config,
+    )
+    with open(upload_local, "rb") as f:
+        temp_s3.put_object(
+            Bucket=temp_bucket,
+            Key=temp_key,
+            Body=f,
+            ContentType=content_type,
+        )
+    _log("sigv4_put_complete", bucket=temp_bucket, key=temp_key)
+
+
+def run_miris_upload(client, *, name, tags, upload_local, upload_filename, content_type,
+                     size, task_timeout, write_metadata):
+    """Create the Miris asset, upload the artifact, wait for processing and record the result.
+
+    A failure after the asset exists deletes it, best effort, so a failed run leaves no orphan
+    asset in the Miris workspace; its id is logged either way. Returns the Miris asset id.
+    """
+    start = client.start_upload(
+        name=name,
+        content_path=upload_filename,
+        total_bytes=size,
+        tags=tags,
+    )
+    _log("start_upload", resp=_redact_response(start))
+    asset_uuid = start["id"]
+    try:
+        _put_artifact(start, upload_local, upload_filename, content_type)
+
+        client.mark_upload_complete(asset_uuid)
+        _log("upload_marked_complete", asset_uuid=asset_uuid)
+
+        ready = client.poll_until_terminal(asset_uuid, timeout_seconds=task_timeout)
+        _log("terminal_state_reached", state=ready.get("state"))
+
+        # Streamable promotion is best effort; manual promotion in the Miris Portal is the fallback.
+        gen = client.trigger_generate_best_effort(asset_uuid)
+        if gen is None:
+            _log("generate_skipped", reason="endpoint_unavailable_or_failed")
+        else:
+            _log("generate_triggered", state=gen.get("state"))
+
+        write_metadata(asset_uuid)
+    except BaseException as e:
+        try:
+            deleted = client.delete_asset(asset_uuid)
+        except Exception:
+            deleted = False
+        _log("upload_abandoned", asset_uuid=asset_uuid, deleted=deleted, error=str(e))
+        raise
+    return asset_uuid
+
+
+def upload_or_exit(client, **upload_args):
+    """Run the upload, exiting with the code for a Miris failure or a Miris processing timeout.
+    Any other failure propagates and exits 1."""
+    try:
+        return run_miris_upload(client, **upload_args)
+    except MirisError as e:
+        _log("miris_upload_failed", error=str(e))
+        sys.exit(EXIT_MIRIS_FAILED)
+    except TimeoutError as e:
+        _log("miris_processing_timed_out", error=str(e))
+        sys.exit(EXIT_MIRIS_TIMEOUT)
+
+
 def main():
     if len(sys.argv) < 2:
         _log("usage: __main__.py <definition-json>")
-        sys.exit(2)
+        sys.exit(EXIT_USAGE)
     definition = json.loads(sys.argv[1])
     stage = definition["stages"][0]
     asset_id = stage["assetId"]
-    # databaseId added in a later iteration; tolerate older pipeline definitions
-    # that don't include it by defaulting to "".
     database_id = stage.get("databaseId", "")
     trigger = stage["triggerInput"]
     miris_base = stage["mirisApiBaseUrl"]
@@ -114,7 +207,7 @@ def main():
     extension = trigger["fileExtension"].lower()
     if extension not in _USD_MEDIA_TYPES:
         _log("unsupported_extension", extension=extension)
-        sys.exit(3)
+        sys.exit(EXIT_UNSUPPORTED_EXTENSION)
     filename = os.path.basename(trigger_key)
 
     # The stream metadata is the pipeline's only output, so a run without somewhere
@@ -123,7 +216,7 @@ def main():
         metadata_bucket, metadata_prefix = metadata_output_location(stage)
     except ValueError as e:
         _log("metadata_output_path_missing", error=str(e))
-        sys.exit(7)
+        sys.exit(EXIT_NO_METADATA_OUTPUT)
 
     s3 = boto3.client("s3", config=retry_config)
     os.makedirs("/workdir", exist_ok=True)
@@ -135,7 +228,7 @@ def main():
         head = s3.head_object(Bucket=trigger_bucket, Key=trigger_key)
         if int(head["ContentLength"]) > max_bytes:
             _log("file_too_large", size=int(head["ContentLength"]), max_bytes=max_bytes)
-            sys.exit(4)
+            sys.exit(EXIT_TOO_LARGE)
         upload_local = f"/workdir/{filename}"
         source_version_id = head.get("VersionId") or ""
         _download_version(s3, trigger_bucket, trigger_key, upload_local, source_version_id)
@@ -149,7 +242,7 @@ def main():
         )
         if total > max_bytes:
             _log("file_too_large", size=total, max_bytes=max_bytes)
-            sys.exit(4)
+            sys.exit(EXIT_TOO_LARGE)
         root_rel = trigger_key.split(f"{asset_id}/", 1)[1]
         root_local = os.path.join(asset_dir, root_rel)
         # Guard: the root USD must actually be on disk after the folder download.
@@ -166,11 +259,11 @@ def main():
                 trigger_key=trigger_key,
                 downloaded_bytes=total,
             )
-            sys.exit(6)
+            sys.exit(EXIT_ROOT_NOT_FOUND)
         layers, assets, unresolved = compute_dependencies(root_local)
         if unresolved:
             _log("unresolved_references", count=len(unresolved), paths=unresolved[:20])
-            sys.exit(5)
+            sys.exit(EXIT_UNRESOLVED_REFERENCES)
         if should_skip_packaging(len(layers), len(assets)):
             _log("packaging_skipped", reason="no_external_dependencies")
             upload_local = root_local
@@ -202,81 +295,43 @@ def main():
     key = get_miris_integration_key(secret_arn, region_name=os.environ.get("AWS_REGION"))
     client = MirisClient(miris_base, key)
 
-    # POST /v1/content
     miris_tags = ["vams", f"vams-asset-{asset_id}"] + cfg.tags
     if database_id:
         miris_tags.append(f"vams-database-{database_id}")
-    start = client.start_upload(
-        name=cfg.asset_name,
-        content_path=upload_filename,
-        total_bytes=size,
-        tags=miris_tags,
-    )
-    _log("start_upload", resp=_redact_response(start))
-    asset_uuid = start["id"]
 
-    # SigV4 S3 PUT to the temp endpoint.
-    # The object key MUST match the declared content_path verbatim — Miris resolves
-    # the asset's materials/textures by content_path, so a percent-encoded key
-    # (e.g. "Coral%20House.usdz" for content_path "Coral House.usdz") makes Miris
-    # extract geometry but silently drop materials (renders flat/untextured).
-    # boto3 handles wire-level encoding; the logical Key stays raw.
-    temp_bucket, temp_prefix = _stripped_upload_path(start["upload_path"])
-    temp_key = f"{temp_prefix}/{upload_filename}"
-
-    temp_s3 = boto3.client(
-        "s3",
-        endpoint_url=start["endpoint_url"],
-        region_name=start["region"],
-        aws_access_key_id=start["access_key_id"],
-        aws_secret_access_key=start["secret_key"],
-        aws_session_token=start["session_token"],
-        config=retry_config,
-    )
-    with open(upload_local, "rb") as f:
-        temp_s3.put_object(
-            Bucket=temp_bucket,
-            Key=temp_key,
-            Body=f,
-            ContentType=upload_content_type,
+    def write_metadata(asset_uuid):
+        """Write the stream metadata for the source USD file."""
+        body = build_stream_metadata_body(
+            asset_uuid=asset_uuid,
+            source_version_id=source_version_id,
+            display_name=cfg.asset_name,
+            uploaded_at=datetime.datetime.now(datetime.timezone.utc),
         )
-    _log("sigv4_put_complete", bucket=temp_bucket, key=temp_key)
+        metadata_key = metadata_object_key(metadata_prefix, trigger_key, asset_id)
+        s3.put_object(
+            Bucket=metadata_bucket,
+            Key=metadata_key,
+            Body=json.dumps(body, indent=2).encode("utf-8"),
+            ContentType="application/json",
+        )
+        _log(
+            "stream_metadata_written",
+            bucket=metadata_bucket,
+            key=metadata_key,
+            asset_uuid=asset_uuid,
+            source_version_id=source_version_id,
+        )
 
-    # 6. PUT /v1/content/{id}
-    client.mark_upload_complete(asset_uuid)
-    _log("upload_marked_complete", asset_uuid=asset_uuid)
-
-    # 7. Poll until terminal preview/streamable state
-    ready = client.poll_until_terminal(asset_uuid, timeout_seconds=task_timeout)
-    _log("terminal_state_reached", state=ready.get("state"))
-
-    # 8. Best-effort streamable promotion (non-fatal; manual portal click is the fallback)
-    gen = client.trigger_generate_best_effort(asset_uuid)
-    if gen is None:
-        _log("generate_skipped", reason="endpoint_unavailable_or_4xx")
-    else:
-        _log("generate_triggered", state=gen.get("state"))
-
-    # 9. Write the stream metadata for the source USD file
-    body = build_stream_metadata_body(
-        asset_uuid=asset_uuid,
-        source_version_id=source_version_id,
-        display_name=cfg.asset_name,
-        uploaded_at=datetime.datetime.now(datetime.timezone.utc),
-    )
-    metadata_key = metadata_object_key(metadata_prefix, trigger_key, asset_id)
-    s3.put_object(
-        Bucket=metadata_bucket,
-        Key=metadata_key,
-        Body=json.dumps(body, indent=2).encode("utf-8"),
-        ContentType="application/json",
-    )
-    _log(
-        "stream_metadata_written",
-        bucket=metadata_bucket,
-        key=metadata_key,
-        asset_uuid=asset_uuid,
-        source_version_id=source_version_id,
+    upload_or_exit(
+        client,
+        name=cfg.asset_name,
+        tags=miris_tags,
+        upload_local=upload_local,
+        upload_filename=upload_filename,
+        content_type=upload_content_type,
+        size=size,
+        task_timeout=task_timeout,
+        write_metadata=write_metadata,
     )
 
 

@@ -49,11 +49,6 @@ def lambda_handler(event, context):
     input_configuration_s3_location = event.get("inputConfigurationS3Location", "")
     miris_asset_name = event.get("mirisAssetName", "")
 
-    aux_bucket = ""
-    aux_key = ""
-    if aux_uri:
-        aux_bucket, aux_key = aux_uri.replace("s3://", "").split("/", 1)
-
     input_bucket, input_key = input_s3_uri.replace("s3://", "").split("/", 1)
     metadata_bucket, metadata_key = _metadata_output_location(metadata_uri)
 
@@ -75,10 +70,6 @@ def lambda_handler(event, context):
                     "bucketName": metadata_bucket,
                     "objectDir": metadata_key,
                 },
-                "temporaryFiles": {
-                    "bucketName": aux_bucket,
-                    "objectDir": f"{aux_key}/",
-                },
                 "mirisApiBaseUrl": MIRIS_API_BASE_URL,
                 "mirisApiKeySecretArn": MIRIS_API_KEY_SECRET_ARN,
                 "taskTimeoutSeconds": MIRIS_UPLOAD_TASK_TIMEOUT_SECONDS,
@@ -87,15 +78,12 @@ def lambda_handler(event, context):
                 "mirisAssetName": miris_asset_name,
             }
         ],
-        "inputMetadataS3Location": event.get("inputMetadataS3Location", ""),
-        "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
     }
 
     return {
         "jobName": job_name,
         "currentStageType": "MIRIS_UPLOAD",
         "definition": [json.dumps(definition)],
-        "inputMetadataS3Location": event.get("inputMetadataS3Location", ""),
         "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
         # The failure branch reads these off the state to release the gate's claim.
         "assetId": asset_id,

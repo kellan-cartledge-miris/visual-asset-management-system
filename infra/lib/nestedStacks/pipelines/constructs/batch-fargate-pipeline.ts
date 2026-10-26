@@ -39,17 +39,6 @@ export interface BatchFargatePipelineConstructProps extends cdk.StackProps {
     /** Memory reserved for the container, in MiB. Default 65536. */
     memoryMiB?: number;
     /**
-     * Docker build platform for the container image. Default is LINUX_AMD64 (x86_64)
-     * for shared toolchain compatibility. Set to LINUX_ARM64 to build a Graviton
-     * image; must be paired with `fargateCpuArchitecture: ARM64`.
-     */
-    dockerPlatform?: cdk.aws_ecr_assets.Platform;
-    /**
-     * Fargate task CPU architecture. Default is X86_64. Set to ARM64 to run on
-     * Graviton; must be paired with a Docker image built for LINUX_ARM64.
-     */
-    fargateCpuArchitecture?: ecs.CpuArchitecture;
-    /**
      * Log group the container's stdout and stderr are written to through the `awslogs` driver, as
      * `<jobDefinitionName>/default/<ecs-task-id>`. Every Fargate pipeline passes its own VAMS-owned
      * `/aws/vendedlogs/Pipelines/<Name><hash>` group and registers that same group as the Batch
@@ -111,10 +100,7 @@ export class BatchFargatePipelineConstruct extends Construct {
             }
         );
 
-        // Container image: use ECR image if provided, otherwise build locally.
-        // For the local build, default x86_64 keeps the toolchain identical to the
-        // historical shared-pipeline behavior; pipelines that want Graviton pass
-        // `dockerPlatform: LINUX_ARM64` (and the matching CPU architecture below).
+        // Container image: use ECR repository if provided, otherwise build locally
         const containerImage = props.ecrImage
             ? ecs.ContainerImage.fromEcrRepository(props.ecrImage.repository, props.ecrImage.tag)
             : // Synth-time asset path built from __dirname and a construct prop that the calling
@@ -123,7 +109,7 @@ export class BatchFargatePipelineConstruct extends Construct {
               // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
               ecs.AssetImage.fromAsset(path.join(__dirname, props.imageAssetPath), {
                   file: props.dockerfileName,
-                  platform: props.dockerPlatform ?? cdk.aws_ecr_assets.Platform.LINUX_AMD64,
+                  platform: cdk.aws_ecr_assets.Platform.LINUX_AMD64,
               });
 
         const batchJobName =
@@ -144,7 +130,6 @@ export class BatchFargatePipelineConstruct extends Construct {
                 memory: cdk.Size.mebibytes(props.memoryMiB ?? 65536),
                 ephemeralStorageSize: cdk.Size.gibibytes(props.ephemeralStorageGiB ?? 60),
                 image: containerImage,
-                fargateCpuArchitecture: props.fargateCpuArchitecture ?? ecs.CpuArchitecture.X86_64,
                 environment: {
                     AWS_REGION: region,
                     AWS_ACCOUNT: account,

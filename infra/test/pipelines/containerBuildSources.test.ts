@@ -271,6 +271,11 @@ const NON_ROOT_IMAGES: { label: string; file: string; scratchDir?: string }[] = 
         file: path.join(PIPELINES_DIR, "preview", "3dThumbnail", "container", "Dockerfile"),
         scratchDir: "/app/tmp",
     },
+    {
+        label: "Miris upload",
+        file: path.join(PIPELINES_DIR, "miris", "upload", "container", "Dockerfile"),
+        scratchDir: "/workdir",
+    },
 ];
 
 /**

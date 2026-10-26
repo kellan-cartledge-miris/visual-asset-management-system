@@ -18,6 +18,7 @@ import * as Config from "../../../../../../config/config";
 import { LAMBDA_PYTHON_RUNTIME } from "../../../../../../config/config";
 import { storageResources } from "../../../../storage/storageBuilder-nestedStack";
 import * as ServiceHelper from "../../../../../helper/service-helper";
+import { vendedBatchJobLogGroupEnvironment } from "../../../../../helper/batchJobLogGroup";
 import {
     grantReadPermissionsToAllAssetBuckets,
     kmsKeyLambdaPermissionAddToResourcePolicy,
@@ -61,6 +62,31 @@ function suppressCdkNagClaimPrefixWildcard(fun: lambda.Function) {
         true
     );
 }
+
+/**
+ * Lets a function release a claim: read its owner back, then delete it. Object actions on the claim
+ * prefix only; the auxiliary bucket's KMS key is granted by kmsKeyLambdaPermissionAddToResourcePolicy.
+ */
+function grantClaimRelease(fun: lambda.Function, storageResources: storageResources) {
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["s3:GetObject", "s3:DeleteObject"],
+            resources: [
+                `${storageResources.s3.assetAuxiliaryBucket.bucketArn}/${MIRIS_CLAIM_PREFIX}/*`,
+            ],
+        })
+    );
+    suppressCdkNagClaimPrefixWildcard(fun);
+}
+
+/**
+ * The object ARN of an imported external asset bucket, as the literal from config: an `aws*`
+ * partition or its token, and a bucket segment of bucket-name characters only, so no wildcard ARN
+ * matches.
+ */
+export const VAMS_EXECUTE_EXTERNAL_BUCKET_OBJECT_REGEX =
+    "/^Resource::arn:(<AWS::Partition>|aws[a-z-]*):s3:::[a-z0-9][a-z0-9.-]*/\\*$/g";
 
 function _commonProps(
     config: Config.Config,
@@ -180,10 +206,21 @@ export function buildVamsExecuteMirisUploadFunction(
                 reason: "Step Functions task tokens are not addressable by ARN, so reporting a callback failure requires a wildcard resource. Scope is limited to the token this function itself receives from the workflow.",
                 appliesTo: ["Resource::*"],
             },
+            {
+                id: "AwsSolutions-IAM5",
+                reason: "Reads the workflow manifest and the asset's files, whose keys are known only at run time, in each configured asset bucket. An external bucket's ARN is the literal from config.",
+                appliesTo: [{ regex: VAMS_EXECUTE_EXTERNAL_BUCKET_OBJECT_REGEX }],
+            },
         ],
         true
     );
     return fun;
+}
+
+/** The Batch job definition name and the vended group its container writes to. */
+export interface OpenPipelineBatchLogProps {
+    jobDefinitionName: string;
+    logGroup: logs.ILogGroup;
 }
 
 export function buildOpenMirisUploadPipelineFunction(
@@ -194,7 +231,8 @@ export function buildOpenMirisUploadPipelineFunction(
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
     stateMachineArn: string,
-    stateMachineLogGroup: logs.ILogGroup
+    stateMachineLogGroup: logs.ILogGroup,
+    batchLogs: OpenPipelineBatchLogProps
 ): lambda.Function {
     const fun = new lambda.Function(scope, "openMirisUploadPipeline", {
         code: lambda.Code.fromAsset(LAMBDA_SRC),
@@ -205,13 +243,17 @@ export function buildOpenMirisUploadPipelineFunction(
             ORCHESTRATION_BUS_NAME: storageResources.eventBridge.orchestrationBus.eventBusName,
             STATE_MACHINE_LOG_GROUP_NAME: stateMachineLogGroup.logGroupName,
             STATE_MACHINE_LOG_GROUP_ARN: stateMachineLogGroup.logGroupArn,
+            // The container's vended log group and job definition name, registered as the Batch
+            // state's log source (streams are `<jobDefinitionName>/default/<task-id>`).
+            ...vendedBatchJobLogGroupEnvironment(batchLogs.logGroup),
+            BATCH_JOB_DEFINITION_NAME: batchLogs.jobDefinitionName,
         },
         ..._commonProps(config, vpc, subnets, lambdaCommonBaseLayer),
     });
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
-            actions: ["states:StartExecution", "states:SendTaskFailure"],
+            actions: ["states:SendTaskFailure"],
             resources: [
                 `arn:${ServiceHelper.Partition()}:states:${config.env.region}:${
                     config.env.account
@@ -220,8 +262,7 @@ export function buildOpenMirisUploadPipelineFunction(
         })
     );
     // Releases the claim the gate wrote when the input is rejected or the state machine cannot start.
-    storageResources.s3.assetAuxiliaryBucket.grantDelete(fun, `${MIRIS_CLAIM_PREFIX}/*`);
-    suppressCdkNagClaimPrefixWildcard(fun);
+    grantClaimRelease(fun, storageResources);
     storageResources.eventBridge.orchestrationBus.grantPutEventsTo(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
@@ -250,7 +291,6 @@ export function buildConstructMirisUploadPipelineFunction(
         },
         ..._commonProps(config, vpc, subnets, lambdaCommonBaseLayer),
     });
-    storageResources.s3.assetAuxiliaryBucket.grantReadWrite(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
@@ -284,8 +324,7 @@ export function buildMirisUploadPipelineEndFunction(
         })
     );
     // A run that does not succeed releases its claim here, so the asset version can be retried.
-    storageResources.s3.assetAuxiliaryBucket.grantDelete(fun, `${MIRIS_CLAIM_PREFIX}/*`);
-    suppressCdkNagClaimPrefixWildcard(fun);
+    grantClaimRelease(fun, storageResources);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);

@@ -112,3 +112,13 @@ def test_missing_or_unusable_metadata_output_path_fails_before_batch_submit(cons
 
     with pytest.raises(ValueError, match="outputS3AssetMetadataPath"):
         construct.lambda_handler(event, None)
+
+
+def test_the_container_definition_carries_no_task_token(construct):
+    # The definition is the Batch job's command line, readable by anyone who can describe the job,
+    # and the container never reports to Step Functions itself.
+    result = construct.lambda_handler(_event(externalSfnTaskToken="tok-secret-1"), None)
+
+    assert "tok-secret-1" not in result["definition"][0]
+    # The state machine's end tasks still read it off the state.
+    assert result["externalSfnTaskToken"] == "tok-secret-1"

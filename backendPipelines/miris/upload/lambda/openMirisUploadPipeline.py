@@ -4,6 +4,7 @@
 import datetime
 import json
 import os
+import uuid
 
 import boto3
 from botocore.config import Config
@@ -24,7 +25,25 @@ ALLOWED_INPUT_FILEEXTENSIONS = os.environ["ALLOWED_INPUT_FILEEXTENSIONS"]
 ORCHESTRATION_BUS_NAME = os.environ.get("ORCHESTRATION_BUS_NAME", "")
 STATE_MACHINE_LOG_GROUP_NAME = os.environ.get("STATE_MACHINE_LOG_GROUP_NAME", "")
 STATE_MACHINE_LOG_GROUP_ARN = os.environ.get("STATE_MACHINE_LOG_GROUP_ARN", "")
+# The vended group the Fargate job definition writes to through the awslogs driver, and that job
+# definition's name; the container log source is registered only when both are configured.
+BATCH_JOB_LOG_GROUP_NAME = os.environ.get("BATCH_JOB_LOG_GROUP_NAME", "")
+BATCH_JOB_LOG_GROUP_ARN = os.environ.get("BATCH_JOB_LOG_GROUP_ARN", "")
+BATCH_JOB_DEFINITION_NAME = os.environ.get("BATCH_JOB_DEFINITION_NAME", "")
+# The Batch state of the inner state machine (its CDK construct id).
+BATCH_STATE_NAME = "SubmitMirisUploadBatchJob"
 REGISTER_DETAIL_TYPE = "pipeline.execution.register"
+
+
+def allowed_extensions():
+    """The exact members of the comma-separated allow list, lower-cased."""
+    return [ext.strip().lower() for ext in ALLOWED_INPUT_FILEEXTENSIONS.split(",") if ext.strip()]
+
+
+def new_job_name():
+    """A state machine execution name unique at millisecond concurrency (80 characters at most)."""
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S_%f")[:-3]
+    return f"MirisUpload_{stamp}_{uuid.uuid4().hex[:8]}"
 
 
 def _abort_external_workflow(error, task_token, claim=None):
@@ -32,7 +51,7 @@ def _abort_external_workflow(error, task_token, claim=None):
     if claim:
         mirisClaim.release_claim(s3_client, logger, *claim)
     if task_token:
-        logger.error(f"Aborting external task: {task_token}")
+        logger.error("Aborting external task")
         sfn.send_task_failure(
             taskToken=task_token,
             error="Pipeline Failure: " + error,
@@ -40,9 +59,25 @@ def _abort_external_workflow(error, task_token, claim=None):
         )
 
 
+def batch_container_log_entry(job_definition_name, state_name):
+    """The log source for the Batch state's container: the job's vended group, streamed under
+    `<jobDefinitionName>/default/`. None when the group or the job definition is not configured."""
+    if not (BATCH_JOB_LOG_GROUP_NAME or BATCH_JOB_LOG_GROUP_ARN) or not job_definition_name:
+        return None
+    return {
+        "logGroupArn": BATCH_JOB_LOG_GROUP_ARN,
+        "logGroupName": BATCH_JOB_LOG_GROUP_NAME,
+        "logStreamName": "",
+        "logStreamPrefix": f"{job_definition_name}/default/",
+        "stageName": state_name,
+        "sourceType": "batch",
+        "label": f"{state_name} container",
+    }
+
+
 def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
                            sub_execution_arn, state_machine_arn):
-    """Best-effort report of this pipeline's sub-SFN execution to the orchestration bus."""
+    """Best-effort report of this pipeline's sub-SFN execution and its log sources to the orchestration bus."""
     if not orchestration_bus_name or not orchestration_event_prefix:
         logger.info("Orchestration bus/prefix not configured; skipping sub-process registration")
         return
@@ -56,14 +91,23 @@ def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
         "subExecution": {
             "stateMachineArn": state_machine_arn or "",
             "executionArn": sub_execution_arn or "",
+            "label": "Miris upload processing",
         },
     }
+    logs = []
     if STATE_MACHINE_LOG_GROUP_NAME or STATE_MACHINE_LOG_GROUP_ARN:
-        detail["logs"] = [{
+        logs.append({
             "logGroupArn": STATE_MACHINE_LOG_GROUP_ARN,
             "logGroupName": STATE_MACHINE_LOG_GROUP_NAME,
             "logStreamName": "",
-        }]
+            "sourceType": "stateMachine",
+            "label": "Miris upload state machine",
+        })
+    container_log = batch_container_log_entry(BATCH_JOB_DEFINITION_NAME, BATCH_STATE_NAME)
+    if container_log:
+        logs.append(container_log)
+    if logs:
+        detail["logs"] = logs
     try:
         events_client.put_events(Entries=[{
             "EventBusName": orchestration_bus_name,
@@ -79,7 +123,6 @@ def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
 def lambda_handler(event, context):
     logger.info("OpenMirisUploadPipeline received event")
 
-    input_metadata_s3_location = event.get("inputMetadataS3Location", "")
     input_configuration_s3_location = event.get("inputConfigurationS3Location", "")
     miris_asset_name = event.get("mirisAssetName", "")
     orchestration_event_prefix = event.get("orchestrationEventPrefix", "")
@@ -92,7 +135,7 @@ def lambda_handler(event, context):
     asset_id = event.get("assetId", "")
     database_id = event.get("databaseId", "")
     asset_version_id = event.get("assetVersionId", "")
-    claim = (aux_s3, asset_id, asset_version_id)
+    claim = (aux_s3, asset_id, asset_version_id, mirisClaim.owner_id(external_task_token))
 
     if input_s3_uri.endswith("/"):
         _abort_external_workflow(
@@ -101,10 +144,7 @@ def lambda_handler(event, context):
         return {"statusCode": 400, "body": "Input S3 URI cannot be a folder"}
 
     _, extension = os.path.splitext(input_s3_uri)
-    if (
-        not extension
-        or extension.lower() not in ALLOWED_INPUT_FILEEXTENSIONS.lower()
-    ):
+    if not extension or extension.lower() not in allowed_extensions():
         _abort_external_workflow(
             f"Pipeline cannot process file extension {extension!r}",
             external_task_token,
@@ -112,7 +152,7 @@ def lambda_handler(event, context):
         )
         return {"statusCode": 400, "body": f"Unsupported extension {extension!r}"}
 
-    job_name = f"MirisUpload_{datetime.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+    job_name = new_job_name()
 
     sfn_input = {
         "jobName": job_name,
@@ -121,7 +161,6 @@ def lambda_handler(event, context):
         "outputS3AssetPreviewPath": output_s3_preview,
         "outputS3AssetMetadataPath": output_s3_metadata,
         "inputOutputS3AssetAuxiliaryFilesPath": aux_s3,
-        "inputMetadataS3Location": input_metadata_s3_location,
         "inputConfigurationS3Location": input_configuration_s3_location,
         "mirisAssetName": miris_asset_name,
         "externalSfnTaskToken": external_task_token,

@@ -87,13 +87,13 @@ def test_claim_records_a_digest_of_the_task_token_not_the_token(gate):
         gate.lambda_handler(_event(), None)
 
     written = json.loads(s3.put_object.call_args.kwargs["Body"])
-    assert written["owner"] == gate._owner_id("tok-1")
+    assert written["owner"] == gate.owner_id("tok-1")
     assert "tok-1" not in s3.put_object.call_args.kwargs["Body"].decode("utf-8")
 
 
 def test_second_claim_skips_and_reports_success(gate):
     with patch.object(gate, "s3_client") as s3, patch.object(gate, "sfn_client") as sfn:
-        _claimed(gate, s3, {"assetId": "a1", "owner": gate._owner_id("tok-other")})
+        _claimed(gate, s3, {"assetId": "a1", "owner": gate.owner_id("tok-other")})
         result = gate.lambda_handler(_event(), None)
 
     assert result["gate"] == "skip"
@@ -109,7 +109,7 @@ def test_a_retried_put_that_meets_its_own_claim_proceeds(gate):
     nothing releases a claim the skipping execution believes it does not hold.
     """
     with patch.object(gate, "s3_client") as s3, patch.object(gate, "sfn_client") as sfn:
-        _claimed(gate, s3, {"assetId": "a1", "owner": gate._owner_id("tok-1")})
+        _claimed(gate, s3, {"assetId": "a1", "owner": gate.owner_id("tok-1")})
         result = gate.lambda_handler(_event(), None)
 
     assert result["gate"] == "proceed"

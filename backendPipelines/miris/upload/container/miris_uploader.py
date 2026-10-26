@@ -2,28 +2,30 @@
 #  SPDX-License-Identifier: Apache-2.0
 """Miris HTTP client for the upload pipeline.
 
-Implements the production upload flow as verified against
-`mcp__miris-development__GetApiReference` on 2026-06-22:
+The upload flow:
 
-  1. POST /v1/content                  -> start_upload (returns id + temp S3 creds)
-  2. (caller does the SigV4 S3 PUT to those temp creds out-of-band)
-  3. PUT  /v1/content/{id}             -> mark_upload_complete (status=completed)
-  4. GET  /v1/asset/{id}               -> poll_until_terminal
-  5. POST /v1/asset/{id}/generate      -> trigger_generate_best_effort (optional)
+  1. POST   /v1/content                -> start_upload (returns id + temporary S3 credentials)
+  2. (the caller does the SigV4 S3 PUT to those temporary credentials out-of-band)
+  3. PUT    /v1/content/{id}           -> mark_upload_complete (status=completed)
+  4. GET    /v1/asset/{id}             -> poll_until_terminal
+  5. POST   /v1/asset/{id}/generate    -> trigger_generate_best_effort
+  6. DELETE /v1/asset/{id}             -> delete_asset, for an upload that did not complete
 
-Auth uses the `Miris-Integration-Key` header (NOT `Authorization: Bearer`),
-matching the OpenAPI ApiKeyHeader scheme.
+Auth uses the `Miris-Integration-Key` header (not `Authorization: Bearer`), matching the OpenAPI
+ApiKeyHeader scheme.
 
-State machine:
-  output_type="static" produces the terminal state `preview` within minutes.
-  Promotion to `streamable` is a separate, hours-long, entitlement-gated step.
-  The pipeline polls until `preview` (or already-`streamable`) and then makes a
-  best-effort call to kick off streamable promotion; failures there are logged
-  but do not fail the pipeline (manual promotion in the Miris Portal is the
-  fallback).
+output_type="static" reaches the terminal state `preview` within minutes. Promotion to `streamable`
+is a separate, hours-long, entitlement-gated step: the pipeline polls until `preview` (or
+already-`streamable`) and then asks for promotion best effort, with manual promotion in the Miris
+Portal as the fallback.
+
+Idempotent calls (GET, PUT, DELETE) are retried with exponential backoff on a transient request
+failure (a connection error, a timeout, a response cut off mid-body), 429 or a 5xx. POST /v1/content is not: it creates an asset, so a retry after a lost
+response would create a second one.
 """
+import random
 import time
-from typing import Any, Optional
+from typing import Callable, Optional
 
 import requests
 
@@ -31,6 +33,20 @@ import requests
 #   preview, streamable, error, failed
 TERMINAL_SUCCESS_STATES = ("preview", "streamable")
 TERMINAL_ERROR_STATES = ("error", "failed")
+
+RETRYABLE_STATUS_CODES = (429, 500, 502, 503, 504)
+# Request failures that a retry cannot fix: the request itself is malformed.
+NON_TRANSIENT_REQUEST_ERRORS = (
+    requests.exceptions.URLRequired,
+    requests.exceptions.MissingSchema,
+    requests.exceptions.InvalidSchema,
+    requests.exceptions.InvalidURL,
+    requests.exceptions.InvalidHeader,
+    requests.exceptions.TooManyRedirects,
+)
+DEFAULT_MAX_ATTEMPTS = 5
+BACKOFF_BASE_SECONDS = 2
+BACKOFF_CAP_SECONDS = 30
 
 _REDACTED_KEYS = ("access_key_id", "secret_key", "session_token")
 
@@ -45,13 +61,50 @@ class MirisError(Exception):
 
 
 class MirisClient:
-    def __init__(self, base_url: str, integration_key: str, timeout_seconds: int = 60):
+    def __init__(
+        self,
+        base_url: str,
+        integration_key: str,
+        timeout_seconds: int = 60,
+        max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+        sleep: Callable[[float], None] = time.sleep,
+    ):
         self.base_url = base_url.rstrip("/")
-        self._integration_key = integration_key
         self._timeout = timeout_seconds
+        self._max_attempts = max(1, max_attempts)
+        self._sleep = sleep
         self._session = requests.Session()
         self._session.headers["Miris-Integration-Key"] = integration_key
         self._session.headers["Content-Type"] = "application/json"
+
+    @staticmethod
+    def _backoff(attempt: int) -> float:
+        """Exponential backoff for retry `attempt` (1-based), jittered over the upper half of the step."""
+        step = min(BACKOFF_CAP_SECONDS, BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
+        return step / 2 + random.uniform(0, step / 2)  # nosec B311 - jitter, not security
+
+    def _request(self, method: str, url: str, **kwargs) -> requests.Response:
+        """Send an idempotent request, retrying transient failures. Returns the last response, or
+        raises MirisError when the last attempt failed in transit or the request is malformed."""
+        attempt = 1
+        while True:
+            try:
+                r = self._session.request(method, url, timeout=self._timeout, **kwargs)
+            except NON_TRANSIENT_REQUEST_ERRORS as e:
+                raise MirisError(f"{method} {url} request failed: {e}") from e
+            except requests.RequestException as e:
+                if attempt >= self._max_attempts:
+                    raise MirisError(f"{method} {url} request failed: {e}") from e
+            else:
+                if r.status_code not in RETRYABLE_STATUS_CODES or attempt >= self._max_attempts:
+                    return r
+            self._sleep(self._backoff(attempt))
+            attempt += 1
+
+    @staticmethod
+    def _raise_for_status(r: requests.Response, label: str) -> None:
+        if r.status_code >= 300:
+            raise MirisError(f"{label} failed [{r.status_code}]: {r.text[:500]}")
 
     # 1. POST /v1/content
     def start_upload(
@@ -71,55 +124,30 @@ class MirisClient:
             "tags": tags,
             "total_bytes": total_bytes,
         }
-        r = self._session.post(url, json=body, timeout=self._timeout)
-        if r.status_code >= 300:
-            raise MirisError(
-                f"POST /v1/content failed [{r.status_code}]: {r.text[:500]}"
-            )
+        try:
+            r = self._session.post(url, json=body, timeout=self._timeout)
+        except requests.RequestException as e:
+            raise MirisError(f"POST /v1/content connection failure: {e}") from e
+        self._raise_for_status(r, "POST /v1/content")
         return r.json()
 
     # 3. PUT /v1/content/{id}
     def mark_upload_complete(self, content_id: str) -> Optional[dict]:
-        url = f"{self.base_url}/v1/content/{content_id}"
-        r = self._session.put(
-            url, json={"status": "completed"}, timeout=self._timeout
+        r = self._request(
+            "PUT", f"{self.base_url}/v1/content/{content_id}", json={"status": "completed"}
         )
-        if r.status_code >= 300:
-            raise MirisError(
-                f"PUT /v1/content/{content_id} failed "
-                f"[{r.status_code}]: {r.text[:500]}"
-            )
+        self._raise_for_status(r, f"PUT /v1/content/{content_id}")
         return r.json() if r.text else None
 
-    # 4. POST /v1/asset/{id}/generate  (best-effort; not in the public spec)
-    def trigger_generate_best_effort(self, asset_id: str) -> Optional[dict]:
-        """Kick off the streamable-promotion job. The endpoint is not in the
-        public OpenAPI but is what the `miris asset generate` CLI command hits.
-        Returns the parsed body on 2xx; returns None on any HTTP error so the
-        pipeline can carry on (manual portal promotion is the fallback).
-        Connection-level failures still raise."""
-        url = f"{self.base_url}/v1/asset/{asset_id}/generate"
-        try:
-            r = self._session.post(url, timeout=self._timeout)
-        except requests.RequestException as e:
-            raise MirisError(
-                f"POST /v1/asset/{asset_id}/generate connection failure: {e}"
-            )
-        if r.status_code >= 300:
-            return None
-        return r.json() if r.text else {}
-
-    # 5. GET /v1/asset/{id}
+    # 4. GET /v1/asset/{id}
     def get_asset(self, asset_id: str) -> dict:
-        url = f"{self.base_url}/v1/asset/{asset_id}"
-        r = self._session.get(url, timeout=self._timeout)
-        if r.status_code >= 300:
-            raise MirisError(
-                f"GET /v1/asset/{asset_id} failed [{r.status_code}]: {r.text[:500]}"
-            )
-        return r.json()
+        r = self._request("GET", f"{self.base_url}/v1/asset/{asset_id}")
+        self._raise_for_status(r, f"GET /v1/asset/{asset_id}")
+        try:
+            return r.json()
+        except ValueError as e:
+            raise MirisError(f"GET /v1/asset/{asset_id} returned an unreadable body: {e}") from e
 
-    # Poll
     def poll_until_terminal(
         self,
         asset_id: str,
@@ -143,4 +171,27 @@ class MirisClient:
                     f"{timeout_seconds}s; last state {state!r}"
                 )
             if poll_interval_seconds > 0:
-                time.sleep(poll_interval_seconds)
+                self._sleep(poll_interval_seconds)
+
+    # 5. POST /v1/asset/{id}/generate  (best-effort; not in the public spec)
+    def trigger_generate_best_effort(self, asset_id: str) -> Optional[dict]:
+        """Kick off streamable promotion. The endpoint is not in the public OpenAPI but is what the
+        `miris asset generate` CLI command calls. Returns the parsed body on 2xx and None on any
+        failure, so the upload still succeeds with the asset at `preview`."""
+        url = f"{self.base_url}/v1/asset/{asset_id}/generate"
+        try:
+            r = self._session.post(url, timeout=self._timeout)
+            if r.status_code >= 300:
+                return None
+            return r.json() if r.text else {}
+        except (requests.RequestException, ValueError):
+            return None
+
+    # 6. DELETE /v1/asset/{id}
+    def delete_asset(self, asset_id: str) -> bool:
+        """Delete an asset this run created. Best effort: True when Miris confirmed the delete."""
+        try:
+            r = self._request("DELETE", f"{self.base_url}/v1/asset/{asset_id}")
+        except Exception:
+            return False
+        return r.status_code < 300
