@@ -1,5 +1,6 @@
 #  Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
+import io
 import json
 import os
 from unittest.mock import MagicMock, patch
@@ -13,6 +14,8 @@ from conftest import claim_held_by
 os.environ.setdefault("AWS_REGION", "us-east-1")
 os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
 
+FP = "f" * 64
+
 
 @pytest.fixture
 def handler(monkeypatch):
@@ -22,6 +25,68 @@ def handler(monkeypatch):
     import importlib
     import vamsExecuteMirisUpload
     return importlib.reload(vamsExecuteMirisUpload)
+
+
+def _resolved(**overrides):
+    resolved = {
+        "assetId": "a1",
+        "databaseId": "db1",
+        "inputS3AssetFilePath": "s3://b/vams/data/a1/model.usd",
+        "outputS3AssetFilesPath": "s3://b/vams/data/a1/",
+        "outputS3AssetPreviewPath": "",
+        "outputS3AssetMetadataPath": "",
+        "inputOutputS3AssetAuxiliaryFilesPath":
+            "s3://vams-aux-bucket/pipelines/miris-upload/exec-aaaa1111/",
+        "inputMetadataS3Location": "",
+        "inputConfigurationS3Location": "s3://b/cfg.json",
+        "orchestrationEventPrefix": "",
+        "inputFiles": [{"assetId": "a1", "bucket": "b", "assetRootS3Key": "vams/data/a1"}],
+        "manifestUsed": True,
+    }
+    resolved.update(overrides)
+    return resolved
+
+
+def _asset_table_mock(asset_name="Pump Housing"):
+    table = MagicMock()
+    table.get_item.return_value = {"Item": {"assetName": asset_name}}
+    return table
+
+
+def _gate_says(gate="proceed", fingerprint=FP):
+    return {
+        "StatusCode": 200,
+        "Payload": MagicMock(read=lambda: json.dumps(
+            {"gate": gate, "claimFingerprint": fingerprint}).encode()),
+    }
+
+
+def _configuration(body):
+    """An S3 client whose rendered configuration file holds `body` (a dict, or None for none)."""
+    s3 = MagicMock()
+    if body is None:
+        s3.get_object.side_effect = Exception("NoSuchKey")
+    else:
+        s3.get_object.side_effect = lambda **_: {"Body": io.BytesIO(json.dumps(body).encode())}
+    return s3
+
+
+def _run(handler, resolved=None, s3=None, executing_user="SYSTEM_USER", gate=None,
+         open_result=None):
+    """Run the handler; returns (response, gate body, open payload or None)."""
+    with patch.object(handler.manifestHelper, "resolve_pipeline_inputs",
+                      return_value=resolved or _resolved()), \
+         patch.object(handler, "_asset_table", return_value=_asset_table_mock()), \
+         patch.object(handler, "s3_client", s3 or _configuration(None)), \
+         patch.object(handler, "sfn_client"), \
+         patch.object(handler, "lambda_client") as lc:
+        lc.invoke.side_effect = [gate or _gate_says(), open_result or {"StatusCode": 200}]
+        resp = handler.lambda_handler({"body": json.dumps(
+            {"TaskToken": "tok-1", "executingUserName": executing_user})}, None)
+    calls = lc.invoke.call_args_list
+    gate_body = json.loads(json.loads(calls[0].kwargs["Payload"].decode())["body"]) if calls else None
+    open_payload = json.loads(calls[1].kwargs["Payload"].decode()) if len(calls) > 1 else None
+    return resp, gate_body, open_payload
 
 
 def test_missing_task_token_reports_nothing_and_500s(handler):
@@ -42,121 +107,46 @@ def test_manifest_failure_sends_task_failure(handler):
     assert sfn.send_task_failure.call_args.kwargs["taskToken"] == "tok-1"
 
 
-def test_resolves_asset_name_and_version_from_dynamodb(handler):
-    resolved = {
-        "assetId": "a1", "databaseId": "db1", "inputFiles": [{"assetId": "a1"}],
-        "inputS3AssetFilePath": "s3://b/a1/model.usd",
-        "outputS3AssetFilesPath": "s3://b/a1/",
-        "outputS3AssetPreviewPath": "", "outputS3AssetMetadataPath": "",
-        "inputOutputS3AssetAuxiliaryFilesPath": "s3://aux/a1",
-        "inputMetadataS3Location": "", "inputConfigurationS3Location": "s3://b/cfg.json",
-        "orchestrationEventPrefix": "", "manifestUsed": True,
-    }
-    table = MagicMock()
-    table.get_item.return_value = {
-        "Item": {"assetName": "Pump Housing", "currentVersionId": "v7"}}
-
-    with patch.object(handler.manifestHelper, "resolve_pipeline_inputs", return_value=resolved), \
-         patch.object(handler, "_asset_table", return_value=table), \
-         patch.object(handler, "lambda_client") as lc:
-        lc.invoke.return_value = {
-            "StatusCode": 200,
-            "Payload": MagicMock(read=lambda: json.dumps({"gate": "proceed"}).encode()),
-        }
-        resp = handler.lambda_handler({"body": json.dumps({"TaskToken": "tok-1"})}, None)
+def test_the_gate_receives_the_asset_root_and_name(handler):
+    resp, gate_body, _ = _run(handler)
 
     assert resp["statusCode"] == 200
-    gate_payload = json.loads(lc.invoke.call_args_list[0].kwargs["Payload"].decode())
-    gate_body = json.loads(gate_payload["body"])
-    assert gate_body["assetVersionId"] == "v7"
+    assert gate_body["assetBucket"] == "b"
+    assert gate_body["assetRootS3Key"] == "vams/data/a1/"
     assert gate_body["mirisAssetName"] == "Pump Housing"
 
 
 def test_gate_skip_short_circuits(handler):
-    resolved = {k: "" for k in (
-        "assetId", "databaseId", "inputS3AssetFilePath", "outputS3AssetFilesPath",
-        "outputS3AssetPreviewPath", "outputS3AssetMetadataPath",
-        "inputOutputS3AssetAuxiliaryFilesPath", "inputMetadataS3Location",
-        "inputConfigurationS3Location", "orchestrationEventPrefix")}
-    resolved["inputFiles"] = []
-    table = MagicMock()
-    table.get_item.return_value = {"Item": {}}
-
-    with patch.object(handler.manifestHelper, "resolve_pipeline_inputs", return_value=resolved), \
-         patch.object(handler, "_asset_table", return_value=table), \
+    with patch.object(handler.manifestHelper, "resolve_pipeline_inputs", return_value=_resolved()), \
+         patch.object(handler, "_asset_table", return_value=_asset_table_mock()), \
+         patch.object(handler, "s3_client", _configuration(None)) as s3, \
          patch.object(handler, "lambda_client") as lc:
-        lc.invoke.return_value = {
-            "StatusCode": 200,
-            "Payload": MagicMock(read=lambda: json.dumps({"gate": "skip"}).encode()),
-        }
+        lc.invoke.return_value = _gate_says("skip", "")
         resp = handler.lambda_handler({"body": json.dumps({"TaskToken": "tok-1"})}, None)
 
     assert resp["statusCode"] == 200
-    # Only the gate was invoked — openPipeline must not run.
+    # Only the gate was invoked; openPipeline must not run, and the winner's claim stays.
     assert lc.invoke.call_count == 1
+    s3.delete_object.assert_not_called()
 
 
-def _resolved(**overrides):
-    resolved = {
-        "assetId": "a1",
-        "databaseId": "db1",
-        "inputS3AssetFilePath": "s3://b/a1/model.usd",
-        "outputS3AssetFilesPath": "s3://b/a1/",
-        "outputS3AssetPreviewPath": "",
-        "outputS3AssetMetadataPath": "",
-        "inputOutputS3AssetAuxiliaryFilesPath":
-            "s3://vams-aux-bucket/pipelines/miris-upload/exec-aaaa1111/",
-        "inputMetadataS3Location": "",
-        "inputConfigurationS3Location": "s3://b/cfg.json",
-        "orchestrationEventPrefix": "",
-        "inputFiles": [{"assetId": "a1"}],
-        "manifestUsed": True,
-    }
-    resolved.update(overrides)
-    return resolved
+def test_the_claim_fingerprint_and_asset_root_reach_the_pipeline(handler):
+    """openPipeline (and everything downstream) needs the fingerprint to release the claim, and the
+    container lists the asset under the resolved root."""
+    _, _, open_payload = _run(handler)
 
-
-def _asset_table_mock(asset_name="Pump Housing", version="v7"):
-    table = MagicMock()
-    table.get_item.return_value = {
-        "Item": {"assetName": asset_name, "currentVersionId": version}}
-    return table
-
-
-def test_asset_version_is_carried_into_the_pipeline_payload(handler):
-    """openPipeline (and everything downstream) needs the version to release the claim."""
-    with patch.object(handler.manifestHelper, "resolve_pipeline_inputs",
-                      return_value=_resolved()), \
-         patch.object(handler, "_asset_table", return_value=_asset_table_mock()), \
-         patch.object(handler, "lambda_client") as lc:
-        lc.invoke.return_value = {
-            "StatusCode": 200,
-            "Payload": MagicMock(read=lambda: json.dumps({"gate": "proceed"}).encode()),
-        }
-        handler.lambda_handler({"body": json.dumps({"TaskToken": "tok-1"})}, None)
-
-    open_payload = json.loads(lc.invoke.call_args_list[1].kwargs["Payload"].decode())
-    assert open_payload["assetVersionId"] == "v7"
+    assert open_payload["claimFingerprint"] == FP
+    assert open_payload["assetRootS3Path"] == "s3://b/vams/data/a1/"
+    assert open_payload["databaseId"] == "db1"
 
 
 def test_failure_after_claim_releases_it(handler):
-    with patch.object(handler.manifestHelper, "resolve_pipeline_inputs",
-                      return_value=_resolved()), \
-         patch.object(handler, "_asset_table", return_value=_asset_table_mock()), \
-         patch.object(handler, "s3_client") as s3, \
-         patch.object(handler, "sfn_client"), \
-         patch.object(handler, "lambda_client") as lc:
-        claim_held_by(s3, "tok-1")
-        lc.invoke.side_effect = [
-            {"StatusCode": 200,
-             "Payload": MagicMock(read=lambda: json.dumps({"gate": "proceed"}).encode())},
-            Exception("openPipeline unreachable"),
-        ]
-        resp = handler.lambda_handler({"body": json.dumps({"TaskToken": "tok-1"})}, None)
+    s3 = claim_held_by(MagicMock(), "tok-1")
+    resp, _, _ = _run(handler, s3=s3, open_result=Exception("openPipeline unreachable"))
 
     assert resp["statusCode"] == 500
     s3.delete_object.assert_called_once_with(
-        Bucket="vams-aux-bucket", Key="locks/miris-upload/a1/v7.claim")
+        Bucket="vams-aux-bucket", Key=f"locks/miris-upload/a1/{FP}.claim")
 
 
 def test_failure_before_the_gate_releases_nothing(handler):
@@ -169,16 +159,49 @@ def test_failure_before_the_gate_releases_nothing(handler):
     s3.delete_object.assert_not_called()
 
 
-def test_gate_skip_does_not_release_the_winning_claim(handler):
+@pytest.mark.parametrize("overrides", [
+    {"inputFiles": []},
+    {"inputFiles": [{"assetId": "a1", "bucket": "b", "assetRootS3Key": ""}]},
+    {"inputFiles": [{"assetId": "a1", "bucket": "", "assetRootS3Key": "a1/"}]},
+    {"databaseId": ""},
+    {"assetId": ""},
+], ids=["no-input-file", "no-root", "no-bucket", "no-database", "no-asset"])
+def test_a_run_without_an_asset_root_or_identity_fails_before_the_gate(handler, overrides):
     with patch.object(handler.manifestHelper, "resolve_pipeline_inputs",
-                      return_value=_resolved()), \
+                      return_value=_resolved(**overrides)), \
          patch.object(handler, "_asset_table", return_value=_asset_table_mock()), \
-         patch.object(handler, "s3_client") as s3, \
+         patch.object(handler, "s3_client", _configuration(None)), \
+         patch.object(handler, "sfn_client") as sfn, \
          patch.object(handler, "lambda_client") as lc:
-        lc.invoke.return_value = {
-            "StatusCode": 200,
-            "Payload": MagicMock(read=lambda: json.dumps({"gate": "skip"}).encode()),
-        }
-        handler.lambda_handler({"body": json.dumps({"TaskToken": "tok-1"})}, None)
+        resp = handler.lambda_handler({"body": json.dumps({"TaskToken": "tok-1"})}, None)
 
-    s3.delete_object.assert_not_called()
+    assert resp["statusCode"] == 500
+    lc.invoke.assert_not_called()
+    sfn.send_task_failure.assert_called_once()
+
+
+# --- manual runs ------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("configuration,executing_user,manual", [
+    ({"triggerType": "Manual"}, "SYSTEM_USER", True),
+    ({"triggerType": "File-Upload"}, "alice", False),
+    (None, "SYSTEM_USER", False),
+    (None, "alice", True),
+    ({"mirisTags": []}, "alice", True),
+    ({"triggerType": "{{triggerType}}"}, "SYSTEM_USER", False),
+    ({"triggerType": ""}, "alice", True),
+], ids=["rendered-manual", "rendered-file-upload", "trigger-user", "user", "no-trigger-type",
+        "unrendered-tag", "blank-trigger-type"])
+def test_the_manual_flag_reaches_the_gate(handler, configuration, executing_user, manual):
+    _, gate_body, _ = _run(handler, s3=_configuration(configuration), executing_user=executing_user)
+
+    assert gate_body["manual"] is manual
+
+
+def test_a_malformed_configuration_falls_back_to_the_executing_user(handler):
+    s3 = MagicMock()
+    s3.get_object.side_effect = lambda **_: {"Body": io.BytesIO(b"not json")}
+    _, gate_body, _ = _run(handler, s3=s3, executing_user="SYSTEM_USER")
+
+    assert gate_body["manual"] is False

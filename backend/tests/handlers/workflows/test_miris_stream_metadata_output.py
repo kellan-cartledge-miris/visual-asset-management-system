@@ -52,17 +52,18 @@ _spec = importlib.util.spec_from_file_location("miris_upload_stream_metadata", _
 stream_metadata = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(stream_metadata)
 
-ASSET_ID = "x86487e0b-9f50-4b7b-9b59-8963c6791b56"
 # The shape the workflow ASL hands the process-output step as metadataPathKey.
 METADATA_PREFIX = "pipelines/miris-upload/MirisUpload_job/output/E1/metadata/"
 
 
-@pytest.mark.parametrize("trigger_key, usd_relative_path", [
-    (f"{ASSET_ID}/pump.usdz", "pump.usdz"),
-    (f"{ASSET_ID}/scenes/v2/pump.usda", "scenes/v2/pump.usda"),
+@pytest.mark.parametrize("usd_relative_path", [
+    "pump.usdz",
+    "scenes/v2/pump.usda",
+    "scenes/Coral House.usdz",
 ])
-def test_written_key_derives_to_the_usd_relative_path(trigger_key, usd_relative_path):
-    key = stream_metadata.metadata_object_key(METADATA_PREFIX, trigger_key, ASSET_ID)
+def test_written_key_derives_to_the_usd_relative_path(usd_relative_path):
+    # The container names the object after the root USD's path relative to the asset root.
+    key = stream_metadata.metadata_object_key(METADATA_PREFIX, usd_relative_path)
 
     assert os.path.basename(key) != "asset.metadata.json"
     assert key in [o["Key"] for o in po.filter_metadata_files([{"Key": key}])]

@@ -13,6 +13,10 @@ from typing import List
 
 logger = logging.getLogger(__name__)
 
+# Tag prefixes the pipeline writes itself to bind the Miris asset to its VAMS asset and database.
+# A configured tag with one of them could bind the Miris asset to another VAMS asset, so it is dropped.
+RESERVED_TAG_PREFIXES = ("vams-asset-", "vams-database-")
+
 
 @dataclass
 class UploadConfig:
@@ -56,4 +60,16 @@ def resolve_upload_config(stage, packaged_filename, s3_client):
         logger.warning(f"Ignoring non-list mirisTags of type {type(tags).__name__}")
         tags = []
 
-    return UploadConfig(asset_name=asset_name, tags=[str(t) for t in tags])
+    return UploadConfig(asset_name=asset_name, tags=_without_reserved_tags(str(t) for t in tags))
+
+
+def _without_reserved_tags(tags):
+    """The configured tags, less any that use a reserved binding prefix (compared case-insensitively)."""
+    kept = []
+    for tag in tags:
+        if tag.strip().lower().startswith(RESERVED_TAG_PREFIXES):
+            logger.warning(f"Dropping configured Miris tag {tag!r}: the vams-asset- and "
+                           "vams-database- prefixes are reserved for the pipeline's binding tags")
+            continue
+        kept.append(tag)
+    return kept

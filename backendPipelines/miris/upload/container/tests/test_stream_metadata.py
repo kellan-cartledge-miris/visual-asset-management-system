@@ -1,12 +1,9 @@
 #  Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 import datetime
-import importlib.util
 import json
 import os
 import sys
-import types
-from unittest.mock import MagicMock, mock_open
 
 import pytest
 
@@ -18,11 +15,9 @@ from stream_metadata import (  # noqa: E402
     format_uploaded_at,
     metadata_object_key,
     metadata_output_location,
-    relative_subdir,
 )
+from container_harness import ASSET_ID, METADATA_PREFIX, definition  # noqa: E402
 
-ASSET_ID = "x86487e0b-9f50-4b7b-9b59-8963c6791b56"
-METADATA_PREFIX = "pipelines/miris/job/output/E1/metadata/"
 UPLOADED_AT = datetime.datetime(2026, 10, 14, 9, 30, 15, 123456, tzinfo=datetime.timezone.utc)
 
 
@@ -107,28 +102,20 @@ def test_body_is_json_serializable():
 # --- object key -------------------------------------------------------------------------------
 
 
-def test_relative_subdir_of_a_root_file_is_empty():
-    assert relative_subdir(f"{ASSET_ID}/model.usd", ASSET_ID) == ""
-
-
-def test_relative_subdir_of_a_nested_file():
-    assert relative_subdir(f"{ASSET_ID}/scenes/v2/model.usd", ASSET_ID) == "scenes/v2"
-
-
 def test_metadata_key_for_a_root_usd():
-    assert metadata_object_key(METADATA_PREFIX, f"{ASSET_ID}/model.usda", ASSET_ID) == (
+    assert metadata_object_key(METADATA_PREFIX, "model.usda") == (
         f"{METADATA_PREFIX}model.usda.metadata.json"
     )
 
 
 def test_metadata_key_for_a_nested_usd():
-    assert metadata_object_key(METADATA_PREFIX, f"{ASSET_ID}/scenes/v2/model.usd", ASSET_ID) == (
+    assert metadata_object_key(METADATA_PREFIX, "scenes/v2/model.usd") == (
         f"{METADATA_PREFIX}scenes/v2/model.usd.metadata.json"
     )
 
 
 def test_metadata_key_keeps_spaces_in_the_file_name_verbatim():
-    assert metadata_object_key(METADATA_PREFIX, f"{ASSET_ID}/Coral House.usdz", ASSET_ID) == (
+    assert metadata_object_key(METADATA_PREFIX, "Coral House.usdz") == (
         f"{METADATA_PREFIX}Coral House.usdz.metadata.json"
     )
 
@@ -165,95 +152,13 @@ def test_metadata_output_location_rejects_a_missing_path(stage):
 # --- container entry point --------------------------------------------------------------------
 
 
-def _load_main():
-    spec = importlib.util.spec_from_file_location(
-        "miris_upload_container_main", os.path.join(_CONTAINER_DIR, "__main__.py")
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+def _usdz_asset(container, rel="pump.usdz", root=f"{ASSET_ID}/"):
+    container.s3.add("asset-bucket", f"{root}{rel}", b"usdz")
 
 
-def _definition(trigger_key, **stage_overrides):
-    stage = {
-        "type": "MIRIS_UPLOAD",
-        "assetId": ASSET_ID,
-        "databaseId": "db1",
-        "triggerInput": {
-            "bucketName": "asset-bucket",
-            "objectKey": trigger_key,
-            "fileExtension": os.path.splitext(trigger_key)[1],
-        },
-        "outputMetadataFiles": {"bucketName": "asset-bucket", "objectDir": METADATA_PREFIX},
-        "temporaryFiles": {"bucketName": "aux", "objectDir": "tmp/"},
-        "mirisApiBaseUrl": "https://api.example.test",
-        "mirisApiKeySecretArn": "arn:aws:secretsmanager:::secret:x",
-        "taskTimeoutSeconds": 60,
-        "maxAssetSizeBytes": 1000,
-    }
-    stage.update(stage_overrides)
-    return json.dumps({"jobName": "job-1", "stages": [stage]})
-
-
-@pytest.fixture
-def container(monkeypatch):
-    """The entry point with S3, Secrets Manager, Miris and the /workdir filesystem faked."""
-    main_mod = _load_main()
-
-    s3 = MagicMock(name="s3")
-    s3.head_object.return_value = {"ContentLength": 10, "VersionId": "v-downloaded"}
-    temp_s3 = MagicMock(name="temp_s3")
-    fake_boto3 = MagicMock()
-    fake_boto3.client.side_effect = lambda *a, **kw: temp_s3 if "endpoint_url" in kw else s3
-    monkeypatch.setattr(main_mod, "boto3", fake_boto3)
-
-    miris = MagicMock(name="miris")
-    miris.start_upload.return_value = {
-        "id": "0b6f4c9e-6a43-4bb5-9d0c-4b3e2b1f7a10",
-        "upload_path": "s3://miris-temp/prefix",
-        "endpoint_url": "https://s3.example.test",
-        "region": "us-east-1",
-        "access_key_id": "a",
-        "secret_key": "s",
-        "session_token": "t",
-    }
-    miris.poll_until_terminal.return_value = {"state": "streamable"}
-    miris.trigger_generate_best_effort.return_value = None
-    miris_cls = MagicMock(return_value=miris)
-    monkeypatch.setattr(main_mod, "MirisClient", miris_cls)
-    monkeypatch.setattr(main_mod, "get_miris_integration_key", lambda *a, **kw: "key")
-    monkeypatch.setattr(
-        main_mod,
-        "resolve_upload_config",
-        lambda *a, **kw: types.SimpleNamespace(asset_name="Pump Housing", tags=[]),
-    )
-    monkeypatch.setattr(main_mod, "_sha256_of_file", lambda path: "0" * 64)
-    monkeypatch.setattr(main_mod, "open", mock_open(read_data=b"usdz"), raising=False)
-    fake_path = types.SimpleNamespace(
-        basename=os.path.basename,
-        splitext=os.path.splitext,
-        join=os.path.join,
-        dirname=os.path.dirname,
-        isfile=lambda p: True,
-        getsize=lambda p: 10,
-    )
-    monkeypatch.setattr(
-        main_mod,
-        "os",
-        types.SimpleNamespace(
-            path=fake_path, makedirs=lambda *a, **kw: None, environ=os.environ
-        ),
-    )
-    return types.SimpleNamespace(main=main_mod, s3=s3, temp_s3=temp_s3, miris_cls=miris_cls)
-
-
-def _run(container, monkeypatch, definition):
-    monkeypatch.setattr(sys, "argv", ["__main__.py", definition])
-    container.main.main()
-
-
-def test_main_writes_stream_metadata_next_to_the_usd_relative_path(container, monkeypatch):
-    _run(container, monkeypatch, _definition(f"{ASSET_ID}/scenes/pump.usdz"))
+def test_main_writes_stream_metadata_next_to_the_usd_relative_path(container):
+    _usdz_asset(container, "scenes/pump.usdz")
+    container.run(definition(trigger_rel="scenes/pump.usdz"))
 
     container.s3.put_object.assert_called_once()
     put = container.s3.put_object.call_args.kwargs
@@ -262,73 +167,62 @@ def test_main_writes_stream_metadata_next_to_the_usd_relative_path(container, mo
     assert put["ContentType"] == "application/json"
     entries = _entries(json.loads(put["Body"]))
     assert entries["miris_asset_uuid"]["metadataValue"] == "0b6f4c9e-6a43-4bb5-9d0c-4b3e2b1f7a10"
-    assert entries["miris_display_name"]["metadataValue"] == "Pump Housing"
+    assert entries["miris_display_name"]["metadataValue"] == "pump"
 
 
-def test_main_records_the_version_it_downloaded(container, monkeypatch):
-    _run(container, monkeypatch, _definition(f"{ASSET_ID}/pump.usdz"))
+def test_main_records_the_version_it_downloaded(container):
+    _usdz_asset(container)
+    container.run(definition())
 
-    container.s3.download_file.assert_called_once_with(
-        "asset-bucket", f"{ASSET_ID}/pump.usdz", "/workdir/pump.usdz",
-        ExtraArgs={"VersionId": "v-downloaded"},
-    )
+    assert container.s3.downloads == [
+        ("asset-bucket", f"{ASSET_ID}/pump.usdz", {"VersionId": f"v-{ASSET_ID}/pump.usdz"})]
     body = json.loads(container.s3.put_object.call_args.kwargs["Body"])
-    assert _entries(body)["miris_source_version_id"]["metadataValue"] == "v-downloaded"
+    assert _entries(body)["miris_source_version_id"]["metadataValue"] == f"v-{ASSET_ID}/pump.usdz"
 
 
-def test_main_writes_an_empty_source_version_for_an_unversioned_object(container, monkeypatch):
-    container.s3.head_object.return_value = {"ContentLength": 10}
+def test_main_writes_an_empty_source_version_for_an_unversioned_object(container):
+    _usdz_asset(container)
+    container.s3.unversioned.add(f"{ASSET_ID}/pump.usdz")
+    container.run(definition())
 
-    _run(container, monkeypatch, _definition(f"{ASSET_ID}/pump.usdz"))
-
-    container.s3.download_file.assert_called_once_with(
-        "asset-bucket", f"{ASSET_ID}/pump.usdz", "/workdir/pump.usdz", ExtraArgs=None
-    )
+    assert container.s3.downloads == [("asset-bucket", f"{ASSET_ID}/pump.usdz", None)]
     body = json.loads(container.s3.put_object.call_args.kwargs["Body"])
     assert _entries(body)["miris_source_version_id"]["metadataValue"] == ""
 
 
-def test_main_writes_only_the_metadata_file(container, monkeypatch):
-    _run(container, monkeypatch, _definition(f"{ASSET_ID}/pump.usdz"))
+def test_main_writes_only_the_metadata_file(container):
+    _usdz_asset(container)
+    container.run(definition())
 
     written = [c.kwargs["Key"] for c in container.s3.put_object.call_args_list]
     assert written == [f"{METADATA_PREFIX}pump.usdz.metadata.json"]
     container.s3.upload_file.assert_not_called()
 
 
-def test_main_fails_before_uploading_when_the_metadata_path_is_missing(container, monkeypatch):
-    definition = json.loads(_definition(f"{ASSET_ID}/pump.usdz"))
-    del definition["stages"][0]["outputMetadataFiles"]
+def test_main_fails_before_uploading_when_the_metadata_path_is_missing(container):
+    _usdz_asset(container)
+    d = json.loads(definition())
+    del d["stages"][0]["outputMetadataFiles"]
 
     with pytest.raises(SystemExit) as exit_info:
-        _run(container, monkeypatch, json.dumps(definition))
+        container.run(json.dumps(d))
 
     assert exit_info.value.code == 7
     container.miris_cls.assert_not_called()
     container.s3.put_object.assert_not_called()
 
 
-def test_asset_folder_download_pins_only_the_root_usd(tmp_path):
-    main_mod = _load_main()
-    root_key = f"{ASSET_ID}/scenes/pump.usda"
-    texture_key = f"{ASSET_ID}/scenes/textures/wood.png"
-    s3 = MagicMock()
-    s3.get_paginator.return_value.paginate.return_value = [
-        {"Contents": [{"Key": root_key}, {"Key": texture_key}]}
-    ]
-    s3.head_object.return_value = {"VersionId": "v-root"}
+def test_asset_download_pins_only_the_usd_layers(container, monkeypatch):
+    root = f"{ASSET_ID}/"
+    container.s3.add("asset-bucket", f"{root}scenes/pump.usda", "#usda 1.0")
+    container.s3.add("asset-bucket", f"{root}scenes/textures/wood.png", "png")
+    monkeypatch.setattr(container.main, "compute_dependencies", lambda path: ([path], ["wood.png"], []))
+    monkeypatch.setattr(container.main, "package_usdz", lambda root_path, out: open(out, "wb").write(b"z"))
 
-    def _download(bucket, key, local, ExtraArgs=None):
-        with open(local, "wb") as f:
-            f.write(b"x")
+    container.run(definition(trigger_rel="scenes/pump.usda"))
 
-    s3.download_file.side_effect = _download
-
-    total, version_id = main_mod._download_asset_folder(
-        s3, "asset-bucket", ASSET_ID, str(tmp_path), root_key
-    )
-
-    assert (total, version_id) == (2, "v-root")
-    s3.head_object.assert_called_once_with(Bucket="asset-bucket", Key=root_key)
-    calls = {c.args[1]: c.kwargs.get("ExtraArgs") for c in s3.download_file.call_args_list}
-    assert calls == {root_key: {"VersionId": "v-root"}, texture_key: None}
+    pinned = {key: extra for _, key, extra in container.s3.downloads}
+    assert pinned == {
+        f"{root}scenes/pump.usda": {"VersionId": f"v-{root}scenes/pump.usda"},
+        f"{root}scenes/textures/wood.png": None,
+    }

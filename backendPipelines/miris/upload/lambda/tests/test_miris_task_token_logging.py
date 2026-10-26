@@ -60,7 +60,7 @@ def _open_event(**overrides):
         "inputOutputS3AssetAuxiliaryFilesPath": AUX,
         "outputS3AssetMetadataPath": "s3://assets/pipelines/p/j/output/E1/metadata/",
         "assetId": "a1",
-        "assetVersionId": "v7",
+        "claimFingerprint": "fp1",
         "databaseId": "db1",
         "sfnExternalTaskToken": TOKEN,
         "orchestrationEventPrefix": "vams.test.execution.E1.pipeline.P1",
@@ -97,7 +97,7 @@ def test_open_pipeline_never_logs_the_token(monkeypatch, recorder, route):
 @pytest.mark.parametrize("route", ["success", "failure", "timed_out", "closed_token"])
 def test_pipeline_end_never_logs_the_token(monkeypatch, recorder, route):
     mod = _load("pipelineEnd", monkeypatch)
-    claim = {"assetId": "a1", "assetVersionId": "v7", "inputOutputS3AssetAuxiliaryFilesPath": AUX}
+    claim = {"assetId": "a1", "claimFingerprint": "fp1", "inputOutputS3AssetAuxiliaryFilesPath": AUX}
     status_event = {
         "detail-type": "Step Functions Execution Status Change",
         "detail": {"status": "TIMED_OUT", "input": json.dumps({"externalSfnTaskToken": TOKEN, **claim})},
@@ -131,16 +131,18 @@ def test_vams_execute_never_logs_the_token(monkeypatch, recorder, route):
         "inputS3AssetFilePath", "outputS3AssetFilesPath", "outputS3AssetPreviewPath",
         "outputS3AssetMetadataPath", "inputMetadataS3Location", "inputConfigurationS3Location",
         "orchestrationEventPrefix")}
-    resolved.update(assetId="a1", databaseId="db1", inputFiles=[{"assetId": "a1"}],
+    resolved.update(assetId="a1", databaseId="db1",
+                    inputFiles=[{"assetId": "a1", "bucket": "assets", "assetRootS3Key": "a1/"}],
                     inputOutputS3AssetAuxiliaryFilesPath=AUX, manifestUsed=True)
     table = MagicMock()
-    table.get_item.return_value = {"Item": {"assetName": "Pump", "currentVersionId": "v7"}}
+    table.get_item.return_value = {"Item": {"assetName": "Pump"}}
     resolve = (MagicMock(side_effect=Exception("manifest unreadable")) if route == "manifest_failed"
                else MagicMock(return_value=resolved))
     with patch.object(mod, "logger", recorder), \
             patch.object(mod.manifestHelper, "resolve_pipeline_inputs", resolve), \
             patch.object(mod, "_asset_table", return_value=table), \
-            patch.object(mod, "sfn_client"), patch.object(mod, "lambda_client") as lc:
+            patch.object(mod, "sfn_client"), patch.object(mod, "s3_client"), \
+            patch.object(mod, "lambda_client") as lc:
         lc.invoke.return_value = {
             "StatusCode": 200,
             "Payload": MagicMock(read=lambda: json.dumps({"gate": "proceed"}).encode()),
@@ -153,11 +155,13 @@ def test_vams_execute_never_logs_the_token(monkeypatch, recorder, route):
 def test_gate_never_logs_the_token(monkeypatch, recorder):
     mod = _load("mirisUploadGate", monkeypatch)
     event = {"body": json.dumps({
-        "assetId": "a1", "assetVersionId": "v7", "databaseId": "db1",
+        "assetId": "a1", "databaseId": "db1", "assetBucket": "assets", "assetRootS3Key": "a1/",
         "inputOutputS3AssetAuxiliaryFilesPath": AUX, "sfnExternalTaskToken": TOKEN})}
     with patch.object(mod, "logger", recorder), patch.object(mod, "s3_client") as s3, \
             patch.object(mod, "sfn_client"):
         s3.exceptions.ClientError = ClientError
+        s3.get_paginator.return_value.paginate.return_value = [
+            {"Contents": [{"Key": "a1/model.usd", "ETag": '"e1"'}]}]
         s3.put_object.side_effect = ClientError(
             {"Error": {"Code": "PreconditionFailed", "Message": "exists"}}, "PutObject")
         s3.get_object.return_value = {"Body": MagicMock(read=lambda: b'{"owner": "someone-else"}')}

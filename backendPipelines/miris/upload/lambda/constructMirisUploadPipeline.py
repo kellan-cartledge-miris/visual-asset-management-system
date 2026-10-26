@@ -16,6 +16,8 @@ MIRIS_UPLOAD_TASK_TIMEOUT_SECONDS = int(
 MIRIS_UPLOAD_MAX_ASSET_SIZE_BYTES = int(
     os.environ.get("MIRIS_UPLOAD_MAX_ASSET_SIZE_BYTES", "5000000000")
 )
+# The extensions that trigger the pipeline; the container chooses the upload root among them.
+ALLOWED_INPUT_FILEEXTENSIONS = os.environ.get("ALLOWED_INPUT_FILEEXTENSIONS", ".usd,.usda,.usdc,.usdz")
 
 
 def _metadata_output_location(metadata_uri):
@@ -36,6 +38,20 @@ def _metadata_output_location(metadata_uri):
     return bucket, prefix
 
 
+def _asset_root_location(asset_root_uri):
+    """Split the asset root into (bucket, prefix ending in '/'). The container lists and downloads
+    the asset from there, so a run without one fails here, before the Batch job is submitted."""
+    bucket, _, prefix = (asset_root_uri or "").replace("s3://", "", 1).partition("/")
+    if not (asset_root_uri or "").startswith("s3://") or not bucket or not prefix.strip("/"):
+        raise ValueError(
+            f"assetRootS3Path is missing or not an s3://bucket/prefix URI (got {asset_root_uri!r}); "
+            "the Miris upload pipeline reads the asset's files from there"
+        )
+    if not prefix.endswith("/"):
+        prefix += "/"
+    return bucket, prefix
+
+
 def lambda_handler(event, context):
     logger.info("ConstructMirisUploadPipeline received event")
 
@@ -45,12 +61,13 @@ def lambda_handler(event, context):
     metadata_uri = event.get("outputS3AssetMetadataPath", "")
     asset_id = event.get("assetId", "")
     database_id = event.get("databaseId", "")
-    asset_version_id = event.get("assetVersionId", "")
+    claim_fingerprint = event.get("claimFingerprint", "")
     input_configuration_s3_location = event.get("inputConfigurationS3Location", "")
     miris_asset_name = event.get("mirisAssetName", "")
 
     input_bucket, input_key = input_s3_uri.replace("s3://", "").split("/", 1)
     metadata_bucket, metadata_key = _metadata_output_location(metadata_uri)
+    asset_root_bucket, asset_root_prefix = _asset_root_location(event.get("assetRootS3Path", ""))
 
     _, extension = os.path.splitext(input_key)
 
@@ -66,6 +83,15 @@ def lambda_handler(event, context):
                     "objectKey": input_key,
                     "fileExtension": extension,
                 },
+                "assetRoot": {
+                    "bucketName": asset_root_bucket,
+                    "objectDir": asset_root_prefix,
+                },
+                "rootExtensions": [
+                    ext.strip().lower()
+                    for ext in ALLOWED_INPUT_FILEEXTENSIONS.split(",")
+                    if ext.strip()
+                ],
                 "outputMetadataFiles": {
                     "bucketName": metadata_bucket,
                     "objectDir": metadata_key,
@@ -87,7 +113,7 @@ def lambda_handler(event, context):
         "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
         # The failure branch reads these off the state to release the gate's claim.
         "assetId": asset_id,
-        "assetVersionId": asset_version_id,
+        "claimFingerprint": claim_fingerprint,
         "inputOutputS3AssetAuxiliaryFilesPath": aux_uri,
         "status": "STARTING",
     }

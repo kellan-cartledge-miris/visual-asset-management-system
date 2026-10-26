@@ -4,18 +4,22 @@
 Miris Upload Gate Lambda.
 
 A fileUpload trigger fires once per uploaded file, so a multi-file USD asset fans out to one
-execution per matching layer — each of which would package the same dependency graph and create a
+execution per matching layer, each of which would package the same dependency graph and create a
 duplicate Miris asset. This gate collapses that fan-out to a single upload.
 
-The claim is an S3 conditional put (``If-None-Match: *``) at a key derived only from the asset and
-its current version (``mirisClaim.claim_location``), so every execution fanned out from one upload
-computes the same key. Exactly one caller can create the object; every other caller receives
+The claim is an S3 conditional put (``If-None-Match: *``) at a key derived from the asset and the
+content of its USD layers (``mirisClaim.claim_location``): the gate lists the files under the asset
+root whose extension can trigger the pipeline and fingerprints their keys and ETags. Every execution
+fanned out from one upload computes the same key, while a changed or added layer computes a new one
+and uploads again. Exactly one caller can create the object; every other caller receives
 ``PreconditionFailed`` and exits as a no-op success, reporting against its own task token so the
 workflow task does not wait out its timeout.
 
+A manual run writes no claim: a user who asks to stream an asset gets an upload even when the
+content is unchanged.
+
 A claim that is not followed by a successful upload is released again by ``pipelineEnd`` (or by the
-lambda that detected the failure), so a failed run does not leave the asset version permanently
-skipped.
+lambda that detected the failure), so a failed run does not leave the content permanently skipped.
 
 The claim records its owner, a digest of the execution's workflow task token. A retried put whose
 first attempt landed but whose response was lost meets the caller's OWN claim and fails with
@@ -32,12 +36,22 @@ import boto3
 from botocore.config import Config
 from customLogging.logger import safeLogger
 
-from mirisClaim import claim_location, owner_id
+from mirisClaim import (
+    asset_root_prefix,
+    claim_location,
+    content_fingerprint,
+    list_trigger_files,
+    owner_id,
+    parse_extensions,
+)
 
 logger = safeLogger(service="MirisUploadGate")
 retry_config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
 s3_client = boto3.client("s3", region_name=os.environ.get("AWS_REGION"), config=retry_config)
 sfn_client = boto3.client("stepfunctions", region_name=os.environ.get("AWS_REGION"), config=retry_config)
+
+# The extensions that trigger the pipeline; only files with one of them enter the fingerprint.
+ALLOWED_INPUT_FILEEXTENSIONS = os.environ.get("ALLOWED_INPUT_FILEEXTENSIONS", ".usd,.usda,.usdc,.usdz")
 
 
 def _parse_body(event):
@@ -77,22 +91,37 @@ def _report_skipped(task_token, reason):
         logger.warning(f"send_task_success failed (will fall through): {e}")
 
 
+def asset_fingerprint(asset_bucket, asset_root_key):
+    """Content fingerprint of the asset's trigger-extension files; '' when there is none to take."""
+    root_prefix = asset_root_prefix(asset_root_key)
+    if not asset_bucket or not root_prefix:
+        return ""
+    files = list_trigger_files(
+        s3_client, asset_bucket, root_prefix, parse_extensions(ALLOWED_INPUT_FILEEXTENSIONS))
+    logger.info(f"Fingerprinting {len(files)} trigger file(s) under s3://{asset_bucket}/{root_prefix}")
+    return content_fingerprint(files)
+
+
 def lambda_handler(event, context):
     logger.info("MirisUploadGate received event")
     body = _parse_body(event)
     asset_id = body.get("assetId", "")
-    asset_version_id = body.get("assetVersionId", "")
     task_token = body.get("sfnExternalTaskToken", "") or ""
     owner = owner_id(task_token)
 
-    bucket, key = claim_location(
-        body.get("inputOutputS3AssetAuxiliaryFilesPath", ""), asset_id, asset_version_id)
+    if body.get("manual") is True:
+        logger.info("Manual run; uploading without a claim")
+        return {"gate": "proceed", "claimFingerprint": ""}
 
-    # No auxiliary location means no place to record a claim. Proceed rather than block: a missing
-    # dedup is a duplicate upload, whereas a false skip loses the upload entirely.
+    fingerprint = asset_fingerprint(body.get("assetBucket", ""), body.get("assetRootS3Key", ""))
+    bucket, key = claim_location(
+        body.get("inputOutputS3AssetAuxiliaryFilesPath", ""), asset_id, fingerprint)
+
+    # No auxiliary location or no content to fingerprint means no claim to record. Proceed rather
+    # than block: a missing dedup is a duplicate upload, whereas a false skip loses the upload.
     if not bucket:
-        logger.warning("No auxiliary path available for the claim; proceeding without dedup")
-        return {"gate": "proceed"}
+        logger.warning("No claim location for this run; proceeding without dedup")
+        return {"gate": "proceed", "claimFingerprint": ""}
 
     try:
         s3_client.put_object(
@@ -100,7 +129,7 @@ def lambda_handler(event, context):
             Key=key,
             Body=json.dumps({
                 "assetId": asset_id,
-                "assetVersionId": asset_version_id,
+                "fingerprint": fingerprint,
                 "mirisAssetName": body.get("mirisAssetName", ""),
                 "owner": owner,
             }).encode("utf-8"),
@@ -111,13 +140,13 @@ def lambda_handler(event, context):
         if code in ("PreconditionFailed", "ConditionalRequestConflict"):
             if _claim_is_ours(bucket, key, owner):
                 logger.info(f"Claim s3://{bucket}/{key} already held by this execution; proceeding")
-                return {"gate": "proceed"}
-            reason = (f"Miris upload for asset {asset_id!r} version "
-                      f"{asset_version_id or 'live'!r} is already claimed by another execution")
+                return {"gate": "proceed", "claimFingerprint": fingerprint}
+            reason = (f"Miris upload of this content of asset {asset_id!r} is already claimed by "
+                      f"another execution")
             logger.info(f"Skipping: {reason}")
             _report_skipped(task_token, reason)
             return {"gate": "skip", "reason": reason}
         raise
 
     logger.info(f"Claimed s3://{bucket}/{key}")
-    return {"gate": "proceed"}
+    return {"gate": "proceed", "claimFingerprint": fingerprint}

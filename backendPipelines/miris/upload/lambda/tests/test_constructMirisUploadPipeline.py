@@ -29,6 +29,7 @@ def _event(**overrides):
         "inputConfigurationS3Location": "s3://assets/cfg.json",
         "assetId": "a1",
         "databaseId": "db1",
+        "assetRootS3Path": "s3://assets/a1/",
         "mirisAssetName": "Pump Housing",
     }
     event.update(overrides)
@@ -63,17 +64,48 @@ def test_no_duplicate_short_circuit_remains(construct):
 
 def test_claim_fields_are_carried_to_the_failure_branch(construct):
     # The state machine's failure branch reads these JSONPaths off the construct result.
-    result = construct.lambda_handler(_event(assetVersionId="v7"), None)
+    result = construct.lambda_handler(_event(claimFingerprint="fp1"), None)
 
     assert result["assetId"] == "a1"
-    assert result["assetVersionId"] == "v7"
+    assert result["claimFingerprint"] == "fp1"
     assert result["inputOutputS3AssetAuxiliaryFilesPath"] == "s3://aux/a1"
 
 
-def test_claim_fields_are_present_when_the_version_is_unknown(construct):
+def test_claim_fields_are_present_for_a_run_without_a_claim(construct):
     result = construct.lambda_handler(_event(), None)
 
-    assert result["assetVersionId"] == ""
+    assert result["claimFingerprint"] == ""
+
+
+@pytest.mark.parametrize("root_uri,expected", [
+    ("s3://assets/a1/", {"bucketName": "assets", "objectDir": "a1/"}),
+    ("s3://assets/vams/data/a1", {"bucketName": "assets", "objectDir": "vams/data/a1/"}),
+])
+def test_definition_carries_the_resolved_asset_root(construct, root_uri, expected):
+    result = construct.lambda_handler(_event(assetRootS3Path=root_uri), None)
+    stage = json.loads(result["definition"][0])["stages"][0]
+
+    assert stage["assetRoot"] == expected
+
+
+@pytest.mark.parametrize("root_uri", [None, "", "s3://assets", "s3://assets/", "assets/a1/"])
+def test_missing_or_unusable_asset_root_fails_before_batch_submit(construct, root_uri):
+    event = _event()
+    if root_uri is None:
+        del event["assetRootS3Path"]
+    else:
+        event["assetRootS3Path"] = root_uri
+
+    with pytest.raises(ValueError, match="assetRootS3Path"):
+        construct.lambda_handler(event, None)
+
+
+def test_definition_carries_the_root_extensions(construct, monkeypatch):
+    monkeypatch.setattr(construct, "ALLOWED_INPUT_FILEEXTENSIONS", ".USD, .usdz")
+    result = construct.lambda_handler(_event(), None)
+    stage = json.loads(result["definition"][0])["stages"][0]
+
+    assert stage["rootExtensions"] == [".usd", ".usdz"]
 
 
 def test_definition_carries_the_metadata_output_path(construct):

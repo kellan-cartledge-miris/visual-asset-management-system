@@ -137,6 +137,18 @@ describe("Miris upload failure routes", () => {
         expect(permissions).toHaveLength(1);
     });
 
+    test("the success end task hands the end Lambda the claim fields", () => {
+        const asl = parseAsl(singleStateMachine(template));
+        const payload = asl.States.MirisUploadEnd.Parameters.Payload;
+
+        expect(payload.status).toBe("success");
+        expect(payload["assetId.$"]).toBe("$.assetId");
+        expect(payload["claimFingerprint.$"]).toBe("$.claimFingerprint");
+        expect(payload["inputOutputS3AssetAuxiliaryFilesPath.$"]).toBe(
+            "$.inputOutputS3AssetAuxiliaryFilesPath"
+        );
+    });
+
     test("the failure branch hands the end Lambda the error and cause separately, with the claim fields", () => {
         const asl = parseAsl(singleStateMachine(template));
         const payload = asl.States.MirisUploadEndFailure.Parameters.Payload;
@@ -144,7 +156,7 @@ describe("Miris upload failure routes", () => {
         expect(payload["errorType.$"]).toBe("$.error.Error");
         expect(payload["errorCause.$"]).toBe("$.error.Cause");
         expect(payload["assetId.$"]).toBe("$.assetId");
-        expect(payload["assetVersionId.$"]).toBe("$.assetVersionId");
+        expect(payload["claimFingerprint.$"]).toBe("$.claimFingerprint");
         expect(payload["inputOutputS3AssetAuxiliaryFilesPath.$"]).toBe(
             "$.inputOutputS3AssetAuxiliaryFilesPath"
         );
@@ -230,7 +242,7 @@ describe("Miris upload IAM", () => {
         "%s reads and deletes claim objects only, under the claim prefix only",
         (handler) => {
             const s3Statements = statementsOf(lambdaRoleId(handler)).filter((s) =>
-                actionsOf(s).some((a) => a.startsWith("s3:"))
+                actionsOf(s).some((a) => a.startsWith("s3:") && a !== "s3:ListBucket")
             );
             expect(s3Statements).toHaveLength(1);
             expect(actionsOf(s3Statements[0]).sort()).toEqual(["s3:DeleteObject", "s3:GetObject"]);
@@ -243,6 +255,57 @@ describe("Miris upload IAM", () => {
             expect(join[1].slice(1)).toEqual(["/locks/miris-upload/*"]);
         }
     );
+
+    test("the gate lists the asset buckets and writes objects only under the claim prefix", () => {
+        const statements = statementsOf(lambdaRoleId("mirisUploadGate.lambda_handler"));
+        const listing = statements.filter((s) => actionsOf(s).includes("s3:ListBucket"));
+        expect(listing).toHaveLength(1);
+        // Bucket ARNs only: a listing grant carries no object wildcard.
+        expect(actionsOf(listing[0])).toEqual(["s3:ListBucket"]);
+        for (const resource of [listing[0].Resource].flat()) {
+            expect(JSON.stringify(resource)).not.toContain("*");
+        }
+        const writes = statements.filter((s) =>
+            actionsOf(s).some((a: string) => a.startsWith("s3:Put"))
+        );
+        expect(writes.length).toBeGreaterThan(0);
+        for (const s of writes) {
+            expect(JSON.stringify(s.Resource)).toContain("/locks/miris-upload/*");
+        }
+    });
+
+    test.each(["mirisUploadGate.lambda_handler", "constructMirisUploadPipeline.lambda_handler"])(
+        "%s receives the trigger extensions that pick the fingerprinted files and the root candidates",
+        (handler) => {
+            const fns = byType("AWS::Lambda::Function").filter(
+                ([, r]) => r.Properties.Handler === handler
+            );
+            expect(fns).toHaveLength(1);
+            expect(fns[0][1].Properties.Environment.Variables.ALLOWED_INPUT_FILEEXTENSIONS).toBe(
+                createMirisMockConfig().app.miris.upload.triggerExtensions
+            );
+        }
+    );
+
+    test("the end Lambda lists the auxiliary bucket only under the claim prefix", () => {
+        const listing = statementsOf(lambdaRoleId("pipelineEnd.lambda_handler")).filter((s) =>
+            actionsOf(s).includes("s3:ListBucket")
+        );
+        expect(listing).toHaveLength(1);
+        expect(actionsOf(listing[0])).toEqual(["s3:ListBucket"]);
+        expect(JSON.stringify(listing[0].Resource)).toMatch(/AssetAuxiliaryBucket/);
+        expect(JSON.stringify(listing[0].Resource)).not.toContain("*");
+        expect(listing[0].Condition).toEqual({
+            StringLike: { "s3:prefix": ["locks/miris-upload/*"] },
+        });
+    });
+
+    test("the open Lambda lists nothing", () => {
+        const actions = statementsOf(
+            lambdaRoleId("openMirisUploadPipeline.lambda_handler")
+        ).flatMap(actionsOf);
+        expect(actions).not.toContain("s3:ListBucket");
+    });
 
     test("vamsExecute can read a claim's owner back before releasing it", () => {
         const actions = statementsOf(lambdaRoleId("vamsExecuteMirisUpload.lambda_handler")).flatMap(

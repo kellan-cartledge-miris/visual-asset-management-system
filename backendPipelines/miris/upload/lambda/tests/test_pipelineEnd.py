@@ -15,6 +15,8 @@ os.environ.setdefault("AWS_REGION", "us-east-1")
 os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
 
 AUX = "s3://vams-aux-bucket/pipelines/miris-upload/exec-aaaa1111/"
+FP = "f" * 64
+CLAIM_KEY = f"locks/miris-upload/a1/{FP}.claim"
 
 
 def _batch_cause(exit_code=None, status_reason="Essential container in task exited"):
@@ -44,7 +46,7 @@ def _event(**overrides):
         "externalSfnTaskToken": "tok-1",
         "status": "success",
         "assetId": "a1",
-        "assetVersionId": "v7",
+        "claimFingerprint": FP,
         "inputOutputS3AssetAuxiliaryFilesPath": AUX,
     }
     event.update(overrides)
@@ -71,7 +73,7 @@ def test_failure_reports_task_failure_and_releases_the_claim(end):
     assert sfn.send_task_failure.call_args.kwargs["taskToken"] == "tok-1"
     assert sfn.send_task_failure.call_args.kwargs["cause"] == end.EXIT_CODE_REASONS[4]
     s3.delete_object.assert_called_once_with(
-        Bucket="vams-aux-bucket", Key="locks/miris-upload/a1/v7.claim")
+        Bucket="vams-aux-bucket", Key=CLAIM_KEY)
 
 
 def test_failure_without_a_token_releases_a_claim_recorded_without_an_owner(end):
@@ -93,7 +95,7 @@ def test_a_claim_now_held_by_another_execution_is_left_in_place(end, route):
         end.lambda_handler(event, None)
 
     s3.get_object.assert_called_once_with(
-        Bucket="vams-aux-bucket", Key="locks/miris-upload/a1/v7.claim")
+        Bucket="vams-aux-bucket", Key=CLAIM_KEY)
     s3.delete_object.assert_not_called()
 
 
@@ -125,7 +127,7 @@ def test_release_failure_does_not_mask_the_pipeline_failure(end):
     sfn.send_task_failure.assert_called_once()
 
 
-@pytest.mark.parametrize("exit_code", sorted([1, 2, 3, 4, 5, 6, 7, 8, 9]))
+@pytest.mark.parametrize("exit_code", sorted([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]))
 def test_every_container_exit_code_maps_to_a_reason_not_the_job_description(end, exit_code):
     cause = _batch_cause(exit_code)
     reason = end.failure_reason("States.TaskFailed", cause)
@@ -165,7 +167,7 @@ def _status_event(status, **input_overrides):
     execution_input = {
         "externalSfnTaskToken": "tok-1",
         "assetId": "a1",
-        "assetVersionId": "v7",
+        "claimFingerprint": FP,
         "inputOutputS3AssetAuxiliaryFilesPath": AUX,
     }
     execution_input.update(input_overrides)
@@ -188,7 +190,7 @@ def test_execution_status_event_releases_the_claim_and_fails_the_outer_token(end
 
     assert result["statusCode"] == 200
     s3.delete_object.assert_called_once_with(
-        Bucket="vams-aux-bucket", Key="locks/miris-upload/a1/v7.claim")
+        Bucket="vams-aux-bucket", Key=CLAIM_KEY)
     assert sfn.send_task_failure.call_args.kwargs["taskToken"] == "tok-1"
     assert sfn.send_task_failure.call_args.kwargs["cause"] == end.EXECUTION_STATUS_REASONS[status]
     sfn.send_task_success.assert_not_called()
@@ -225,3 +227,27 @@ def test_execution_status_event_without_input_is_a_no_op(end):
     assert result["body"] == "no-op"
     sfn.send_task_failure.assert_not_called()
     s3.delete_object.assert_not_called()
+
+
+def test_a_failed_run_without_a_claim_reads_and_deletes_nothing(end):
+    """A manual run writes no claim, so its failure has none to release."""
+    with patch.object(end, "sfn") as sfn, patch.object(end, "s3_client") as s3:
+        end.lambda_handler(_event(status="failed", claimFingerprint=""), None)
+
+    s3.get_object.assert_not_called()
+    s3.delete_object.assert_not_called()
+    sfn.send_task_failure.assert_called_once()
+
+
+def test_an_ambiguous_root_names_the_reason(end):
+    reason = end.failure_reason("States.TaskFailed", _batch_cause(10))
+
+    assert "ambiguous_root" in reason
+    assert len(reason) <= end.CAUSE_MAX_CHARS
+
+
+def test_an_unreadable_layer_points_at_the_log_entry_naming_the_file(end):
+    reason = end.failure_reason("States.TaskFailed", _batch_cause(11))
+
+    assert "unreadable_layer" in reason
+    assert len(reason) <= end.CAUSE_MAX_CHARS

@@ -7,9 +7,10 @@ the inner execution's FAILED, TIMED_OUT and ABORTED status changes. The rule cov
 inside the execution can reach, a state machine timeout or a stopped execution, which would otherwise
 leave the outer workflow task waiting out its own timeout and the claim in place.
 
-A run that does not succeed also releases the dedup claim the gate wrote, so the asset version is
-eligible again for the next trigger or a manual Automation run. A successful run keeps its claim:
-that record is what collapses the per-file trigger fan-out.
+A run that does not succeed also releases the dedup claim the gate wrote, so the same content is
+eligible again for the next trigger. A successful run keeps its claim: that record is what collapses
+the per-file trigger fan-out and repeat triggers on unchanged content. It also retires the asset's
+claims on other content, so a later trigger on earlier content (a reverted version) uploads again.
 """
 import json
 import os
@@ -37,16 +38,20 @@ CLOSED_TOKEN_ERROR_CODES = ("TaskTimedOut", "TaskDoesNotExist", "InvalidToken")
 # The container's exit codes (EXIT_* in container/__main__.py) and the reason the workflow shows.
 EXIT_CODE_REASONS = {
     1: "The Miris upload container failed with an unexpected error. See the container log.",
-    2: "The Miris upload container was started without a pipeline definition.",
+    2: "The Miris upload container was started without a complete pipeline definition.",
     3: "The file is not a USD format the Miris upload accepts (.usd, .usda, .usdc or .usdz).",
     4: "The asset is larger than the configured maximum upload size "
        "(app.miris.upload.maxAssetSizeBytes).",
     5: "The USD file references layers or assets that are not part of the VAMS asset.",
-    6: "The USD file to upload was not found in the asset.",
+    6: "The asset has no USD file to upload, or every USD file in it is referenced by another.",
     7: "The run has no metadata output location for the Miris stream metadata.",
     8: "Miris rejected the upload or could not process it. See the container log.",
     9: "Miris did not finish processing the asset within the configured task timeout "
        "(app.miris.upload.taskTimeoutSeconds).",
+    10: "The asset has more than one root USD file (ambiguous_root): no other USD file in the asset "
+        "references them. Keep one root layer per asset, or reference the others from it.",
+    11: "A USD file in the asset is empty or malformed and could not be read (unreadable_layer). "
+        "The container log's unreadable_layer entry names the file; fix or remove it.",
 }
 
 EXECUTION_STATUS_REASONS = {
@@ -119,7 +124,7 @@ def _release_claim(state, task_token):
         logger,
         state.get("inputOutputS3AssetAuxiliaryFilesPath", ""),
         state.get("assetId", ""),
-        state.get("assetVersionId", ""),
+        state.get("claimFingerprint", ""),
         mirisClaim.owner_id(task_token),
     )
 
@@ -149,7 +154,15 @@ def lambda_handler(event, context):
     task_token = event.get("externalSfnTaskToken")
     status = event.get("status", "success")
 
-    if status != "success":
+    if status == "success":
+        mirisClaim.retire_superseded_claims(
+            s3_client,
+            logger,
+            event.get("inputOutputS3AssetAuxiliaryFilesPath", ""),
+            event.get("assetId", ""),
+            event.get("claimFingerprint", ""),
+        )
+    else:
         _release_claim(event, task_token)
 
     if not task_token:

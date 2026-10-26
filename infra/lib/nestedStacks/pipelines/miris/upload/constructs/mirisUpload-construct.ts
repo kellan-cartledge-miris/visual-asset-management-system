@@ -287,11 +287,16 @@ export class MirisUploadConstruct extends Construct {
             resultPath: sfn.JsonPath.DISCARD,
         });
 
+        // A successful upload retires the asset's claims on other content, so it carries the claim
+        // fields as the failure branch does.
         const endTask = new tasks.LambdaInvoke(this, "MirisUploadEnd", {
             lambdaFunction: endFn,
             payload: sfn.TaskInput.fromObject({
                 "externalSfnTaskToken.$": "$.externalSfnTaskToken",
                 status: "success",
+                "assetId.$": "$.assetId",
+                "claimFingerprint.$": "$.claimFingerprint",
+                "inputOutputS3AssetAuxiliaryFilesPath.$": "$.inputOutputS3AssetAuxiliaryFilesPath",
             }),
         });
 
@@ -306,7 +311,7 @@ export class MirisUploadConstruct extends Construct {
                 "errorType.$": "$.error.Error",
                 "errorCause.$": "$.error.Cause",
                 "assetId.$": "$.assetId",
-                "assetVersionId.$": "$.assetVersionId",
+                "claimFingerprint.$": "$.claimFingerprint",
                 "inputOutputS3AssetAuxiliaryFilesPath.$": "$.inputOutputS3AssetAuxiliaryFilesPath",
             }),
             resultPath: sfn.JsonPath.DISCARD,

@@ -19,6 +19,7 @@ import { LAMBDA_PYTHON_RUNTIME } from "../../../../../../config/config";
 import { storageResources } from "../../../../storage/storageBuilder-nestedStack";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { vendedBatchJobLogGroupEnvironment } from "../../../../../helper/batchJobLogGroup";
+import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
 import {
     grantReadPermissionsToAllAssetBuckets,
     kmsKeyLambdaPermissionAddToResourcePolicy,
@@ -50,7 +51,7 @@ function suppressCdkNagClaimPrefixWildcard(fun: lambda.Function) {
             {
                 id: "AwsSolutions-IAM5",
                 reason:
-                    "Claim objects are keyed per asset and version, known only at run time, under the " +
+                    "Claim objects are keyed per asset and content fingerprint, known only at run time, under the " +
                     "fixed locks/miris-upload/ prefix of this deployment's auxiliary bucket.",
                 appliesTo: [
                     {
@@ -121,8 +122,21 @@ export function buildMirisUploadGateFunction(
     const fun = new lambda.Function(scope, "mirisUploadGate", {
         code: lambda.Code.fromAsset(LAMBDA_SRC),
         handler: "mirisUploadGate.lambda_handler",
+        environment: {
+            ALLOWED_INPUT_FILEEXTENSIONS: config.app.miris.upload.triggerExtensions,
+        },
         ..._commonProps(config, vpc, subnets, lambdaCommonBaseLayer),
     });
+    // The claim key fingerprints the keys and ETags of the asset's USD files, read from a listing.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["s3:ListBucket"],
+            resources: s3AssetBuckets
+                .getS3AssetBucketRecords()
+                .map((record) => record.bucket.bucketArn),
+        })
+    );
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
@@ -134,8 +148,8 @@ export function buildMirisUploadGateFunction(
             ],
         })
     );
-    // The gate touches nothing but claim objects, so the grants are scoped to that prefix. The read
-    // checks the owner of an existing claim, telling a retry of its own put from another execution's.
+    // The gate's object grants are scoped to the claim prefix. The read checks the owner of an
+    // existing claim, telling a retry of its own put from another execution's.
     storageResources.s3.assetAuxiliaryBucket.grantPut(fun, `${MIRIS_CLAIM_PREFIX}/*`);
     storageResources.s3.assetAuxiliaryBucket.grantRead(fun, `${MIRIS_CLAIM_PREFIX}/*`);
     suppressCdkNagClaimPrefixWildcard(fun);
@@ -288,6 +302,7 @@ export function buildConstructMirisUploadPipelineFunction(
             MIRIS_API_KEY_SECRET_ARN: config.app.miris.apiKeySecretArn,
             MIRIS_UPLOAD_TASK_TIMEOUT_SECONDS: String(config.app.miris.upload.taskTimeoutSeconds),
             MIRIS_UPLOAD_MAX_ASSET_SIZE_BYTES: String(config.app.miris.upload.maxAssetSizeBytes),
+            ALLOWED_INPUT_FILEEXTENSIONS: config.app.miris.upload.triggerExtensions,
         },
         ..._commonProps(config, vpc, subnets, lambdaCommonBaseLayer),
     });
@@ -323,8 +338,18 @@ export function buildMirisUploadPipelineEndFunction(
             ],
         })
     );
-    // A run that does not succeed releases its claim here, so the asset version can be retried.
+    // A run that does not succeed releases its claim here, so the same content can be retried.
     grantClaimRelease(fun, storageResources);
+    // A successful run lists the asset's claims to retire those on other content; the listing is
+    // limited to the claim prefix.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["s3:ListBucket"],
+            resources: [storageResources.s3.assetAuxiliaryBucket.bucketArn],
+            conditions: { StringLike: { "s3:prefix": [`${MIRIS_CLAIM_PREFIX}/*`] } },
+        })
+    );
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);

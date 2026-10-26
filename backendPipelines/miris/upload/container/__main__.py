@@ -2,9 +2,10 @@
 #  SPDX-License-Identifier: Apache-2.0
 """Miris upload pipeline container entry point.
 
-Reads the pipeline definition (single JSON arg from constructMirisUploadPipeline),
-runs the 6-step Miris upload flow, writes the Miris stream metadata for the source
-USD file to the run's metadata output path, and exits 0/non-0.
+Reads the pipeline definition (single JSON arg from constructMirisUploadPipeline), lists the
+asset under its resolved root, chooses the root USD file (the one layer no other layer in the
+asset references, or the single .usdz), runs the 6-step Miris upload flow, writes the Miris stream
+metadata for that root file to the run's metadata output path, and exits 0/non-0.
 """
 import datetime
 import hashlib
@@ -22,9 +23,14 @@ from stream_metadata import (
 )
 from upload_config import resolve_upload_config
 from usd_packager import (
+    UnreadableLayerError,
+    choose_roots,
     compute_dependencies,
+    direct_references,
     local_download_plan,
     package_usdz,
+    root_candidates,
+    scan_references,
     should_skip_packaging,
 )
 from utils.secrets import get_miris_integration_key
@@ -41,6 +47,10 @@ EXIT_ROOT_NOT_FOUND = 6
 EXIT_NO_METADATA_OUTPUT = 7
 EXIT_MIRIS_FAILED = 8
 EXIT_MIRIS_TIMEOUT = 9
+EXIT_AMBIGUOUS_ROOT = 10
+EXIT_UNREADABLE_LAYER = 11
+
+WORKDIR = "/workdir"
 
 _USD_MEDIA_TYPES = {
     ".usd": "model/vnd.usd",
@@ -78,30 +88,52 @@ def _download_version(s3, bucket: str, key: str, local: str, version_id: str) ->
     s3.download_file(bucket, key, local, ExtraArgs=extra_args)
 
 
-def _download_asset_folder(
-    s3, bucket: str, asset_id: str, dest_dir: str, root_key: str
-) -> tuple[int, str]:
-    """Download every object under '{asset_id}/' into dest_dir, preserving the
-    relative layout so USD relative references resolve. The root USD is pinned to
-    the version it reports. Returns (total bytes, root USD VersionId or '')."""
+def asset_root_location(stage) -> tuple[str, str]:
+    """(bucket, prefix ending in '/') of the asset root; raises ValueError when there is none."""
+    location = stage.get("assetRoot") or {}
+    bucket = location.get("bucketName") or ""
+    prefix = (location.get("objectDir") or "").lstrip("/")
+    if not bucket or not prefix.strip("/"):
+        raise ValueError("Pipeline definition has no asset root (assetRoot)")
+    if not prefix.endswith("/"):
+        prefix += "/"
+    return bucket, prefix
+
+
+def list_asset_files(s3, bucket: str, root_prefix: str) -> list[tuple[str, str, int]]:
+    """(key, asset-relative path, size) of every file under the asset root."""
     paginator = s3.get_paginator("list_objects_v2")
-    keys = []
-    for page in paginator.paginate(Bucket=bucket, Prefix=f"{asset_id}/"):
+    sizes = {}
+    for page in paginator.paginate(Bucket=bucket, Prefix=root_prefix):
         for obj in page.get("Contents", []):
-            keys.append(obj["Key"])
-    total = 0
-    root_version_id = ""
-    for key, rel in local_download_plan(keys, asset_id):
+            sizes[obj["Key"]] = int(obj.get("Size", 0))
+    return [(key, rel, sizes[key]) for key, rel in local_download_plan(sizes, root_prefix)]
+
+
+def download_files(s3, bucket: str, files, dest_dir: str, pinned) -> dict:
+    """Download `files` into dest_dir, preserving the relative layout so USD relative references
+    resolve. Each relative path in `pinned` is pinned to the version it reports. Returns
+    {relative path: VersionId or ''} for the pinned files."""
+    versions = {}
+    for key, rel, _size in files:
         local = os.path.join(dest_dir, rel)
         os.makedirs(os.path.dirname(local), exist_ok=True)
-        if key == root_key:
+        if rel in pinned:
             head = s3.head_object(Bucket=bucket, Key=key)
-            root_version_id = head.get("VersionId") or ""
-            _download_version(s3, bucket, key, local, root_version_id)
+            versions[rel] = head.get("VersionId") or ""
+            _download_version(s3, bucket, key, local, versions[rel])
         else:
             s3.download_file(bucket, key, local)
-        total += os.path.getsize(local)
-    return total, root_version_id
+    return versions
+
+
+def exit_unreadable_layer(error: UnreadableLayerError, asset_dir: str):
+    """Log the unreadable layer by its asset-relative path and exit with EXIT_UNREADABLE_LAYER."""
+    base = os.path.realpath(asset_dir)
+    relative = os.path.relpath(os.path.realpath(error.path), base).replace(os.sep, "/")
+    detail = str(error.error).replace(base + os.sep, "").replace(asset_dir.rstrip("/") + "/", "")
+    _log("unreadable_layer", file=relative, error=detail[:500])
+    sys.exit(EXIT_UNREADABLE_LAYER)
 
 
 def _put_artifact(start, upload_local, upload_filename, content_type):
@@ -194,7 +226,7 @@ def main():
         sys.exit(EXIT_USAGE)
     definition = json.loads(sys.argv[1])
     stage = definition["stages"][0]
-    asset_id = stage["assetId"]
+    asset_id = stage.get("assetId", "")
     database_id = stage.get("databaseId", "")
     trigger = stage["triggerInput"]
     miris_base = stage["mirisApiBaseUrl"]
@@ -202,13 +234,21 @@ def main():
     task_timeout = int(stage["taskTimeoutSeconds"])
     max_bytes = int(stage["maxAssetSizeBytes"])
 
-    trigger_bucket = trigger["bucketName"]
+    # Both identities become the Miris asset's binding tags.
+    if not asset_id or not database_id:
+        _log("asset_identity_missing", asset_id=asset_id, database_id=database_id)
+        sys.exit(EXIT_USAGE)
+    try:
+        asset_bucket, asset_root = asset_root_location(stage)
+    except ValueError as e:
+        _log("asset_root_missing", error=str(e))
+        sys.exit(EXIT_USAGE)
+
     trigger_key = trigger["objectKey"]
     extension = trigger["fileExtension"].lower()
     if extension not in _USD_MEDIA_TYPES:
         _log("unsupported_extension", extension=extension)
         sys.exit(EXIT_UNSUPPORTED_EXTENSION)
-    filename = os.path.basename(trigger_key)
 
     # The stream metadata is the pipeline's only output, so a run without somewhere
     # to write it fails before anything is uploaded to Miris.
@@ -219,48 +259,73 @@ def main():
         sys.exit(EXIT_NO_METADATA_OUTPUT)
 
     s3 = boto3.client("s3", config=retry_config)
-    os.makedirs("/workdir", exist_ok=True)
+    os.makedirs(WORKDIR, exist_ok=True)
+    asset_dir = os.path.join(WORKDIR, "asset")
+
+    # The root is chosen from the asset's USD files, whichever of them triggered this run.
+    extensions = [
+        e for e in (stage.get("rootExtensions") or _USD_MEDIA_TYPES) if e in _USD_MEDIA_TYPES]
+    files = list_asset_files(s3, asset_bucket, asset_root)
+    candidates = root_candidates([rel for _, rel, _ in files], extensions)
+    if not candidates:
+        _log("root_usd_not_found", asset_root=asset_root, trigger_key=trigger_key,
+             listed_files=len(files))
+        sys.exit(EXIT_ROOT_NOT_FOUND)
+
+    # A .usdz references no other file in the asset, so several of them and no other layer are
+    # several roots; that is known before anything downloads.
+    if len(candidates) > 1 and all(c.lower().endswith(".usdz") for c in candidates):
+        _log("ambiguous_root", reason="ambiguous_root", roots=candidates[:20])
+        sys.exit(EXIT_AMBIGUOUS_ROOT)
+
+    # A lone .usdz is self-contained; anything else needs the whole asset on disk.
+    if len(candidates) == 1 and candidates[0].lower().endswith(".usdz"):
+        to_download = [f for f in files if f[1] == candidates[0]]
+    else:
+        to_download = files
+    total = sum(size for _, _, size in to_download)
+    if total > max_bytes:
+        _log("file_too_large", size=total, max_bytes=max_bytes)
+        sys.exit(EXIT_TOO_LARGE)
+
+    versions = download_files(s3, asset_bucket, to_download, asset_dir, set(candidates))
+
+    def references_of(rel):
+        return direct_references(os.path.join(asset_dir, rel), asset_dir)
+
+    try:
+        roots = choose_roots(candidates, references_of)
+    except UnreadableLayerError as e:
+        exit_unreadable_layer(e, asset_dir)
+    if len(roots) > 1:
+        _log("ambiguous_root", reason="ambiguous_root", roots=roots[:20])
+        sys.exit(EXIT_AMBIGUOUS_ROOT)
+    if not roots:
+        _log("root_usd_not_found", reason="every_layer_is_referenced", candidates=candidates[:20])
+        sys.exit(EXIT_ROOT_NOT_FOUND)
+    root_rel = roots[0]
+    root_local = os.path.join(asset_dir, root_rel)
+    source_version_id = versions.get(root_rel, "")
+    filename = os.path.basename(root_rel)
+    root_extension = os.path.splitext(filename)[1].lower()
     name_no_ext = os.path.splitext(filename)[0]
+    _log("root_chosen", root=root_rel, candidates=len(candidates), trigger_key=trigger_key)
 
     # Resolve the single self-contained artifact to upload to Miris.
-    if extension == ".usdz":
-        # Already a self-contained package — upload as-is.
-        head = s3.head_object(Bucket=trigger_bucket, Key=trigger_key)
-        if int(head["ContentLength"]) > max_bytes:
-            _log("file_too_large", size=int(head["ContentLength"]), max_bytes=max_bytes)
-            sys.exit(EXIT_TOO_LARGE)
-        upload_local = f"/workdir/{filename}"
-        source_version_id = head.get("VersionId") or ""
-        _download_version(s3, trigger_bucket, trigger_key, upload_local, source_version_id)
+    if root_extension == ".usdz":
+        upload_local = root_local
         upload_filename = filename
         upload_content_type = _USD_MEDIA_TYPES[".usdz"]
     else:
-        # Text/binary USD root: download the whole asset folder, resolve deps.
-        asset_dir = "/workdir/asset"
-        total, source_version_id = _download_asset_folder(
-            s3, trigger_bucket, asset_id, asset_dir, trigger_key
-        )
-        if total > max_bytes:
-            _log("file_too_large", size=total, max_bytes=max_bytes)
-            sys.exit(EXIT_TOO_LARGE)
-        root_rel = trigger_key.split(f"{asset_id}/", 1)[1]
-        root_local = os.path.join(asset_dir, root_rel)
-        # Guard: the root USD must actually be on disk after the folder download.
-        # UsdUtils.ComputeAllDependencies returns empty (no error) for a missing
-        # path, which would otherwise be misread as "no external dependencies" and
-        # crash later on getsize(). A missing root here means the trigger key didn't
-        # match any downloaded S3 object (e.g. a key-encoding mismatch) or the asset
-        # has no files — fail clearly and actionably instead.
-        if not os.path.isfile(root_local):
-            _log(
-                "root_usd_not_found",
-                expected_local=root_local,
-                root_rel=root_rel,
-                trigger_key=trigger_key,
-                downloaded_bytes=total,
-            )
-            sys.exit(EXIT_ROOT_NOT_FOUND)
-        layers, assets, unresolved = compute_dependencies(root_local)
+        try:
+            layers, assets, unresolved = compute_dependencies(root_local)
+        except UnreadableLayerError as e:
+            # Name the layer itself when the root's own references lead to it.
+            try:
+                scan_references([root_rel], references_of)
+            except UnreadableLayerError as unreadable:
+                exit_unreadable_layer(unreadable, asset_dir)
+            exit_unreadable_layer(e, asset_dir)
         if unresolved:
             _log("unresolved_references", count=len(unresolved), paths=unresolved[:20])
             sys.exit(EXIT_UNRESOLVED_REFERENCES)
@@ -268,9 +333,9 @@ def main():
             _log("packaging_skipped", reason="no_external_dependencies")
             upload_local = root_local
             upload_filename = filename
-            upload_content_type = _USD_MEDIA_TYPES[extension]
+            upload_content_type = _USD_MEDIA_TYPES[root_extension]
         else:
-            upload_local = f"/workdir/{name_no_ext}.usdz"
+            upload_local = os.path.join(WORKDIR, f"{name_no_ext}.usdz")
             package_usdz(root_local, upload_local)
             upload_filename = f"{name_no_ext}.usdz"
             upload_content_type = _USD_MEDIA_TYPES[".usdz"]
@@ -295,19 +360,17 @@ def main():
     key = get_miris_integration_key(secret_arn, region_name=os.environ.get("AWS_REGION"))
     client = MirisClient(miris_base, key)
 
-    miris_tags = ["vams", f"vams-asset-{asset_id}"] + cfg.tags
-    if database_id:
-        miris_tags.append(f"vams-database-{database_id}")
+    miris_tags = ["vams", f"vams-asset-{asset_id}", f"vams-database-{database_id}"] + cfg.tags
 
     def write_metadata(asset_uuid):
-        """Write the stream metadata for the source USD file."""
+        """Write the stream metadata for the root USD file."""
         body = build_stream_metadata_body(
             asset_uuid=asset_uuid,
             source_version_id=source_version_id,
             display_name=cfg.asset_name,
             uploaded_at=datetime.datetime.now(datetime.timezone.utc),
         )
-        metadata_key = metadata_object_key(metadata_prefix, trigger_key, asset_id)
+        metadata_key = metadata_object_key(metadata_prefix, root_rel)
         s3.put_object(
             Bucket=metadata_bucket,
             Key=metadata_key,

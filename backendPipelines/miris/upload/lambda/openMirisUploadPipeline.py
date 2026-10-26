@@ -47,7 +47,7 @@ def new_job_name():
 
 
 def _abort_external_workflow(error, task_token, claim=None):
-    """Fail the workflow task and release the gate's claim, so the asset version can run again."""
+    """Fail the workflow task and release the gate's claim, so the same content can run again."""
     if claim:
         mirisClaim.release_claim(s3_client, logger, *claim)
     if task_token:
@@ -134,8 +134,9 @@ def lambda_handler(event, context):
     aux_s3 = event["inputOutputS3AssetAuxiliaryFilesPath"]
     asset_id = event.get("assetId", "")
     database_id = event.get("databaseId", "")
-    asset_version_id = event.get("assetVersionId", "")
-    claim = (aux_s3, asset_id, asset_version_id, mirisClaim.owner_id(external_task_token))
+    asset_root_s3 = event.get("assetRootS3Path", "")
+    claim_fingerprint = event.get("claimFingerprint", "")
+    claim = (aux_s3, asset_id, claim_fingerprint, mirisClaim.owner_id(external_task_token))
 
     if input_s3_uri.endswith("/"):
         _abort_external_workflow(
@@ -166,7 +167,9 @@ def lambda_handler(event, context):
         "externalSfnTaskToken": external_task_token,
         "assetId": asset_id,
         "databaseId": database_id,
-        "assetVersionId": asset_version_id,
+        "assetRootS3Path": asset_root_s3,
+        # Read back by the execution-ended rule to release the claim.
+        "claimFingerprint": claim_fingerprint,
     }
 
     try:

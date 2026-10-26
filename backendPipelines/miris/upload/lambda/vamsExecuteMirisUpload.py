@@ -25,30 +25,69 @@ OPEN_PIPELINE_FUNCTION_NAME = os.environ["OPEN_PIPELINE_FUNCTION_NAME"]
 MIRIS_UPLOAD_GATE_FUNCTION_NAME = os.environ.get("MIRIS_UPLOAD_GATE_FUNCTION_NAME", "")
 ASSET_STORAGE_TABLE_NAME = os.environ.get("ASSET_STORAGE_TABLE_NAME", "")
 
+# The stored trigger type of a user-launched run, rendered into the configuration as {{triggerType}}.
+MANUAL_TRIGGER_TYPE = "Manual"
+# The identity a trigger-launched run executes as.
+SYSTEM_USER = "SYSTEM_USER"
+
 
 def _asset_table():
     """The asset storage table resource. Wrapped so tests can patch it."""
     return dynamodb.Table(ASSET_STORAGE_TABLE_NAME)
 
 
-def resolve_asset_identity(database_id, asset_id):
-    """The asset's display name and current version id.
+def resolve_asset_name(database_id, asset_id):
+    """The asset's display name, or '' when it cannot be read.
 
     The workflow manifest carries asset IDs but no asset NAME, so the Miris asset name is read
-    here rather than rendered from a template tag. `currentVersionId` is read from the same
-    record and becomes the gate's claim key: every execution fanned out from one upload sees the
-    same value, which is what makes the claim collapse them.
+    here rather than rendered from a template tag.
     """
     if not (ASSET_STORAGE_TABLE_NAME and database_id and asset_id):
-        return "", ""
+        return ""
     try:
         item = _asset_table().get_item(
             Key={"databaseId": database_id, "assetId": asset_id}
         ).get("Item") or {}
     except Exception as e:
         logger.warning(f"Could not read asset record {database_id}/{asset_id}: {e}")
-        return "", ""
-    return item.get("assetName", "") or "", item.get("currentVersionId", "") or ""
+        return ""
+    return item.get("assetName", "") or ""
+
+
+def resolve_asset_root(resolved):
+    """(bucket, bucket-relative asset root ending in '/') of the input file's asset.
+
+    The root is the asset's base location key, so it already carries the bucket's base assets
+    prefix or an existing-key location.
+    """
+    input_files = resolved.get("inputFiles") or []
+    first = input_files[0] if input_files else {}
+    bucket = first.get("bucket", "")
+    root = mirisClaim.asset_root_prefix(first.get("assetRootS3Key", ""))
+    if not bucket or not root:
+        raise Exception(
+            "The workflow manifest does not locate the input file's asset root "
+            "(inputFiles[0].bucket and assetRootS3Key).")
+    return bucket, root
+
+
+def is_manual_run(data, resolved):
+    """Whether a user launched this run, rather than a file-upload trigger.
+
+    The rendered configuration's triggerType decides when the template carries it; otherwise a run
+    executing as anyone but the system user is a user's.
+    """
+    try:
+        configuration = manifestHelper.fetch_input_configuration(
+            s3_client, resolved.get("inputConfigurationS3Location", ""))
+    except Exception as e:
+        logger.warning(f"Could not read the input configuration: {e}")
+        configuration = {}
+    trigger_type = configuration.get("triggerType")
+    if isinstance(trigger_type, str) and trigger_type and "{{" not in trigger_type:
+        return trigger_type == MANUAL_TRIGGER_TYPE
+    executing_user = data.get("executingUserName", "") or ""
+    return bool(executing_user) and executing_user != SYSTEM_USER
 
 
 def abort_external_workflow(error, task_token):
@@ -66,15 +105,18 @@ def abort_external_workflow(error, task_token):
         logger.error(f"Failed to send task failure callback: {e}")
 
 
-def invoke_gate(resolved, asset_version_id, miris_asset_name, task_token):
-    """Claim the (assetId, assetVersionId) key. Returns True when this execution should proceed."""
+def invoke_gate(resolved, asset_location, manual, miris_asset_name, task_token):
+    """Claim the asset's current content. Returns (proceed, claim fingerprint)."""
     if not MIRIS_UPLOAD_GATE_FUNCTION_NAME:
-        return True
+        return True, ""
+    asset_bucket, asset_root = asset_location
     payload = {
         "body": json.dumps({
             "databaseId": resolved["databaseId"],
             "assetId": resolved["assetId"],
-            "assetVersionId": asset_version_id,
+            "assetBucket": asset_bucket,
+            "assetRootS3Key": asset_root,
+            "manual": manual,
             "mirisAssetName": miris_asset_name,
             "inputOutputS3AssetAuxiliaryFilesPath":
                 resolved["inputOutputS3AssetAuxiliaryFilesPath"],
@@ -89,12 +131,13 @@ def invoke_gate(resolved, asset_version_id, miris_asset_name, task_token):
     if response.get("FunctionError"):
         raise Exception(f"Invoke gate lambda failed: {response.get('FunctionError')}")
     result = json.loads(response["Payload"].read().decode("utf-8"))
-    return result.get("gate") != "skip"
+    return result.get("gate") != "skip", result.get("claimFingerprint", "") or ""
 
 
-def execute_pipeline(resolved, asset_version_id, miris_asset_name, external_task_token,
-                     executing_userName, executing_requestContext):
+def execute_pipeline(resolved, asset_location, claim_fingerprint, miris_asset_name,
+                     external_task_token, executing_userName, executing_requestContext):
     """Invoke openMirisUploadPipeline with the full pipeline payload."""
+    asset_bucket, asset_root = asset_location
     message_payload = {
         "inputS3AssetFilePath": resolved["inputS3AssetFilePath"],
         "outputS3AssetFilesPath": resolved["outputS3AssetFilesPath"],
@@ -109,8 +152,9 @@ def execute_pipeline(resolved, asset_version_id, miris_asset_name, external_task
         "orchestrationEventPrefix": resolved["orchestrationEventPrefix"],
         "assetId": resolved["assetId"],
         "databaseId": resolved["databaseId"],
+        "assetRootS3Path": f"s3://{asset_bucket}/{asset_root}",
         # Carried through the whole chain so any downstream failure can release the gate's claim.
-        "assetVersionId": asset_version_id,
+        "claimFingerprint": claim_fingerprint,
         "mirisAssetName": miris_asset_name,
     }
 
@@ -156,19 +200,26 @@ def lambda_handler(event, context):
         manifestHelper.enforce_single_input_file(resolved)
         logger.info(f"Resolved pipeline inputs (manifestUsed={resolved.get('manifestUsed')})")
 
-        asset_name, asset_version_id = resolve_asset_identity(
-            resolved["databaseId"], resolved["assetId"])
+        # Both identities become the Miris asset's binding tags, so neither may be missing.
+        if not resolved.get("assetId") or not resolved.get("databaseId"):
+            raise Exception("The workflow manifest does not name the input file's asset and database.")
+        asset_location = resolve_asset_root(resolved)
+        manual = is_manual_run(data, resolved)
+        asset_name = resolve_asset_name(resolved["databaseId"], resolved["assetId"])
 
-        if not invoke_gate(resolved, asset_version_id, asset_name, external_task_token):
+        proceed, claim_fingerprint = invoke_gate(
+            resolved, asset_location, manual, asset_name, external_task_token)
+        if not proceed:
             logger.info("Gate returned skip; this execution is a no-op")
             return {"statusCode": 200, "body": "Skipped (gate)"}
 
-        claim = (resolved["inputOutputS3AssetAuxiliaryFilesPath"],
-                 resolved["assetId"], asset_version_id, mirisClaim.owner_id(external_task_token))
+        claim = (resolved["inputOutputS3AssetAuxiliaryFilesPath"], resolved["assetId"],
+                 claim_fingerprint, mirisClaim.owner_id(external_task_token))
 
         execute_pipeline(
             resolved,
-            asset_version_id,
+            asset_location,
+            claim_fingerprint,
             asset_name,
             external_task_token,
             data.get("executingUserName", ""),
@@ -178,7 +229,7 @@ def lambda_handler(event, context):
     except Exception as e:
         logger.exception(e)
         # The claim is only released when the pipeline never got started. Leaving it behind would
-        # skip this asset version on every later trigger and manual run.
+        # skip this content on every later trigger.
         if claim:
             mirisClaim.release_claim(s3_client, logger, *claim)
         abort_external_workflow(e, external_task_token)

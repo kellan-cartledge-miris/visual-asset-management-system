@@ -142,6 +142,8 @@ def test_put_events_failure_is_swallowed(open_pipeline):
 
 
 AUX = "s3://vams-aux-bucket/pipelines/miris-upload/exec-aaaa1111/"
+FP = "f" * 64
+CLAIM_KEY = f"locks/miris-upload/a1/{FP}.claim"
 
 
 def _execute_event(**overrides):
@@ -149,7 +151,8 @@ def _execute_event(**overrides):
         "inputS3AssetFilePath": "s3://assets/a1/model.usd",
         "inputOutputS3AssetAuxiliaryFilesPath": AUX,
         "assetId": "a1",
-        "assetVersionId": "v7",
+        "claimFingerprint": FP,
+        "assetRootS3Path": "s3://assets/vams/data/a1/",
         "databaseId": "db1",
         "sfnExternalTaskToken": "tok-1",
     }
@@ -166,8 +169,7 @@ def test_rejected_extension_releases_the_claim(open_pipeline):
 
     assert resp["statusCode"] == 400
     sfn.send_task_failure.assert_called_once()
-    s3.delete_object.assert_called_once_with(
-        Bucket="vams-aux-bucket", Key="locks/miris-upload/a1/v7.claim")
+    s3.delete_object.assert_called_once_with(Bucket="vams-aux-bucket", Key=CLAIM_KEY)
 
 
 def test_folder_input_releases_the_claim(open_pipeline):
@@ -191,7 +193,7 @@ def test_start_execution_failure_releases_the_claim(open_pipeline):
     s3.delete_object.assert_called_once()
 
 
-def test_started_execution_keeps_the_claim_and_forwards_the_version(open_pipeline):
+def test_started_execution_keeps_the_claim_and_forwards_the_claim_and_root(open_pipeline):
     import datetime
 
     with patch.object(open_pipeline, "sfn") as sfn, \
@@ -205,7 +207,9 @@ def test_started_execution_keeps_the_claim_and_forwards_the_version(open_pipelin
     assert resp["statusCode"] == 200
     s3.delete_object.assert_not_called()
     sfn_input = json.loads(sfn.start_execution.call_args.kwargs["input"])
-    assert sfn_input["assetVersionId"] == "v7"
+    # The execution-ended rule reads the claim fields back off the execution input.
+    assert sfn_input["claimFingerprint"] == FP
+    assert sfn_input["assetRootS3Path"] == "s3://assets/vams/data/a1/"
     assert sfn_input["inputOutputS3AssetAuxiliaryFilesPath"] == AUX
 
 

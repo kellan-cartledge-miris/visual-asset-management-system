@@ -16,17 +16,6 @@ MIRIS_DISPLAY_NAME_KEY = "miris_display_name"
 METADATA_FILE_SUFFIX = ".metadata.json"
 
 
-def relative_subdir(trigger_object_key: str, asset_id: str) -> str:
-    """Relative subdir between '{assetId}/' and the trigger file's basename.
-    Returns '' if the file is at the asset root."""
-    parts = trigger_object_key.split("/")
-    try:
-        idx = parts.index(asset_id)
-    except ValueError:
-        return ""
-    return "/".join(parts[idx + 1 : -1])
-
-
 def metadata_output_location(stage: dict) -> tuple[str, str]:
     """Return (bucket, prefix) of the run's metadata output path; the prefix ends with '/'.
 
@@ -44,12 +33,9 @@ def metadata_output_location(stage: dict) -> tuple[str, str]:
     return bucket, prefix
 
 
-def metadata_object_key(metadata_prefix: str, trigger_object_key: str, asset_id: str) -> str:
-    """Key of the '.metadata.json' object that targets the trigger USD file."""
-    subdir = relative_subdir(trigger_object_key, asset_id)
-    basename = trigger_object_key.rsplit("/", 1)[-1]
-    rel_path = f"{subdir}/{basename}" if subdir else basename
-    return f"{metadata_prefix}{rel_path}{METADATA_FILE_SUFFIX}"
+def metadata_object_key(metadata_prefix: str, relative_path: str) -> str:
+    """Key of the '.metadata.json' object that targets the asset file at `relative_path`."""
+    return f"{metadata_prefix}{relative_path.lstrip('/')}{METADATA_FILE_SUFFIX}"
 
 
 def format_uploaded_at(uploaded_at: datetime.datetime) -> str:
