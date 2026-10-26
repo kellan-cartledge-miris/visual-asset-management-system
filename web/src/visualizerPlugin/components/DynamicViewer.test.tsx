@@ -188,6 +188,85 @@ describe("DynamicViewer", () => {
         expect(registry().switchToPlugin).not.toHaveBeenCalledWith("needletools-usd-viewer");
     });
 
+    describe("without an autoSelect winner", () => {
+        const fromConfig = (id: string) => ({
+            config: { ...(viewerConfig as any).viewers.find((viewer: any) => viewer.id === id) },
+            isLoaded: false,
+        });
+        const byPriority = (list: any[]) =>
+            [...list].sort((a, b) => a.config.priority - b.config.priority);
+
+        // With several candidates and no selection the host renders the chooser over an empty
+        // viewer area.
+        const expectChooser = async () => {
+            await waitFor(() =>
+                expect(screen.getByText("No Viewer Component Selected")).toBeInTheDocument()
+            );
+            expect(registry().switchToPlugin).not.toHaveBeenCalled();
+        };
+
+        it("sets autoSelect on the Miris entry only", () => {
+            const flagged = (viewerConfig as any).viewers
+                .filter((viewer: any) => viewer.autoSelect === true)
+                .map((viewer: any) => viewer.id);
+            expect(flagged).toEqual(["miris-stream-viewer"]);
+        });
+
+        it("opens a lone autoSelect viewer as it would any single viewer", async () => {
+            const miris = fromConfig("miris-stream-viewer");
+            registry().getCompatibleViewers.mockReturnValue([miris]);
+            registry().switchToPlugin.mockImplementation(async (id: string) => ({
+                config: miris.config,
+                component: () => <div>{`viewer:${id}`}</div>,
+                isLoaded: true,
+            }));
+
+            render(view([file("scene.usd")]));
+
+            await waitFor(() =>
+                expect(screen.getByText("viewer:miris-stream-viewer")).toBeInTheDocument()
+            );
+        });
+
+        it("leaves a priority tie between autoSelect viewers to the user", async () => {
+            const tied = (id: string) => ({
+                ...metadata(id, id, [".usd"]),
+                config: { ...metadata(id, id, [".usd"]).config, priority: 0, autoSelect: true },
+            });
+            registry().getCompatibleViewers.mockReturnValue([tied("first"), tied("second")]);
+
+            render(view([file("scene.usd")]));
+
+            await expectChooser();
+        });
+
+        it("asks for a choice among several viewers of a type that sets no autoSelect", async () => {
+            // .csv: the Text Viewer outranks the Columnar Data Viewer, but neither opts in.
+            const csvViewers = byPriority([
+                fromConfig("columnar-viewer"),
+                fromConfig("text-viewer"),
+            ]);
+            expect(csvViewers[0].config.priority).toBeLessThan(csvViewers[1].config.priority);
+            registry().getCompatibleViewers.mockReturnValue(csvViewers);
+
+            render(view([file("table.csv")]));
+
+            await expectChooser();
+        });
+
+        it("asks for a choice for USD when the top viewer does not opt in", async () => {
+            const miris = fromConfig("miris-stream-viewer");
+            miris.config.autoSelect = false;
+            registry().getCompatibleViewers.mockReturnValue(
+                byPriority([fromConfig("needletools-usd-viewer"), miris])
+            );
+
+            render(view([file("scene.usd")]));
+
+            await expectChooser();
+        });
+    });
+
     it("clears a no-compatible-viewer error once the user moves to a viewable file", async () => {
         registry().getCompatibleViewers.mockReturnValue([]);
         const { rerender } = render(view([file("data.zzz")]));

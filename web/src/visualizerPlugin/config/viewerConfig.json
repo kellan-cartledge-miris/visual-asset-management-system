@@ -375,12 +375,12 @@
             "componentPath": "./viewers/MirisStreamViewerPlugin/MirisStreamViewerComponent",
             "dependencyManager": "./viewers/MirisStreamViewerPlugin/dependencies",
             "dependencyManagerClass": "MirisStreamDependencyManager",
-            "dependencyManagerMethod": "loadMirisStream",
             "dependencyCleanupMethod": "cleanup",
             "supportedExtensions": [".usd", ".usda", ".usdc", ".usdz"],
             "supportsMultiFile": false,
             "canFullscreen": true,
             "priority": 0,
+            "autoSelect": true,
             "dependencies": [
                 "@miris-inc/components",
                 "@miris-inc/core",
@@ -389,7 +389,7 @@
             ],
             "loadStrategy": "lazy",
             "category": "3d",
-            "featuresEnabledRestriction": ["MIRIS_STREAMING"],
+            "featuresEnabledRestriction": ["MIRIS_STREAMING", "ALLOWUNSAFEEVAL"],
             "enabled": true
         },
         {

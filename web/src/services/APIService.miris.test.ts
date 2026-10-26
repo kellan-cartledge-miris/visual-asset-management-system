@@ -121,12 +121,31 @@ describe("mintMirisViewerKey", () => {
 
     it.each([403, 404, 500, 502])("returns the HTTP status %i on failure", async (status) => {
         mockPost.mockRejectedValue(new ApiError(`failed ${status}`, status));
-        expect(await mintMirisViewerKey(MINT_ARGS)).toEqual([false, `failed ${status}`, status]);
+        const result = await mintMirisViewerKey(MINT_ARGS);
+        expect(result).toHaveLength(4);
+        expect(result).toEqual([false, `failed ${status}`, status, undefined]);
+    });
+
+    it("returns the state the error body reports", async () => {
+        mockPost.mockRejectedValue(
+            new ApiError("not linked", 403, { state: "notBound", message: "not linked" })
+        );
+        expect(await mintMirisViewerKey(MINT_ARGS)).toEqual([false, "not linked", 403, "notBound"]);
+    });
+
+    it("ignores a non-string state in the error body", async () => {
+        mockPost.mockRejectedValue(new ApiError("Forbidden", 403, { state: 7 }));
+        expect(await mintMirisViewerKey(MINT_ARGS)).toEqual([false, "Forbidden", 403, undefined]);
     });
 
     it("returns an undefined status when the request did not reach the API", async () => {
         mockPost.mockRejectedValue(new TypeError("Failed to fetch"));
-        expect(await mintMirisViewerKey(MINT_ARGS)).toEqual([false, "Failed to fetch", undefined]);
+        expect(await mintMirisViewerKey(MINT_ARGS)).toEqual([
+            false,
+            "Failed to fetch",
+            undefined,
+            undefined,
+        ]);
     });
 
     it("treats a response without a viewer key as a failure", async () => {

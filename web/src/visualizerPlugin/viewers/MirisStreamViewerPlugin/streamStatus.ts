@@ -11,6 +11,7 @@
 /** States the status endpoint reports itself; any other value is a Miris processing state. */
 export const STATE_NOT_STREAMED = "notStreamed";
 export const STATE_INVALID_UUID = "invalidUuid";
+export const STATE_NOT_BOUND = "notBound";
 export const STATE_UNKNOWN = "unknown";
 
 const STATE_STREAMABLE = "streamable";
@@ -20,16 +21,25 @@ const MIRIS_FAILURE_STATES = ["error", "failed"];
  * What the viewer does for a status `state`:
  *   - notStreamed: the file records no Miris asset; show the "Not yet streamed" guidance
  *   - invalidUuid: the recorded UUID is malformed; show an error
+ *   - notBound:    the recorded Miris asset lacks this VAMS asset's `vams-asset-{assetId}` tag;
+ *                  show an error
  *   - failed:      Miris reports a definitive processing failure; show an error
  *   - stream:      open the stream (`streamable`, or `unknown` when Miris could not be
  *                  queried; the probe is advisory and never blocks streaming)
  *   - processing:  Miris is still preparing the asset; show the overlay and poll
  */
-export type StreamDisposition = "notStreamed" | "invalidUuid" | "failed" | "stream" | "processing";
+export type StreamDisposition =
+    | "notStreamed"
+    | "invalidUuid"
+    | "notBound"
+    | "failed"
+    | "stream"
+    | "processing";
 
 export function streamDisposition(state: string): StreamDisposition {
     if (state === STATE_NOT_STREAMED) return "notStreamed";
     if (state === STATE_INVALID_UUID) return "invalidUuid";
+    if (state === STATE_NOT_BOUND) return "notBound";
     if (MIRIS_FAILURE_STATES.includes(state)) return "failed";
     if (state === STATE_STREAMABLE || state === STATE_UNKNOWN) return "stream";
     return "processing";

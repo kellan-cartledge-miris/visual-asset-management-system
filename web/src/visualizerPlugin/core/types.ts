@@ -18,6 +18,8 @@ export interface ViewerPluginConfig {
     supportsMultiFile: boolean;
     canFullscreen: boolean;
     priority: number;
+    /** Opens automatically when it is the only top-priority viewer among several matches. */
+    autoSelect?: boolean;
     dependencies: string[];
     loadStrategy: "lazy" | "eager";
     category: string;

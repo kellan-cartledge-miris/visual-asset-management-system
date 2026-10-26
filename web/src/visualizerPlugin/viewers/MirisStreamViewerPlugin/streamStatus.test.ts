@@ -13,6 +13,7 @@ describe("streamDisposition", () => {
     it.each([
         ["notStreamed", "notStreamed"],
         ["invalidUuid", "invalidUuid"],
+        ["notBound", "notBound"],
         ["error", "failed"],
         ["failed", "failed"],
         ["streamable", "stream"],

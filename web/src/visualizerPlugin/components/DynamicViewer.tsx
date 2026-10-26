@@ -156,28 +156,24 @@ export const DynamicViewer: React.FC<DynamicViewerProps> = ({
         // a file the user has already left) does not describe this selection.
         setError(null);
 
-        // Auto-select the preferred viewer when there's a clear winner.
-        // viewerMetadata is sorted ascending by priority (lower number = preferred),
-        // so [0] is the most-preferred viewer. We auto-select it when it is the only
-        // viewer or its priority is STRICTLY lower than the next viewer's (a unique
-        // preferred viewer, e.g. the Miris viewer at priority 0 vs the Needle USD
-        // viewer at priority 1 for USD files). When the top two share the same
-        // priority (a genuine tie, e.g. the .ply splat/point-cloud viewers), we leave
-        // selection to the user so we don't arbitrarily pick among equally-ranked,
-        // potentially performance-heavy viewers.
+        // Auto-select only if there's exactly one viewer available
+        // If multiple viewers exist, force user to choose to avoid loading performance-heavy viewers,
+        // unless the top-priority viewer (viewerMetadata is sorted by priority) sets autoSelect
+        // and no other viewer shares its priority
         const currentId = selectedViewerIdRef.current;
         const selectionStillCompatible =
             !!currentId && viewerMetadata.some((metadata) => metadata.config.id === currentId);
         if (selectionStillCompatible) {
             return;
         }
-        const hasUniquePreferred =
-            viewerMetadata.length === 1 ||
+        const autoSelectPreferred =
+            viewerMetadata.length > 1 &&
+            viewerMetadata[0].config.autoSelect === true &&
             viewerMetadata[0].config.priority < viewerMetadata[1].config.priority;
-        if (hasUniquePreferred) {
+        if (viewerMetadata.length === 1 || autoSelectPreferred) {
             setSelectedViewerId(viewerMetadata[0].config.id);
         } else {
-            // Tie at the top - don't auto-select, force user choice.
+            // Multiple viewers available - don't auto-select, force user choice.
             // The previously selected viewer cannot render these files, so its
             // component must come down with the selection.
             setSelectedViewerId(null);

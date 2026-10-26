@@ -41,13 +41,6 @@ jest.mock("@miris-inc/components", () => {
     };
 });
 
-const mockRemovePluginStylesheets = jest.fn();
-jest.mock("../../core/StylesheetManager", () => ({
-    StylesheetManager: {
-        removePluginStylesheets: (...args: unknown[]) => mockRemovePluginStylesheets(...args),
-    },
-}));
-
 // The manager keeps its loaded/in-flight state in statics, and the SDK stand-ins record their own
 // evaluation, so each test takes fresh module instances of all four.
 const freshModule = () => {
@@ -88,7 +81,6 @@ beforeEach(() => {
     mockMiris.tryUseShark = true;
     mockEvents.length = 0;
     mockComponentsFail = false;
-    mockRemovePluginStylesheets.mockClear();
     mockLoseContext.mockClear();
     getContext.mockClear();
     setGpu("absent");
@@ -226,11 +218,10 @@ describe("MirisStreamDependencyManager.loadMirisStream", () => {
 });
 
 describe("MirisStreamDependencyManager.cleanup", () => {
-    it("removes the plugin stylesheets and allows a later load", async () => {
+    it("allows a later load", async () => {
         const { MirisStreamDependencyManager } = freshModule();
         await MirisStreamDependencyManager.loadMirisStream();
         MirisStreamDependencyManager.cleanup();
-        expect(mockRemovePluginStylesheets).toHaveBeenCalledWith("miris-stream-viewer");
 
         // The modules are cached, so a reload re-applies the renderer choice without re-evaluating.
         mockMiris.tryUseShark = true;

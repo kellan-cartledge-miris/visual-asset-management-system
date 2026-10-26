@@ -7,6 +7,7 @@ import { render, screen, waitFor, act } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import MirisStreamViewerComponent from "./MirisStreamViewerComponent";
 import { MirisStreamDependencyManager } from "./dependencies";
+import viewerConfig from "../../config/viewerConfig.json";
 
 const VALID_UUID = "063393b4-4b0d-4196-a6d4-ebcde70c56c2";
 
@@ -82,6 +83,13 @@ const baseProps = {
 };
 
 const STALE_TEXT = /built from a different version of this file/i;
+
+const viewerEntry = (id: string) =>
+    (viewerConfig as { viewers: Array<Record<string, any>> }).viewers.find(
+        (viewer) => viewer.id === id
+    ) as Record<string, any>;
+
+const retryButton = () => screen.getByRole("button", { name: "Retry" });
 
 const sceneElement = () => document.querySelector("miris-scene");
 const streamElement = () => document.querySelector("miris-stream");
@@ -265,6 +273,8 @@ describe("MirisStreamViewerComponent", () => {
             await waitFor(() =>
                 expect(screen.getByText(/not supported on this device/i)).toBeInTheDocument()
             );
+            expect(screen.getByText(/GES\) need WebGPU/)).toBeInTheDocument();
+            expect(screen.getByText(/WebGPU-capable browser/)).toBeInTheDocument();
             expect(mockLoadMirisStream).toHaveBeenCalledTimes(1);
             expect(sceneElement()).toBeNull();
             expect(streamElement()).toBeNull();
@@ -426,8 +436,95 @@ describe("MirisStreamViewerComponent", () => {
             );
             expect(screen.getByText("Stream with Miris")).toBeInTheDocument();
             expect(screen.queryByRole("button")).not.toBeInTheDocument();
+            expect(mockLoadMirisStream).not.toHaveBeenCalled();
             expect(sceneElement()).toBeNull();
             expect(streamElement()).toBeNull();
+        });
+
+        it("points to the Needle USD viewer, by its configured name, to view the file now", async () => {
+            mockGetMirisStreamStatus.mockResolvedValue(
+                status({ mirisAssetUuid: null, state: "notStreamed" })
+            );
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            const needleName = viewerEntry("needletools-usd-viewer").name;
+            await waitFor(() => expect(screen.getByText(needleName)).toBeInTheDocument());
+        });
+
+        it("is not preceded by a registry-driven SDK load", () => {
+            // With a dependencyManagerMethod the registry awaits the SDK, without a bound, before
+            // the viewer mounts, and loads it even for a file that is not streamed.
+            const entry = viewerEntry("miris-stream-viewer");
+            expect(entry.dependencyManagerMethod).toBeUndefined();
+            expect(entry.dependencyCleanupMethod).toBe("cleanup");
+        });
+    });
+
+    describe("not bound", () => {
+        const NOT_BOUND_TEXT = /not linked to this VAMS asset/i;
+
+        it("shows the not-linked error when the status reports notBound", async () => {
+            mockGetMirisStreamStatus.mockResolvedValue(status({ state: "notBound" }));
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() => expect(screen.getByText(NOT_BOUND_TEXT)).toBeInTheDocument());
+            expect(screen.getByText(/vams-asset-asset-1/)).toBeInTheDocument();
+            expect(mockLoadMirisStream).not.toHaveBeenCalled();
+            expect(mockMintMirisViewerKey).not.toHaveBeenCalled();
+            expect(sceneElement()).toBeNull();
+        });
+
+        it("shows the not-linked error when the mint is refused because the asset is not bound", async () => {
+            mockAppCacheGet.mockReturnValue({ featuresEnabled: ["MIRIS_PER_VIEW_KEYS"] });
+            mockMintMirisViewerKey.mockResolvedValue([false, "not bound", 403, "notBound"]);
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() => expect(screen.getByText(NOT_BOUND_TEXT)).toBeInTheDocument());
+            expect(mockGetMirisStreamStatus).toHaveBeenCalledTimes(1);
+            expect(
+                screen.queryByText("You do not have permission to stream this asset.")
+            ).not.toBeInTheDocument();
+            expect(mockLoadMirisStream).not.toHaveBeenCalled();
+            expect(sceneElement()).toBeNull();
+        });
+    });
+
+    describe("retry", () => {
+        afterEach(() => {
+            jest.useRealTimers();
+        });
+
+        it("re-runs the status check and load from an error", async () => {
+            mockGetMirisStreamStatus.mockResolvedValueOnce([false, "Service Unavailable"]);
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            await waitFor(() =>
+                expect(
+                    screen.getByText(/could not load the miris stream status/i)
+                ).toBeInTheDocument()
+            );
+            expect(mockLoadMirisStream).not.toHaveBeenCalled();
+
+            act(() => {
+                retryButton().click();
+            });
+            await waitForScene();
+            expect(mockGetMirisStreamStatus).toHaveBeenCalledTimes(2);
+            expect(mockLoadMirisStream).toHaveBeenCalledTimes(1);
+            expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+        });
+
+        it("mounts a new scene after a stream timeout", async () => {
+            jest.useFakeTimers();
+            render(<MirisStreamViewerComponent {...baseProps} />);
+            const first = await waitForScene();
+            await act(async () => {
+                jest.advanceTimersByTime(60_000);
+            });
+            expect(screen.getByText(/timed out waiting for miris/i)).toBeInTheDocument();
+
+            act(() => {
+                retryButton().click();
+            });
+            const second = await waitForScene();
+            expect(second).not.toBe(first);
+            expect(screen.queryByText(/timed out waiting for miris/i)).not.toBeInTheDocument();
         });
     });
 
@@ -643,8 +740,8 @@ describe("MirisStreamViewerComponent", () => {
             await waitForScene();
         });
 
-        it("shows a permission error on 403", async () => {
-            mockMintMirisViewerKey.mockResolvedValue([false, "Forbidden", 403]);
+        it("shows a permission error on a 403 that reports no state", async () => {
+            mockMintMirisViewerKey.mockResolvedValue([false, "Forbidden", 403, undefined]);
             render(<MirisStreamViewerComponent {...baseProps} />);
             await waitFor(() =>
                 expect(
@@ -714,14 +811,30 @@ describe("MirisStreamViewerComponent", () => {
             mockMintMirisViewerKey
                 .mockResolvedValueOnce(mintOk({ viewerKey: "first-key" }))
                 .mockResolvedValueOnce(mintOk({ viewerKey: "second-key" }));
-            const view = render(<MirisStreamViewerComponent {...baseProps} versionId="v1" />);
+            render(<MirisStreamViewerComponent {...baseProps} />);
             const first = await waitForScene();
             expect(first).toHaveAttribute("viewer-key", "first-key");
 
-            view.rerender(<MirisStreamViewerComponent {...baseProps} versionId="v2" />);
+            act(() => {
+                first.dispatchEvent(new Event("error"));
+            });
+            act(() => {
+                retryButton().click();
+            });
             await waitFor(() => expect(sceneElement()).toHaveAttribute("viewer-key", "second-key"));
             expect(sceneElement()).not.toBe(first);
             expect(first.isConnected).toBe(false);
+        });
+
+        it("keeps the scene and its key when only the viewed file version changes", async () => {
+            const view = render(<MirisStreamViewerComponent {...baseProps} versionId="v1" />);
+            const first = await waitForScene();
+
+            view.rerender(<MirisStreamViewerComponent {...baseProps} versionId="v2" />);
+            await waitFor(() => expect(screen.getByText(STALE_TEXT)).toBeInTheDocument());
+            expect(mockMintMirisViewerKey).toHaveBeenCalledTimes(1);
+            expect(mockGetMirisStreamStatus).toHaveBeenCalledTimes(1);
+            expect(sceneElement()).toBe(first);
         });
 
         it("falls back to the static path when featuresEnabled is malformed", async () => {

@@ -712,9 +712,7 @@ const Auth: React.FC<AuthProps> = (props) => {
     useEffect(() => {
         //Secure Config Fetch - refetch once per login session so feature switches
         //and deployment settings pick up backend changes (previously these were
-        //cached in localStorage forever until a full site-data reset). This
-        //session refetch also refreshes mirisViewerKey each login, superseding the
-        //earlier field-missing self-heal heuristic.
+        //cached in localStorage forever until a full site-data reset).
         if (config && !config._configError && isLoggedIn && !secureConfigFetchedRef.current) {
             secureConfigFetchedRef.current = true;
             getSecureConfig()
@@ -725,23 +723,17 @@ const Auth: React.FC<AuthProps> = (props) => {
                     // featuresEnabled is normalized to a string array so the many
                     // config.featuresEnabled.includes(...) consumers cannot crash if the API
                     // returns a non-array (e.g. a boolean or comma-separated string).
-                    // mirisViewerKey follows the viewer key mode. With MIRIS_PER_VIEW_KEYS the
-                    // browser holds no shared key, so the property is removed from the cached
-                    // config whatever it held before. Otherwise it is only overwritten when the
-                    // backend supplied a value: /secure-config omits it when MIRIS_VIEWER_KEY is
-                    // unset, and an unconditional assignment would clobber a valid cached key
-                    // with undefined.
+                    // mirisViewerKey is the shared static-mode key, replaced on every fetch. It
+                    // is left out when the response carries none and always with
+                    // MIRIS_PER_VIEW_KEYS, where the browser holds no shared key.
                     const normalizedFeatures = normalizeFeaturesEnabled(value.featuresEnabled);
-                    const { mirisViewerKey: cachedViewerKey, ...cachedConfig } =
-                        configRef.current as typeof configRef.current & {
-                            mirisViewerKey?: string;
-                        };
-                    const perViewKeys = normalizedFeatures.includes(
+                    const cachedConfig: Config = { ...configRef.current };
+                    delete cachedConfig.mirisViewerKey;
+                    const viewerKey = normalizedFeatures.includes(
                         featuresEnabled.MIRIS_PER_VIEW_KEYS
-                    );
-                    const viewerKey = perViewKeys
+                    )
                         ? undefined
-                        : value.mirisViewerKey || cachedViewerKey;
+                        : value.mirisViewerKey;
                     const withSecureConfig = {
                         ...cachedConfig,
                         featuresEnabled: normalizedFeatures,

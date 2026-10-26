@@ -273,6 +273,51 @@ export const deleteElement = async ({ deleteRoute, elementId, item }: any) => {
 };
 
 /**
+ * Returns array of boolean and response/error message for the workflow that the current user is running, or false if error.
+ * @returns {Promise<boolean|{message}|any>}
+ */
+export const runWorkflow = async ({
+    databaseId,
+    assetId,
+    workflowId,
+    fileKey,
+    isGlobalWorkflow = false,
+}: any) => {
+    try {
+        let endpoint;
+        let eventBody: any = {};
+        endpoint = `database/${databaseId}/assets/${assetId}/workflows/${workflowId}`;
+
+        if (isGlobalWorkflow) {
+            eventBody = { workflowDatabaseId: "GLOBAL", fileKey: fileKey };
+        } else {
+            eventBody = { workflowDatabaseId: databaseId, fileKey: fileKey };
+        }
+
+        const response = await apiClient.post(endpoint, {
+            body: eventBody,
+        });
+
+        if (response.message) {
+            if (
+                response.message.indexOf("error") !== -1 ||
+                response.message.indexOf("Error") !== -1
+            ) {
+                console.log(response.message);
+                return [false, response.message];
+            } else {
+                return [true, `/databases/${databaseId}/assets/${assetId}`];
+            }
+        } else {
+            return false;
+        }
+    } catch (error: any) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
+/**
  * Miris stream recorded on one asset file, as returned by the stream status endpoint.
  * `state` is `notStreamed`, `invalidUuid`, `unknown`, or the Miris processing state
  * (`preview`, `streamable`, `error`, `failed`, ...).
@@ -332,9 +377,11 @@ export interface MirisViewerKey {
  * the Miris asset UUID from the file's metadata, so the caller supplies only the file path. The
  * key is returned to the caller only; do not cache or persist it.
  *
- * Returns [true, MirisViewerKey] on success, or [false, errorMessage, status] on failure, where
- * `status` is the HTTP status when the request reached the API (403 for a permission denial, 404
- * when the file records no stream, 502 when Miris did not issue a key) and undefined otherwise.
+ * Returns [true, MirisViewerKey] on success, or [false, errorMessage, status, state] on failure,
+ * where `status` is the HTTP status when the request reached the API (403 for a permission denial
+ * or an unbound Miris asset, 404 when the file records no stream, 502 when Miris did not issue a
+ * key) and undefined otherwise, and `state` is the error body's `state` (`notBound` when the
+ * Miris asset lacks the `vams-asset-{assetId}` tag), when it reports one.
  */
 export const mintMirisViewerKey = async ({
     databaseId,
@@ -344,7 +391,7 @@ export const mintMirisViewerKey = async ({
     databaseId: string;
     assetId: string;
     filePath: string;
-}): Promise<[true, MirisViewerKey] | [false, string, number | undefined]> => {
+}): Promise<[true, MirisViewerKey] | [false, string, number | undefined, string | undefined]> => {
     try {
         const response = await apiClient.post(
             `database/${databaseId}/assets/${assetId}/miris/viewer-key`,
@@ -359,13 +406,14 @@ export const mintMirisViewerKey = async ({
         ) {
             return [true, response as MirisViewerKey];
         }
-        return [false, "Unknown response shape", undefined];
+        return [false, "Unknown response shape", undefined, undefined];
     } catch (error: any) {
         console.log(error?.message);
         return [
             false,
             error?.message || "Failed to mint a Miris viewer key",
             typeof error?.status === "number" ? error.status : undefined,
+            typeof error?.body?.state === "string" ? error.body.state : undefined,
         ];
     }
 };

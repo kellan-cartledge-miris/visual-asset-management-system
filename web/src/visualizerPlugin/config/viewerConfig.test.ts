@@ -85,18 +85,19 @@ describe("viewerConfig vs the browser's media element", () => {
 describe("the Miris stream viewer", () => {
     const USD_EXTENSIONS = [".usd", ".usda", ".usdc", ".usdz"];
 
-    it("is the only Miris viewer, registered for USD files under MIRIS_STREAMING", () => {
+    it("is the only Miris viewer, registered for USD files under MIRIS_STREAMING and ALLOWUNSAFEEVAL", () => {
         expect(viewers.filter((viewer) => viewer.id.startsWith("miris")).map((v) => v.id)).toEqual([
             "miris-stream-viewer",
         ]);
         const miris = byId("miris-stream-viewer");
         expect([...miris.supportedExtensions].sort()).toEqual(USD_EXTENSIONS);
-        expect(miris.featuresEnabledRestriction).toEqual(["MIRIS_STREAMING"]);
+        expect(miris.featuresEnabledRestriction).toEqual(["MIRIS_STREAMING", "ALLOWUNSAFEEVAL"]);
         expect(miris.priority).toBe(0);
+        expect(miris.autoSelect).toBe(true);
     });
 
     it("ranks strictly ahead of every other viewer of a USD extension", () => {
-        // DynamicViewer auto-selects only a strict priority winner.
+        // DynamicViewer auto-selects an autoSelect viewer only as a strict priority winner.
         const others = viewers.filter(
             (viewer) =>
                 viewer.id !== "miris-stream-viewer" &&

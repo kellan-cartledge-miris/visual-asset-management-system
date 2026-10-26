@@ -250,16 +250,19 @@ describe("Auth secure-config fetch", () => {
             );
         });
 
-        it("keeps the cached key when per-view keys are not enabled and none is supplied", async () => {
+        it("removes a cached key when the response carries none", async () => {
+            // /secure-config sends an empty key when the deployment has no shared key.
             seedMode({ ...COGNITO_CONFIG, mirisViewerKey: CACHED_KEY });
-            mockGetSecureConfig.mockResolvedValue(SECURE_CONFIG);
+            mockGetSecureConfig.mockResolvedValue({ ...SECURE_CONFIG, mirisViewerKey: "" });
 
             renderAuth();
 
             await waitFor(() =>
                 expect(appCache.getItem("config").featuresEnabled).toContain("LOCATIONSERVICES")
             );
-            expect(appCache.getItem("config").mirisViewerKey).toBe(CACHED_KEY);
+            expect(
+                Object.prototype.hasOwnProperty.call(appCache.getItem("config"), "mirisViewerKey")
+            ).toBe(false);
         });
     });
 

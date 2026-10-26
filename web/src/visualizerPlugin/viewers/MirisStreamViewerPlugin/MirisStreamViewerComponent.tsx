@@ -7,6 +7,7 @@ import type { MirisScene, MirisStream } from "@miris-inc/components";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import Alert from "@cloudscape-design/components/alert";
 import Box from "@cloudscape-design/components/box";
+import Button from "@cloudscape-design/components/button";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import { ViewerPluginProps } from "../../core/types";
 import {
@@ -35,6 +36,7 @@ type ViewerError =
     | { kind: "MINT_FORBIDDEN" }
     | { kind: "MINT_FAILED" }
     | { kind: "INVALID_UUID" }
+    | { kind: "NOT_BOUND"; assetId: string }
     | { kind: "LOAD_FAILED" }
     | { kind: "STREAM_TIMEOUT"; uuid: string }
     | { kind: "DEVICE_UNSUPPORTED" }
@@ -82,16 +84,27 @@ function errorMessage(err: ViewerError): string {
             return "Could not get access to stream this asset from Miris. Try again.";
         case "INVALID_UUID":
             return "This file's miris_asset_uuid metadata is not a valid UUID. Correct it in the file's metadata, or run Stream with Miris again.";
+        case "NOT_BOUND":
+            return (
+                "The Miris asset recorded for this file is not linked to this VAMS asset: it " +
+                `does not carry the vams-asset-${err.assetId} tag. Run Stream with Miris on this ` +
+                "file again, or add that tag to the Miris asset."
+            );
         case "LOAD_FAILED":
             return "The Miris viewer failed to load. Try again.";
         case "STREAM_TIMEOUT":
             return (
                 `Timed out waiting for Miris to start streaming asset ${err.uuid}. ` +
                 "The asset reached a streamable state but the first frame didn't arrive in time. " +
-                "Try reloading; if it keeps timing out, verify the asset still exists in app.miris.com."
+                "Try again; if it keeps timing out, verify the asset still exists in app.miris.com."
             );
         case "DEVICE_UNSUPPORTED":
-            return "Miris streaming is not supported on this device: the browser's WebGL 2.0 support is unavailable or incomplete. Required browsers: Chrome 90+, Firefox 88+, Safari 14+, Edge 90+.";
+            return (
+                "Miris streaming is not supported on this device: the browser's WebGL 2.0 support " +
+                "is unavailable or incomplete. Supported browsers: Chrome 90+, Firefox 88+, " +
+                "Safari 14+, Edge 90+. Some Miris assets (GES) need WebGPU, so a WebGPU-capable " +
+                "browser such as a current Chrome or Edge is recommended."
+            );
         case "MIRIS_PROCESSING_ERROR":
             return "Miris processing failed. Check this asset in app.miris.com.";
     }
@@ -103,6 +116,7 @@ function errorMessage(err: ViewerError): string {
  * side, so the viewer sends only the file path:
  *   - notStreamed  -> "Not yet streamed" guidance
  *   - invalidUuid  -> error
+ *   - notBound     -> error: the Miris asset is not tagged for this VAMS asset
  *   - Miris still preparing the asset -> processing overlay, polled until it is streamable
  *   - otherwise    -> stream the returned UUID, with a stale banner when the stream was
  *                     built from a different version of the file than the one viewed
@@ -122,9 +136,8 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
     const [processingState, setProcessingState] = useState<ProcessingState | null>(null);
     // Viewer key and asset of the rendered scene, held in memory for this open only.
     const [scene, setScene] = useState<SceneConfig | null>(null);
-    // Bumped when the status poll detects a state change so the main effect re-runs and
-    // mounts the scene. The dep on this var is what triggers re-entry into load().
-    const [statusFlipTrigger, setStatusFlipTrigger] = useState(0);
+    // Bumped to re-run load(): by the status poll when the state changes, and by Retry.
+    const [reloadCount, setReloadCount] = useState(0);
 
     const sceneRef = useRef<MirisScene>(null);
     const streamRef = useRef<MirisStream>(null);
@@ -173,6 +186,10 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                     setError({ kind: "INVALID_UUID" });
                     return;
                 }
+                if (disposition === "notBound") {
+                    setError({ kind: "NOT_BOUND", assetId });
+                    return;
+                }
                 if (disposition === "failed") {
                     setError({ kind: "MIRIS_PROCESSING_ERROR" });
                     return;
@@ -213,7 +230,7 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                                 pollIntervalRef.current = null;
                             }
                             setProcessingState(null);
-                            setStatusFlipTrigger((c) => c + 1);
+                            setReloadCount((c) => c + 1);
                         } catch (_pollErr) {
                             // Swallow transient poll errors; the next tick will retry.
                         }
@@ -240,10 +257,14 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                             setStreamInfo(null);
                             setNotStreamed(true);
                             setLoading(false);
+                        } else if (mintResult[2] === 403) {
+                            setError(
+                                streamDisposition(mintResult[3] ?? "") === "notBound"
+                                    ? { kind: "NOT_BOUND", assetId }
+                                    : { kind: "MINT_FORBIDDEN" }
+                            );
                         } else {
-                            setError({
-                                kind: mintResult[2] === 403 ? "MINT_FORBIDDEN" : "MINT_FAILED",
-                            });
+                            setError({ kind: "MINT_FAILED" });
                         }
                         return;
                     }
@@ -307,7 +328,7 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                 pollIntervalRef.current = null;
             }
         };
-    }, [assetId, databaseId, assetKey, versionId, statusFlipTrigger]);
+    }, [assetId, databaseId, assetKey, reloadCount]);
 
     // The scene element owns rendering, camera framing, resize and teardown. The stream's
     // first data clears the load timeout; the scene's `error` event reports a WebGL shader
@@ -379,10 +400,14 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                     <SpaceBetween size="m">
                         <Box variant="h3">Not yet streamed with Miris</Box>
                         <Box variant="p" color="text-body-secondary">
-                            This USD file has not been uploaded to Miris Spatial Streaming. Use the
-                            file manager&apos;s <strong>Automation</strong> action to run{" "}
-                            <strong>Stream with Miris</strong> on it; once processing completes, you
-                            can stream it here.
+                            This USD file has not been uploaded to Miris Spatial Streaming. To view
+                            it now, choose <strong>Needle USD Viewer (Experimental)</strong> in the
+                            viewer selector.
+                        </Box>
+                        <Box variant="p" color="text-body-secondary">
+                            To stream it, use the file manager&apos;s <strong>Automation</strong>{" "}
+                            action to run <strong>Stream with Miris</strong> on it; once processing
+                            completes, you can stream it here.
                         </Box>
                     </SpaceBetween>
                 </div>
@@ -405,17 +430,30 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                     <miris-stream ref={streamRef} uuid={mountedScene.uuid} />
                 </miris-scene>
             )}
-            {error && <div className={styles.errorOverlay}>{errorMessage(error)}</div>}
+            {error && (
+                <div className={styles.errorOverlay}>
+                    <div>{errorMessage(error)}</div>
+                    <div className={styles.overlayAction}>
+                        <Button
+                            onClick={() => {
+                                setScene(null);
+                                setError(null);
+                                setReloadCount((c) => c + 1);
+                            }}
+                        >
+                            Retry
+                        </Button>
+                    </div>
+                </div>
+            )}
             {processingState && !error && (
                 <div className={styles.errorOverlay}>
                     <div>Miris is preparing this asset.</div>
-                    <div style={{ marginTop: 16, opacity: 0.85 }}>
-                        This usually takes 1&ndash;2 hours.
-                    </div>
-                    <div style={{ marginTop: 16, opacity: 0.85 }}>
+                    <div className={styles.overlayNote}>This usually takes 1&ndash;2 hours.</div>
+                    <div className={styles.overlayNote}>
                         The viewer will refresh automatically when it&rsquo;s ready.
                     </div>
-                    <div style={{ marginTop: 16, opacity: 0.6 }}>
+                    <div className={styles.overlayState}>
                         Current state: {processingState.state}
                     </div>
                 </div>
