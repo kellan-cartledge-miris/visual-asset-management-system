@@ -19,7 +19,8 @@
  * an add-on criterion that could reach a core route (a wrong field or operator, a value outside
  * `/addon/<name>/`, a regular-expression metacharacter, a reused id) fails synthesis.
  *
- * No shipped add-on uses the lane, so a stand-in criterion is injected by replacing the function. The
+ * A stand-in criterion is injected by replacing the function, so the guard is tested apart from any
+ * shipped add-on's criteria. The
  * construct is synthesized on its own: its constraint items are config-independent apart from the
  * add-on criteria.
  */

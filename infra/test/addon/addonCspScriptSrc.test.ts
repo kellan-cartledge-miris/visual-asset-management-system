@@ -15,8 +15,8 @@
  * static header, `'strict-dynamic'`, and an entry carrying `;` that would inject a directive ahead of
  * the core `object-src` and `frame-ancestors`, which browsers would honour instead.
  *
- * No shipped add-on contributes a script source, so the merge is exercised by replacing
- * `addonCspSources()` with a stand-in add-on. The policy is generated directly from each shipped
+ * The merge is exercised by replacing `addonCspSources()` with a stand-in add-on, so the refusals are
+ * tested apart from any shipped add-on's sources. The policy is generated directly from each shipped
  * template rather than through a full-app synth: the function reads only the config and the
  * operator's `cspAdditionalConfig.json`.
  */

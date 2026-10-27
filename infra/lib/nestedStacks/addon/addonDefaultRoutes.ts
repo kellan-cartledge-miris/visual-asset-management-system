@@ -32,6 +32,26 @@ export function addonReadOnlyApiRouteCriteria(config: Config.Config, roleIdClean
                   },
               ]
             : []),
+        ...(config.app.addons?.useMirisStreaming?.enabled
+            ? [
+                  {
+                      M: {
+                          field: {
+                              S: "route__path",
+                          },
+                          id: {
+                              S: `17_${roleIdClean}_api_paths`,
+                          },
+                          operator: {
+                              S: "equals",
+                          },
+                          value: {
+                              S: "/addon/miris/asset-status", //Miris stream status (per-asset authorization is enforced server-side)
+                          },
+                      },
+                  },
+              ]
+            : []),
     ];
 }
 
@@ -45,7 +65,28 @@ export function addonReadOnlyApiPostRouteCriteria(
     config: Config.Config,
     roleIdClean: string
 ): any[] {
-    return [];
+    return [
+        ...(config.app.addons?.useMirisStreaming?.enabled
+            ? [
+                  {
+                      M: {
+                          field: {
+                              S: "route__path",
+                          },
+                          id: {
+                              S: `17_${roleIdClean}_api_paths_post`,
+                          },
+                          operator: {
+                              S: "equals",
+                          },
+                          value: {
+                              S: "/addon/miris/viewer-key", //Miris viewer key for one asset file (per-asset authorization is enforced server-side)
+                          },
+                      },
+                  },
+              ]
+            : []),
+    ];
 }
 
 /** An add-on criterion's route: `/addon/<name>/` followed by the add-on's own path. */
