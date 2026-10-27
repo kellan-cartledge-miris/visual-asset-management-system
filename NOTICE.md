@@ -50,6 +50,9 @@ This software includes third party software subject to the following copyrights:
 | @hookform/resolvers                 | ^3.9.0        | MIT                     |
 | @mapbox/mapbox-gl-draw              | ^1.4.1        | ISC                     |
 | @maplibre/maplibre-gl-geocoder      | ^1.5.0        | ISC                     |
+| @miris-inc/components               | 0.0.8-a2ebb07 | Apache-2.0              |
+| @miris-inc/core                     | 0.0.8-a2ebb07 | Apache-2.0              |
+| @miris-inc/three                    | 0.0.8-a2ebb07 | Apache-2.0              |
 | @monaco-editor/react                | ^4.6.0        | MIT                     |
 | @radix-ui/react-context-menu        | ^2.2.2        | MIT                     |
 | @radix-ui/react-dialog              | ^1.1.2        | MIT                     |
@@ -66,7 +69,7 @@ This software includes third party software subject to the following copyrights:
 | @turf/turf                          | ^6.5.0        | MIT                     |
 | @types/mapbox\_\_mapbox-gl-draw     | ^1.4.0        | MIT                     |
 | @types/styled-components            | ^5.1.21       | MIT                     |
-| @types/three                        | ^0.180.0      | MIT                     |
+| @types/three                        | ^0.185.4      | MIT                     |
 | @types/wicg-file-system-access      | 2020.9.6      | MIT                     |
 | arraybuffer-to-buffer               | ^0.0.7        | MIT                     |
 | autoprefixer                        | ^10.4.20      | MIT                     |
@@ -104,6 +107,7 @@ This software includes third party software subject to the following copyrights:
 | semver                              | ^7.5.2        | ISC                     |
 | styled-components                   | ^5.3.3        | MIT                     |
 | tailwindcss                         | ^3.4.14       | MIT                     |
+| three                               | ^0.185.1      | MIT                     |
 | tough-cookie                        | ^4.1.3        | BSD-3-Clause            |
 | typescript                          | ^5.0.0        | Apache-2.0              |
 | vite                                | ^8.1.6        | MIT                     |
@@ -111,6 +115,8 @@ This software includes third party software subject to the following copyrights:
 | zod                                 | ^3.23.8       | MIT                     |
 
 `jodit` is not declared directly — it arrives with `jodit-react` and the version shown is the one resolved in the lockfile. `fast-xml-parser` is carried transitively and pinned by the `overrides` block in `web/package.json`.
+
+The `@miris-inc/*` packages are the Miris web SDK, used by the optional Miris Spatial Streaming add-on viewer. Streaming with it calls [Miris](https://miris.com/) Spatial Streaming, a commercial service on the public internet that requires a Miris account and is subject to the Miris terms of service.
 
 ---
 
@@ -352,6 +358,27 @@ The Video SOP/BOM Extraction container uses the Debian-based `python:3.12-slim` 
 **FFmpeg License Notice**
 
 Debian builds FFmpeg with `--enable-gpl`, so the `ffmpeg` and `ffprobe` binaries in this image are licensed under the GNU General Public License version 2 or later (GPL-2.0-or-later). The pipeline runs them as separate processes over a command line and does not link against the FFmpeg libraries; the binaries are consumed unmodified from the Debian package. The GPL terms apply only when this optional pipeline (`app.pipelines.useGenAiVideoSopBom.enabled`) is enabled. Review the license requirements with your legal team before enabling it.
+
+### Miris Upload Pipeline
+
+**Miris Upload Pipeline Dependencies** (direct dependencies, as pinned by `container/requirements.lock`, which the image installs)
+
+| Name     | Version | License                                          | Notes                                                                   |
+| :------- | :------ | :----------------------------------------------- | :---------------------------------------------------------------------- |
+| usd-core | 25.11   | TOST-1.0 (Apache-2.0 with a different Section 6) | OpenUSD Python bindings for USD dependency discovery and USDZ packaging |
+| requests | 2.32.3  | Apache-2.0                                       | HTTPS client for the Miris API                                          |
+| boto3    | 1.35.99 | Apache-2.0                                       | AWS SDK for Python (Amazon S3, AWS Secrets Manager)                     |
+| botocore | 1.35.99 | Apache-2.0                                       | Low-level AWS service client library used by boto3                      |
+
+The lock also pins the packages these require (`certifi`, `charset-normalizer`, `idna`, `jmespath`, `python-dateutil`, `s3transfer`, `six`, and `urllib3`) by version and hash.
+
+**Container Base Image**
+
+The Miris Upload container uses the Debian-based `python:3.12-slim` Docker Official Image from the Amazon ECR Public Gallery, pinned by digest, and applies the Debian security updates published since the image was built.
+
+**Miris Spatial Streaming Service**
+
+The pipeline uploads USD assets to [Miris](https://miris.com/) Spatial Streaming, a commercial service on the public internet that requires a Miris account and is subject to the Miris terms of service. The pipeline is optional and runs only when `app.pipelines.useMirisUpload.enabled` is `true`.
 
 ### Gaussian Splat Toolbox Pipeline
 

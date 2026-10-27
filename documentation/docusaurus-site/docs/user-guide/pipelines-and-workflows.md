@@ -607,6 +607,7 @@ VAMS may include built-in pipelines depending on your deployment configuration. 
 -   **Metadata Extraction** -- Extracts metadata from file headers and content.
 -   **GenAI Labeling** -- Uses generative AI to automatically generate labels and descriptions.
 -   **Video SOP/BOM Extraction** -- Transcribes narrated teardown videos and derives a step-by-step procedure, a bill of materials, and a lab summary; select one to four video files of one asset explicitly.
+-   **Miris Upload** -- Uploads an asset's root USD file to Miris Spatial Streaming so it can be streamed in the Miris viewer; run the **Stream with Miris** template on one USD file of the asset.
 -   **Gaussian Splatting** -- Generates 3D Gaussian splats from image and video media files.
 -   **Physical AI Inference and Fine-Tuning** -- GPU-accelerated pipelines for NVIDIA world foundation models, vision language models (VLMs), and vision-language-action models (VLAs) including inference, simulation training, and model fine-tuning.
 

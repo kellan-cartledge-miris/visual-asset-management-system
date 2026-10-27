@@ -35,7 +35,7 @@ VAMS leverages Amazon S3 as its storage layer, providing 99.999999999% (11 nines
 
 ## Interactive Visualization
 
-VAMS includes 21 built-in viewer plugins that allow users to visualize a wide range of 3D, media, and document file formats directly in the browser, without requiring specialized desktop software or file downloads.
+VAMS includes 22 built-in viewer plugins that allow users to visualize a wide range of 3D, media, and document file formats directly in the browser, without requiring specialized desktop software or file downloads.
 
 -   View 3D meshes (GLTF, GLB, OBJ, FBX, STL, and more) with the Three.js viewer, including scene graph navigation, material editing, and transform controls
 -   Explore point clouds (E57, LAS, LAZ) through the Potree viewer with octree-based streaming
@@ -58,6 +58,7 @@ VAMS provides a configurable pipeline and workflow system that automates common 
 -   **3D Preview Thumbnails** -- Generate animated GIF or static image previews from 3D mesh, point cloud, CAD, USD, and Gaussian splat files via headless rendering
 -   **GenAI Metadata Labeling** -- Automatically generate metadata labels using Amazon Bedrock foundation models
 -   **Video SOP/BOM Extraction** -- Transcribe narrated teardown videos with Amazon Transcribe and derive a step-by-step procedure, a bill of materials, a lab summary, and verification key frames with Amazon Bedrock
+-   **Miris Upload** -- Upload USD assets to Miris Spatial Streaming and stream them progressively in the VAMS file viewer
 -   **NVIDIA Isaac Lab Training** -- Run reinforcement learning training and evaluation workloads
 -   **RapidPipeline and VNTANA ModelOps** -- Licensed pipeline integrations for advanced spatial data optimization
 

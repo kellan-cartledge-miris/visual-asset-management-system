@@ -230,6 +230,7 @@ Each pipeline step in a workflow receives designated Amazon S3 output paths from
 | Gaussian Splatting (Splat Toolbox) | AWS Batch (Fargate)          | Generate Gaussian splat reconstructions                                                        |
 | GenAI Metadata 3D Labeling         | AWS Batch (Fargate)          | AI-powered metadata labeling using Amazon Bedrock and Amazon Rekognition                       |
 | Video SOP/BOM Extraction           | AWS Batch (Fargate)          | Teardown-video transcription and SOP/BOM extraction using Amazon Transcribe and Amazon Bedrock |
+| Miris Upload                       | AWS Batch (Fargate)          | Upload of a USD asset to Miris Spatial Streaming for the Miris viewer                          |
 | Model Optimization (ModelOps)      | AWS Batch (Fargate)          | Optimize 3D models for web delivery                                                            |
 | RapidPipeline (ECS)                | AWS Batch (Fargate)          | RapidPipeline integration via Amazon ECS                                                       |
 | RapidPipeline (EKS)                | Amazon EKS                   | RapidPipeline integration via Amazon EKS                                                       |
@@ -287,6 +288,7 @@ Configuration values resolve through a four-tier fallback chain:
 | `AUTHPROVIDER_COGNITO_OIDC`     | Amazon Cognito with OIDC federation                                                  |
 | `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth identity provider                                                     |
 | `PHYSNA_ADDON`                  | Physna add-on frontend features enabled                                              |
+| `MIRIS_ADDON`                   | Miris Spatial Streaming add-on enabled                                               |
 | `DEADLINECLOUD_PIPELINES`       | AWS Deadline Cloud pipeline execution type enabled                                   |
 
 ## Nested Stack Dependency Chain
