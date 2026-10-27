@@ -167,6 +167,11 @@ describe("Batch/ECS/Fargate pipeline VPC condition blocks", () => {
      *
      * The split is read from `pipelineBuilder-nestedStack.ts`, which passes either
      * `pipelineNetwork.privateSubnets.pipeline` or `pipelineNetwork.isolatedSubnets.pipeline`.
+     *
+     * A private-subnet pipeline whose Batch jobs are Fargate needs the subnet and endpoint blocks but
+     * not the ECS block: that endpoint is the ECS control plane an EC2-launch-type container
+     * instance's agent uses, and Fargate tasks reach ECR, Amazon S3 and CloudWatch Logs through the
+     * endpoint block.
      */
     const privateSubnetBatchFlags = [
         "useRapidPipeline.useEcs",
@@ -177,6 +182,8 @@ describe("Batch/ECS/Fargate pipeline VPC condition blocks", () => {
         "useNvidiaCosmos3",
         "useNvidiaGr00t",
     ];
+
+    const privateSubnetFargateFlags = ["useMirisUpload"];
 
     const isolatedSubnetBatchFlags = [
         "useConversionCoordinateTransform",
@@ -207,6 +214,15 @@ describe("Batch/ECS/Fargate pipeline VPC condition blocks", () => {
             expect(blocks.subnetBlock).toContain(flag);
             expect(blocks.batchBlock).toContain(flag);
             expect(blocks.ecsBlock).toContain(flag);
+        }
+    );
+
+    test.each(privateSubnetFargateFlags)(
+        "%s runs Fargate in private subnets, so it appears in the subnet and endpoint blocks ONLY",
+        (flag) => {
+            expect(blocks.subnetBlock).toContain(flag);
+            expect(blocks.batchBlock).toContain(flag);
+            expect(blocks.ecsBlock).not.toContain(flag);
         }
     );
 

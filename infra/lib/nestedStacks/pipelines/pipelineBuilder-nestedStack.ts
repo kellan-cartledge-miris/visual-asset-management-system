@@ -18,6 +18,7 @@ import { RapidPipelineEKSNestedStack } from "./multi/rapidPipelineEKS/rapidPipel
 import { Conversion3dBasicNestedStack } from "./conversion/3dBasic/conversion3dBasicBuilder-nestedStack";
 import { ConversionMeshCadMetadataExtractionNestedStack } from "./conversion/meshCadMetadataExtraction/conversionMeshCadMetadataExtractionBuilder-nestedStack";
 import { CoordinateTransformBuilderNestedStack } from "./conversion/coordinateTransform/coordinateTransformBuilder-nestedStack";
+import { MirisUploadBuilderNestedStack } from "./conversion/mirisUpload/mirisUploadBuilder-nestedStack";
 import { VideoSopBomBuilderNestedStack } from "./genAi/videoSopBom/videoSopBomBuilder-nestedStack";
 import { ModelOpsNestedStack } from "./multi/modelOps/modelOps-nestedStack";
 import { IsaacLabTrainingBuilderNestedStack } from "./simulation/isaacLabTraining/isaacLabTrainingBuilder-nestedStack";
@@ -111,6 +112,28 @@ export class PipelineBuilderNestedStack extends NestedStack {
             //Add function name to array for stack output
             this.pipelineVamsLambdaFunctionNames.push(
                 splatToolboxPipelineNestedStack.pipelineVamsLambdaFunctionName
+            );
+        }
+
+        if (props.config.app.pipelines.useMirisUpload?.enabled) {
+            const mirisUploadPipelineNestedStack = new MirisUploadBuilderNestedStack(
+                this,
+                "MirisUploadBuilderNestedStack",
+                {
+                    ...props,
+                    config: props.config,
+                    storageResources: props.storageResources,
+                    vpc: props.vpc,
+                    pipelineSubnets: pipelineNetwork.privateSubnets.pipeline,
+                    pipelineSecurityGroups: [pipelineNetwork.securityGroups.pipeline],
+                    lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                    importGlobalPipelineWorkflowV2FunctionName:
+                        props.importGlobalPipelineWorkflowV2FunctionName,
+                }
+            );
+            //Add function name to array for stack output
+            this.pipelineVamsLambdaFunctionNames.push(
+                mirisUploadPipelineNestedStack.pipelineVamsLambdaFunctionName
             );
         }
 

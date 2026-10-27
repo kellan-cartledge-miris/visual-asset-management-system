@@ -25,6 +25,7 @@ import { Metadata3dLabelingConstruct } from "../../lib/nestedStacks/pipelines/ge
 import { CoordinateTransformConstruct } from "../../lib/nestedStacks/pipelines/conversion/coordinateTransform/constructs/coordinateTransform-construct";
 import { VideoSopBomConstruct } from "../../lib/nestedStacks/pipelines/genAi/videoSopBom/constructs/videoSopBom-construct";
 import { makePipelineHarness } from "../support/pipelineConstructHarness";
+import { makeMirisUploadHarness } from "./mirisUploadHarness";
 import {
     declaredStageNames,
     jobDefinitionRefOf,
@@ -348,6 +349,37 @@ describe("genAi/videoSopBom openPipeline registration environment", () => {
         expectDeclaredStagesInAsl(
             template,
             path.join(PRODUCERS, "genAi", "videoSopBom", "lambda", "openPipeline.py")
+        );
+    });
+});
+
+describe("conversion/mirisUpload openPipeline registration environment", () => {
+    let template: Template;
+
+    beforeAll(() => {
+        // With a customer managed key, so the vended group's encryption is asserted as for the peers.
+        const h = makeMirisUploadHarness("MirisUploadEnvStack", { kms: true });
+        template = Template.fromStack(h.stack);
+    });
+
+    test("registers the vended group its job definition writes to, under the job definition's own stream prefix", () => {
+        const env = registeringLambdaEnv(template, "openPipeline.lambda_handler");
+        const jobDefinitionId = expectDerivedJobDefinitionName(
+            template,
+            env.BATCH_JOB_DEFINITION_NAME
+        );
+        expectVendedGroupRegistration(
+            template,
+            jobDefinitionId,
+            env.BATCH_JOB_LOG_GROUP_NAME,
+            env.BATCH_JOB_LOG_GROUP_ARN
+        );
+    });
+
+    test("the stage the producer declares is a state of the machine", () => {
+        expectDeclaredStagesInAsl(
+            template,
+            path.join(PRODUCERS, "conversion", "mirisUpload", "lambda", "openPipeline.py")
         );
     });
 });
