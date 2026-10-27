@@ -465,6 +465,76 @@ function resolveConfigBool(name: string, ...sources: unknown[]): boolean {
     return false;
 }
 
+/** Viewer key modes accepted by `app.addons.useMirisStreaming.viewerKeyMode`. */
+const MIRIS_VIEWER_KEY_MODES: readonly string[] = ["static", "perView"];
+
+/** Shortest value accepted as `app.addons.useMirisStreaming.viewerKey`. */
+const MIRIS_VIEWER_KEY_MIN_LENGTH = 16;
+
+/**
+ * A complete Secrets Manager secret ARN in the commercial partition, the only one the Miris add-on
+ * deploys to, including the six-character suffix Secrets Manager appends to the secret name. IAM
+ * grants name `app.addons.useMirisStreaming.apiKeySecretArn` verbatim, so a partial ARN without the
+ * suffix matches no secret.
+ */
+const MIRIS_SECRET_ARN_PATTERN =
+    /^arn:aws:secretsmanager:[a-z0-9-]+:\d{12}:secret:[A-Za-z0-9/_+=.@-]+-[A-Za-z0-9]{6}$/;
+
+/**
+ * File extensions the GLOBAL "Miris stream" file metadata schema accepts: the
+ * `fileKeyTypeRestriction` of
+ * infra/lib/nestedStacks/addon/miris/constructs/dynamodb-metadataschema-miris-stream.json. The Miris
+ * upload pipeline records its result in that schema, so its trigger extensions must be a subset.
+ */
+export const MIRIS_STREAM_SCHEMA_EXTENSIONS: readonly string[] = [
+    ".usd",
+    ".usda",
+    ".usdc",
+    ".usdz",
+];
+
+/** Defaults for `app.addons.useMirisStreaming`, each applied when its own field is absent. */
+const MIRIS_STREAMING_DEFAULTS: ConfigPublic["app"]["addons"]["useMirisStreaming"] = {
+    enabled: false,
+    viewerKeyMode: "static",
+    viewerKey: "",
+    viewerKeyTtlMinutes: 15,
+    apiKeySecretArn: "",
+    mirisApiBaseUrl: "https://app.miris.com",
+};
+
+/** Defaults for `app.pipelines.useMirisUpload`, each applied when its own field is absent. */
+const MIRIS_UPLOAD_DEFAULTS: ConfigPublic["app"]["pipelines"]["useMirisUpload"] = {
+    enabled: false,
+    autoRegisterWithVAMS: true,
+    autoRegisterAutoTriggerOnFileUpload: true,
+    triggerExtensions: MIRIS_STREAM_SCHEMA_EXTENSIONS.join(","),
+    taskTimeoutSeconds: 1800,
+    maxAssetSizeBytes: 5_000_000_000,
+};
+
+/** A string setting the operator left unset: missing, empty, or the template placeholder. */
+function isUnsetConfigString(value: unknown): boolean {
+    return value === undefined || value === null || value === "" || value === "UNDEFINED";
+}
+
+/**
+ * Splits `app.pipelines.useMirisUpload.triggerExtensions` into its extensions, or returns undefined
+ * when the value is not a comma-separated list of lowercase extensions such as ".usd,.usdz".
+ */
+function parseMirisTriggerExtensions(value: unknown): string[] | undefined {
+    if (typeof value !== "string") return undefined;
+    const extensions = value.split(",");
+    return extensions.every((extension) => /^\.[a-z0-9]+$/.test(extension))
+        ? extensions
+        : undefined;
+}
+
+/** True for a whole number greater than zero. */
+function isPositiveInteger(value: unknown): boolean {
+    return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
 /**
  * Requires a configured outbound endpoint to be HTTPS and to point somewhere outside the deployment.
  *
@@ -1258,6 +1328,16 @@ export function getConfig(app: cdk.App): Config {
         config.app.addons.usePhysnaSync.credentialsSecretArn = "";
     }
 
+    if (config.app.addons.useMirisStreaming == undefined) {
+        config.app.addons.useMirisStreaming = { ...MIRIS_STREAMING_DEFAULTS };
+    }
+    const mirisStreaming: Record<string, unknown> = config.app.addons.useMirisStreaming;
+    for (const [field, value] of Object.entries(MIRIS_STREAMING_DEFAULTS)) {
+        if (mirisStreaming[field] == undefined) {
+            mirisStreaming[field] = value;
+        }
+    }
+
     if (config.app.authProvider.useCognito.useOidc == undefined) {
         config.app.authProvider.useCognito.useOidc = false;
     }
@@ -1338,6 +1418,16 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useGenAiVideoSopBom.limits.maxTotalDurationMinutes = 240;
     }
 
+    if (config.app.pipelines.useMirisUpload == undefined) {
+        config.app.pipelines.useMirisUpload = { ...MIRIS_UPLOAD_DEFAULTS };
+    }
+    const mirisUpload: Record<string, unknown> = config.app.pipelines.useMirisUpload;
+    for (const [field, value] of Object.entries(MIRIS_UPLOAD_DEFAULTS)) {
+        if (mirisUpload[field] == undefined) {
+            mirisUpload[field] = value;
+        }
+    }
+
     // Pipeline constructs gate the VamsSchemaRegistration custom resource on
     // `autoRegisterWithVAMS === true`, so an omitted flag on an otherwise-present pipeline block
     // would deploy the pipeline stack with no VAMS registration. A partially-specified block
@@ -1395,6 +1485,7 @@ export function getConfig(app: cdk.App): Config {
         usePreviewPcPotreeViewer: config.app.pipelines.usePreviewPcPotreeViewer,
         usePreview3dThumbnail: config.app.pipelines.usePreview3dThumbnail,
         useGenAiMetadata3dLabeling: config.app.pipelines.useGenAiMetadata3dLabeling,
+        useMirisUpload: config.app.pipelines.useMirisUpload,
     })) {
         if (
             block?.enabled &&
@@ -1899,6 +1990,8 @@ export function getConfig(app: cdk.App): Config {
         vpcRequiringFeatures.push("pipelines.useConversionCoordinateTransform");
     if (config.app.pipelines.useGenAiVideoSopBom.enabled)
         vpcRequiringFeatures.push("pipelines.useGenAiVideoSopBom");
+    if (config.app.pipelines.useMirisUpload.enabled)
+        vpcRequiringFeatures.push("pipelines.useMirisUpload");
 
     if (vpcRequiringFeatures.length > 0 && !config.app.useGlobalVpc.enabled) {
         throw new Error(
@@ -2536,7 +2629,8 @@ export function getConfig(app: cdk.App): Config {
             config.app.pipelines.useIsaacLabTraining.enabled ||
             config.app.pipelines.useNvidiaCosmos.enabled ||
             config.app.pipelines.useNvidiaCosmos3?.enabled ||
-            config.app.pipelines.useNvidiaGr00t.enabled
+            config.app.pipelines.useNvidiaGr00t.enabled ||
+            config.app.pipelines.useMirisUpload.enabled
         ) {
             if (
                 !config.app.useGlobalVpc.optionalExternalPrivateSubnetIds ||
@@ -3525,6 +3619,179 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
+    // Miris Spatial Streaming add-on validation
+    if (config.app.addons.useMirisStreaming.enabled) {
+        const miris = config.app.addons.useMirisStreaming;
+
+        // Miris is a SaaS service reached at *.miris.com over the public internet. Keyed on the
+        // resolved partition, so a GovCloud or EU Sovereign Cloud deployment is rejected whatever
+        // app.govCloud.enabled says.
+        if (config.env.partition !== "aws") {
+            throw new Error(
+                "Configuration Error: addons.useMirisStreaming is enabled while deploying to the " +
+                    `'${config.env.partition}' partition. Miris is reached at *.miris.com over the ` +
+                    "public internet and is supported in the commercial partition only. Set " +
+                    "app.addons.useMirisStreaming.enabled to false."
+            );
+        }
+
+        if (!config.app.webUi.allowUnsafeEvalFeatures) {
+            throw new Error(
+                "Configuration Error: addons.useMirisStreaming requires " +
+                    "app.webUi.allowUnsafeEvalFeatures = true. The Miris web SDK compiles code at " +
+                    "runtime, the same trust boundary the Cesium and Needle USD viewer plugins " +
+                    "require. Consult your security team before enabling."
+            );
+        }
+
+        if (!MIRIS_VIEWER_KEY_MODES.includes(miris.viewerKeyMode)) {
+            throw new Error(
+                "Configuration Error: addons.useMirisStreaming.viewerKeyMode must be one of " +
+                    `${MIRIS_VIEWER_KEY_MODES.map((mode) => `"${mode}"`).join(", ")}; got ` +
+                    `${JSON.stringify(miris.viewerKeyMode)}.`
+            );
+        }
+
+        const viewerKeyTtlMinutes: unknown = miris.viewerKeyTtlMinutes;
+        if (
+            typeof viewerKeyTtlMinutes !== "number" ||
+            !Number.isInteger(viewerKeyTtlMinutes) ||
+            viewerKeyTtlMinutes < 1 ||
+            viewerKeyTtlMinutes > 60
+        ) {
+            throw new Error(
+                "Configuration Error: addons.useMirisStreaming.viewerKeyTtlMinutes must be a whole " +
+                    `number of minutes from 1 to 60; got ${JSON.stringify(viewerKeyTtlMinutes)}.`
+            );
+        }
+
+        // The add-on's Lambdas send the Integration Key to this URL.
+        if (isUnsetConfigString(miris.mirisApiBaseUrl)) {
+            throw new Error(
+                "Configuration Error: addons.useMirisStreaming requires mirisApiBaseUrl when enabled"
+            );
+        }
+        if (String(miris.mirisApiBaseUrl) !== String(miris.mirisApiBaseUrl).trim()) {
+            throw new Error(
+                "Configuration Error: addons.useMirisStreaming.mirisApiBaseUrl has leading or " +
+                    `trailing whitespace. Remove it. Got: ${JSON.stringify(miris.mirisApiBaseUrl)}`
+            );
+        }
+        try {
+            new URL(miris.mirisApiBaseUrl);
+        } catch (e) {
+            throw new Error(
+                "Configuration Error: addons.useMirisStreaming.mirisApiBaseUrl must be a valid URL. " +
+                    `Got: ${miris.mirisApiBaseUrl}`
+            );
+        }
+        validateOutboundHttpsEndpoint(
+            miris.mirisApiBaseUrl,
+            "addons.useMirisStreaming.mirisApiBaseUrl"
+        );
+
+        // The Integration Key is read in both viewer key modes: the viewer key endpoint checks the
+        // Miris asset's tags with it before returning a key, and perView mode also mints keys with it.
+        if (isUnsetConfigString(miris.apiKeySecretArn)) {
+            throw new Error(
+                "Configuration Error: addons.useMirisStreaming requires apiKeySecretArn, the Secrets " +
+                    "Manager ARN of the Miris Integration Key. The viewer key endpoint uses it to " +
+                    "check that a Miris asset is bound to the VAMS asset in both viewer key modes."
+            );
+        }
+        if (!MIRIS_SECRET_ARN_PATTERN.test(String(miris.apiKeySecretArn))) {
+            throw new Error(
+                "Configuration Error: addons.useMirisStreaming.apiKeySecretArn must be the complete " +
+                    "ARN of a Secrets Manager secret, including the six-character suffix Secrets " +
+                    "Manager appends to the secret name " +
+                    "in the commercial partition " +
+                    "(arn:aws:secretsmanager:<region>:<account>:secret:<name>-AbCdEf); got " +
+                    `"${miris.apiKeySecretArn}".`
+            );
+        }
+
+        if (miris.viewerKeyMode === "static") {
+            if (isUnsetConfigString(miris.viewerKey) || String(miris.viewerKey).trim() === "") {
+                throw new Error(
+                    'Configuration Error: addons.useMirisStreaming.viewerKeyMode "static" requires ' +
+                        "viewerKey. Generate one in the Miris Portal or with `miris viewerkey create`."
+                );
+            }
+            if (String(miris.viewerKey) !== String(miris.viewerKey).trim()) {
+                throw new Error(
+                    "Configuration Error: addons.useMirisStreaming.viewerKey has leading or trailing " +
+                        "whitespace. Remove it; a Miris viewer key contains none."
+                );
+            }
+            const viewerKeyLength = String(miris.viewerKey).length;
+            if (viewerKeyLength < MIRIS_VIEWER_KEY_MIN_LENGTH) {
+                throw new Error(
+                    `Configuration Error: addons.useMirisStreaming.viewerKey is ${viewerKeyLength} ` +
+                        `characters long; a Miris viewer key is at least ` +
+                        `${MIRIS_VIEWER_KEY_MIN_LENGTH}. Check that the whole key was copied; Miris ` +
+                        "shows it only once at creation."
+                );
+            }
+        } else if (!isUnsetConfigString(miris.viewerKey)) {
+            console.warn(
+                "Configuration Warning: addons.useMirisStreaming.viewerKey is ignored when " +
+                    'viewerKeyMode is "perView". Remove it from config.json.'
+            );
+        }
+    }
+
+    // Miris upload pipeline validation. The pipeline reads the Integration Key secret and the Miris
+    // API base URL from the Miris Spatial Streaming add-on, and records the Miris asset UUID in file
+    // metadata that the add-on's viewer streams.
+    if (config.app.pipelines.useMirisUpload.enabled) {
+        const upload = config.app.pipelines.useMirisUpload;
+        const miris = config.app.addons.useMirisStreaming;
+
+        if (!miris.enabled) {
+            throw new Error(
+                "Configuration Error: pipelines.useMirisUpload requires " +
+                    "app.addons.useMirisStreaming.enabled = true. The pipeline reads the Miris " +
+                    "Integration Key and API base URL from the add-on, and the assets it uploads are " +
+                    "viewed through the add-on's viewer."
+            );
+        }
+        for (const field of ["taskTimeoutSeconds", "maxAssetSizeBytes"] as const) {
+            const value: unknown = upload[field];
+            if (!isPositiveInteger(value)) {
+                throw new Error(
+                    `Configuration Error: pipelines.useMirisUpload.${field} must be a positive ` +
+                        `whole number; got ${JSON.stringify(value)}.`
+                );
+            }
+        }
+        if (typeof upload.triggerExtensions === "string" && /\s/.test(upload.triggerExtensions)) {
+            throw new Error(
+                "Configuration Error: pipelines.useMirisUpload.triggerExtensions must not contain " +
+                    'whitespace. List the extensions separated by commas only, such as ".usd,.usdz"; ' +
+                    `got ${JSON.stringify(upload.triggerExtensions)}.`
+            );
+        }
+        const triggerExtensions = parseMirisTriggerExtensions(upload.triggerExtensions);
+        if (triggerExtensions == undefined) {
+            throw new Error(
+                "Configuration Error: pipelines.useMirisUpload.triggerExtensions must be a " +
+                    'comma-separated list of lowercase file extensions, such as ".usd,.usdz"; got ' +
+                    `${JSON.stringify(upload.triggerExtensions)}.`
+            );
+        }
+        const unsupportedExtensions = triggerExtensions.filter(
+            (extension) => !MIRIS_STREAM_SCHEMA_EXTENSIONS.includes(extension)
+        );
+        if (unsupportedExtensions.length > 0) {
+            throw new Error(
+                "Configuration Error: pipelines.useMirisUpload.triggerExtensions may only list " +
+                    "extensions the Miris stream file metadata schema accepts " +
+                    `(${MIRIS_STREAM_SCHEMA_EXTENSIONS.join(", ")}); got ` +
+                    `${unsupportedExtensions.join(", ")}.`
+            );
+        }
+    }
+
     return config;
 }
 
@@ -4425,6 +4692,14 @@ export interface ConfigPublic {
                     };
                 };
             };
+            useMirisUpload: {
+                enabled: boolean;
+                autoRegisterWithVAMS: boolean;
+                autoRegisterAutoTriggerOnFileUpload: boolean;
+                triggerExtensions: string;
+                taskTimeoutSeconds: number;
+                maxAssetSizeBytes: number;
+            };
         };
         addons: {
             useGarnetFramework: {
@@ -4442,6 +4717,14 @@ export interface ConfigPublic {
                 credentialsSecretArn: string;
                 clientId: string;
                 clientSecret: string;
+            };
+            useMirisStreaming: {
+                enabled: boolean;
+                viewerKeyMode: "static" | "perView";
+                viewerKey: string;
+                viewerKeyTtlMinutes: number;
+                apiKeySecretArn: string;
+                mirisApiBaseUrl: string;
             };
         };
         authProvider: {

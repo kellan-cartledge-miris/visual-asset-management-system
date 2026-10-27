@@ -328,6 +328,14 @@ const COMMERCIAL: ConfigShape = {
             useNvidiaCosmos: cloneConfig(COSMOS_DEFAULT),
             useNvidiaCosmos3: cloneConfig(COSMOS3_DEFAULT),
             useNvidiaGr00t: cloneConfig(GR00T_DEFAULT),
+            useMirisUpload: {
+                enabled: false,
+                autoRegisterWithVAMS: true,
+                autoRegisterAutoTriggerOnFileUpload: true,
+                triggerExtensions: ".usd,.usda,.usdc,.usdz",
+                taskTimeoutSeconds: 1800,
+                maxAssetSizeBytes: 5000000000,
+            },
         },
         addons: {
             useGarnetFramework: {
@@ -346,6 +354,14 @@ const COMMERCIAL: ConfigShape = {
                 credentialsSecretArn: "",
                 clientId: "",
                 clientSecret: "",
+            },
+            useMirisStreaming: {
+                enabled: false,
+                viewerKeyMode: "static",
+                viewerKey: "",
+                viewerKeyTtlMinutes: 15,
+                apiKeySecretArn: "",
+                mirisApiBaseUrl: "https://app.miris.com",
             },
         },
         authProvider: {
