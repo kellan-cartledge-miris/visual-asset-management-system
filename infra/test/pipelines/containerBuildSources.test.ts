@@ -470,7 +470,7 @@ describe("the Miris upload image installs from its hash-locked requirements", ()
             .filter(Boolean)
             .map((line) =>
                 line
-                    .split(/[=<>~!;\[ ]/)[0]
+                    .split(/[=<>~!;[ ]/)[0]
                     .toLowerCase()
                     .replace(/_/g, "-")
             );
