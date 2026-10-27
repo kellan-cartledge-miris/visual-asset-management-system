@@ -108,6 +108,7 @@ web/
       appCache.ts           # Replaces Amplify Cache for runtime config
       webRoutesCheck.ts     # Batched + cached web-route (Tier-1) checks
       addons/physnaAPIService.ts  # Add-on API calls (Physna viewer metadata)
+      addons/mirisAPIService.ts   # Add-on API calls (Miris stream status, viewer key)
 
     addons/                 # Add-on web lane (shipped empty): addonRoutes.tsx, addonNavigation.ts
     custom/                 # FORK EXTENSION POINT (shipped empty, never edited upstream)
@@ -184,7 +185,7 @@ web/
       README.md             # Plugin development docs
       config/
         viewerConfig.json   # Plugin configuration (core)
-        addonViewerConfig.json   # Add-on viewers (Physna; licensed VNTANA, VEERUM)
+        addonViewerConfig.json   # Add-on viewers (Physna, Miris Spatial Streaming; licensed VNTANA, VEERUM)
         customViewerConfig.json  # FORK EXTENSION POINT (shipped empty)
       core/
         PluginRegistry.ts   # Singleton registry (manages all viewers)
@@ -207,6 +208,7 @@ web/
         Online3dViewerPlugin/
         PDFViewerPlugin/
         PhysnaViewerPlugin/
+        MirisStreamViewerPlugin/     # Miris Spatial Streaming add-on viewer
         PlayCanvasGaussianSplatViewerPlugin/
         PotreeViewerPlugin/
         RoboticsDataViewerPlugin/    # MCAP / ROS bag / PX4 ULog viewer (framed Lichtblick app)
@@ -331,7 +333,7 @@ const response = await fetch(`/api/database/${databaseId}/assets`);
 -   `FileOperationsService.ts` — file operations
 -   `MetadataService.ts` — metadata CRUD
 -   `MetadataSchemaService.ts` — schema management
--   `addons/*.ts` — add-on API calls (`addons/physnaAPIService.ts` for the Physna viewer)
+-   `addons/*.ts` — add-on API calls (`addons/physnaAPIService.ts` for the Physna viewer, `addons/mirisAPIService.ts` for the Miris Spatial Streaming viewer)
 -   `features/orchestration/api/*.ts` — orchestration services (pipelines, workflows, executions, templates, triggers)
 -   `custom/services/*.ts` — the fork extension point for a fork's own API calls (shipped empty)
 
@@ -429,10 +431,17 @@ by the `'unsafe-inline'` keyword, never both -- when a hash source is present br
 safety net.
 
 Because of that, `generateContentSecurityPolicy()` adds `'unsafe-inline'` in **no** configuration,
-the Physna add-on included. The add-on's viewer frames Physna's own HTTPS origin rather than a
+the add-ons included. The Physna add-on's viewer frames Physna's own HTTPS origin rather than a
 `blob:` document, so that page loads under Physna's own CSP and its inline scripts are outside this
 policy's reach; the keyword would also be ignored on a VAMS page, because the hash sources are
-present. The add-on contributes `frame-src` and `connect-src` origins and no `script-src` source.
+present. The Physna add-on contributes `frame-src` and `connect-src` origins and no `script-src`
+source. An add-on may contribute `script-src` sources (`addonCspSources().scriptSrc` in
+`infra/lib/nestedStacks/addon/addonCsp.ts`), which `generateContentSecurityPolicy()` merges only
+from an allowlist: `blob:`, `'self'`, `'unsafe-hashes'`, `'wasm-unsafe-eval'`, hash sources, and
+`https://` or `wss://` hosts (an exact host or a `*.` subdomain wildcard, optional port and path),
+one source expression per entry. `'unsafe-inline'`, `'unsafe-eval'`, `'strict-dynamic'`, nonces, `*`,
+`https://*`, `http://` hosts and scheme-only sources other than `blob:` fail synthesis. The Miris Spatial Streaming add-on adds
+`blob:`, from which its SDK imports part of its engine.
 
 If a **new** viewer plugin needs inline script, hash that document's own inline blocks rather than
 moving `'unsafe-inline'` into `script-src` -- a hash source makes the keyword inert, so adding it
@@ -821,7 +830,7 @@ A fork adds pages without editing `routes.tsx` or `layout/Navigation.tsx`: both 
 The 3D/media viewer system uses a plugin-based architecture:
 
 -   **PluginRegistry** (`src/visualizerPlugin/core/PluginRegistry.ts`) -- Singleton that manages all viewer plugins
--   **viewerConfig.json** (`src/visualizerPlugin/config/viewerConfig.json`) -- JSON configuration for the core plugins; add-on viewers (Physna and the licensed VNTANA and VEERUM viewers) are configured in `addonViewerConfig.json` and a fork's in `customViewerConfig.json` (fork extension point, shipped `{ "viewers": [] }`)
+-   **viewerConfig.json** (`src/visualizerPlugin/config/viewerConfig.json`) -- JSON configuration for the core plugins; add-on viewers (Physna, Miris Spatial Streaming and the licensed VNTANA and VEERUM viewers) are configured in `addonViewerConfig.json` and a fork's in `customViewerConfig.json` (fork extension point, shipped `{ "viewers": [] }`)
 -   **manifest.ts** (`src/visualizerPlugin/viewers/manifest.ts`) -- Vite static analysis paths for dynamic imports; `viewers/addonManifest.ts` and `viewers/custom/customManifest.ts` hold the add-on and fork entries
 -   **viewerSources.ts** (`src/visualizerPlugin/core/viewerSources.ts`) -- merges core, add-on and custom configs and manifests; a custom viewer whose `id` repeats a shipped one is skipped with a console error, and a shipped manifest key always wins
 -   **StylesheetManager** -- Per-plugin CSS lifecycle management
@@ -849,11 +858,14 @@ The 3D/media viewer system uses a plugin-based architecture:
 | `needletools-usd-viewer`           | Needle USD Viewer                 | 3d       | .usd, .usda, .usdc, .usdz                                                                                                                | enabled (requires ALLOWUNSAFEEVAL)                  |
 | `threejs-viewer`                   | Three.js Viewer                   | 3d       | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .igs, .brep                                                   | enabled                                             |
 | `physna-viewer`                    | Physna Viewer                     | 3d       | .3ds, .asm, .catpart, .catproduct, .glb, .iam, .iges, .igs, .ipt, .jt, .obj, .par, .prt, .sldasm, .sldprt, .stl, .step, .stp, .x_b, .x_t | enabled (requires PHYSNA_ADDON)                     |
+| `miris-stream-viewer`              | Miris Spatial Streaming           | 3d       | .usd, .usda, .usdc, .usdz                                                                                                                | enabled (requires MIRIS_ADDON, ALLOWUNSAFEEVAL)     |
 | `thatopenwebifc-viewer`            | ThatOpen IFC BIM Viewer           | 3d       | .ifc, .ifczip                                                                                                                            | enabled (requires ALLOWUNSAFEEVAL)                  |
 | `robotics-data-viewer`             | Robotics Data Viewer (Lichtblick) | data     | .mcap, .bag, .db3, .ulg, .ulog                                                                                                           | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
 | `preview-viewer`                   | Preview Viewer                    | preview  | \* (wildcard)                                                                                                                            | enabled                                             |
 
 > Note: `supersplat-viewer` is a **iframe-embedded** viewer — it self-hosts a from-source SuperSplat build under `public/viewers/supersplat/` and loads files via a presigned URL `?load=` parameter (see 8.5 before copying that pattern). The build is WebGPU-only (no WebGL2 fallback). Under the production CSP its `<base>` element, inline script, and embedded `pc-icon` data-URI font are blocked without breaking the editor.
+
+> Note: `miris-stream-viewer` (Miris Spatial Streaming add-on) streams the Miris asset recorded in a USD file's `miris_*` metadata. It asks `GET /addon/miris/asset-status` for the file's state, and only for a streamable file gets a viewer key from `POST /addon/miris/viewer-key` (in both viewer key modes, held in memory for that open) and then loads the `@miris-inc/*` SDK, bounded at 60 s; its entry has no `dependencyManagerMethod`, so the registry never loads the SDK up front. `autoSelect` opens it ahead of the Needle USD viewer, which its "not yet streamed" guidance names. The `@miris-inc/*` packages are pinned exactly and require `three` within `>=0.182.0 <0.186.0`, so upgrade them and `three` together.
 
 > Note: `robotics-data-viewer` is an **iframe-embedded** viewer — `web/customInstalls/robotics/roboticsViewerInstall.js` builds the Lichtblick web app (MPL-2.0, pinned tag and commit) from source with the VAMS overlay in `web/customInstalls/robotics/overlay/` into `public/viewers/robotics/`. The host component presigns each file under its own asset and hands the URLs over in the iframe's URL **fragment** (see 8.5). `.mcap` (several files on one timeline) and `.bag` are read with HTTP Range requests; `.db3` (one file or a ROS 2 split bag) and `.ulg`/`.ulog` are downloaded whole, limited to `customParameters.maxWholeFileBytes` (1 GiB) across the selection. No Lichtblick extension can be installed or loaded: an extension is code run in the framed document, which is same-origin with VAMS, so the overlay entrypoint renders upstream `SharedRoot` with an empty extension loader list instead of upstream `WebRoot` (which always adds IndexedDB loaders). The install's build check and `roboticsBuild.test.ts` fail if that changes. User Scripts stay available (they run in a web worker).
 
@@ -951,6 +963,7 @@ export const VIEWER_COMPONENTS = {
 | `supportsMultiFile`          | boolean           | Can handle multiple files at once                    |
 | `canFullscreen`              | boolean           | Supports fullscreen mode                             |
 | `priority`                   | number            | Lower = listed first when multiple viewers match     |
+| `autoSelect`                 | boolean?          | Auto-open as the sole top-priority match (visualize) |
 | `loadStrategy`               | "lazy" \| "eager" | When to load the component                           |
 | `category`                   | string            | Viewer category (3d, media, document, data, preview) |
 | `featuresEnabledRestriction` | string[]?         | Required feature flags                               |
@@ -1199,7 +1212,7 @@ Known feature flags:
 
 -   `LOCATIONSERVICES` -- Map/geospatial features
 -   `NOOPENSEARCH` -- Disable OpenSearch-dependent features
--   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, and Three.js CAD formats (WASM loaders use eval)
+-   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, Miris Spatial Streaming (add-on, also requires `MIRIS_ADDON`), and Three.js CAD formats (WASM loaders use eval)
 -   Additional flags may exist in deployed configurations
 
 ### 9.4 Synonyms (Display Name Customization)
@@ -1518,23 +1531,26 @@ Match the comment density and style already present in the file. Describe **what
 
 ## 14. Key Dependencies
 
-| Package                         | Version              | Purpose                     |
-| ------------------------------- | -------------------- | --------------------------- |
-| `react`                         | 17.0.2               | UI framework (NOT React 18) |
-| `typescript`                    | 4.4.4                | Type system                 |
-| `vite`                          | ^6.0.0               | Build tooling               |
-| `aws-amplify`                   | v6 (latest)          | Auth integration (v6)       |
-| `@cloudscape-design/components` | ^3.0.196             | AWS Cloudscape UI           |
-| `@badgateway/oauth2-client`     | 2.4.2                | External OAuth2 PKCE flow   |
-| `react-router-dom`              | ^6.0.0               | Client-side routing         |
-| `styled-components`             | ^5.3.3               | CSS-in-JS (legacy usage)    |
-| `three`                         | (via customInstalls) | 3D rendering engine         |
-| `maplibre-gl`                   | ^6.9.0               | Map rendering               |
-| `react-pdf`                     | ^10.1.0              | PDF viewing                 |
-| `papaparse`                     | ^5.4.1               | CSV parsing                 |
-| `dompurify`                     | ^3.4.11              | HTML sanitization           |
-| `sanitize-html`                 | ^2.11.0              | HTML sanitization           |
-| `@dnd-kit/core`                 | ^6.3.1               | Drag and drop               |
+| Package                                                        | Version               | Purpose                                                                     |
+| -------------------------------------------------------------- | --------------------- | --------------------------------------------------------------------------- |
+| `react`                                                        | 17.0.2                | UI framework (NOT React 18)                                                 |
+| `typescript`                                                   | 4.4.4                 | Type system                                                                 |
+| `vite`                                                         | ^6.0.0                | Build tooling                                                               |
+| `aws-amplify`                                                  | v6 (latest)           | Auth integration (v6)                                                       |
+| `@cloudscape-design/components`                                | ^3.0.196              | AWS Cloudscape UI                                                           |
+| `@badgateway/oauth2-client`                                    | 2.4.2                 | External OAuth2 PKCE flow                                                   |
+| `react-router-dom`                                             | ^6.0.0                | Client-side routing                                                         |
+| `styled-components`                                            | ^5.3.3                | CSS-in-JS (legacy usage)                                                    |
+| `three`                                                        | ^0.185.1              | 3D rendering engine (Miris viewer; customInstalls viewers bundle their own) |
+| `@miris-inc/components`, `@miris-inc/core`, `@miris-inc/three` | 0.0.8-a2ebb07 (exact) | Miris Spatial Streaming SDK (add-on viewer)                                 |
+| `maplibre-gl`                                                  | ^6.9.0                | Map rendering                                                               |
+| `react-pdf`                                                    | ^10.1.0               | PDF viewing                                                                 |
+| `papaparse`                                                    | ^5.4.1                | CSV parsing                                                                 |
+| `dompurify`                                                    | ^3.4.11               | HTML sanitization                                                           |
+| `sanitize-html`                                                | ^2.11.0               | HTML sanitization                                                           |
+| `@dnd-kit/core`                                                | ^6.3.1                | Drag and drop                                                               |
+
+`three` and the `@miris-inc/*` packages are direct dependencies, loaded only by a dynamic `import()` in `MirisStreamViewerPlugin/dependencies.ts`, rather than a `customInstalls/` bundle: the SDK is an ESM package that ships sibling `.wasm` files and declares `three` as a peer, which Vite resolves and code-splits into lazy chunks from `node_modules`, as it does for `react-pdf` and `react-diff-viewer-continued`. The customInstalls viewers keep their own pinned `three`. The `@miris-inc/*` packages are pinned exactly to one version and upgraded together with `three`, which must stay inside the SDK's peer range (`>=0.182.0 <0.186.0`).
 
 ### 14.1 Key Service Files
 

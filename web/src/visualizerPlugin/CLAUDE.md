@@ -9,7 +9,7 @@ Auto-loaded when working within `web/src/visualizerPlugin/`. See `web/CLAUDE.md`
 The 3D/media viewer system uses a plugin-based architecture:
 
 -   **PluginRegistry** (`core/PluginRegistry.ts`) — Singleton that manages all viewer plugins
--   **viewerConfig.json** (`config/viewerConfig.json`) — JSON configuration for the core plugins; `addonViewerConfig.json` (add-on viewers: Physna and the licensed VNTANA and VEERUM viewers) and `customViewerConfig.json` (fork extension point) hold the rest
+-   **viewerConfig.json** (`config/viewerConfig.json`) — JSON configuration for the core plugins; `addonViewerConfig.json` (add-on viewers: Physna, Miris Spatial Streaming and the licensed VNTANA and VEERUM viewers) and `customViewerConfig.json` (fork extension point) hold the rest
 -   **manifest.ts** (`viewers/manifest.ts`) — Vite static-analysis paths for dynamic imports; `viewers/addonManifest.ts` and `viewers/custom/customManifest.ts` for add-on and fork viewers
 -   **viewerSources.ts** (`core/viewerSources.ts`) — Merges the three configs and manifests for the registry (see "Add-on and fork viewers")
 -   **StylesheetManager** (`core/StylesheetManager.ts`) — Per-plugin CSS lifecycle management
@@ -43,11 +43,14 @@ Viewer plugins live under `viewers/{Name}ViewerPlugin/` — each plugin ID below
 | `needletools-usd-viewer`           | Needle USD Viewer                 | 3d       | .usd, .usda, .usdc, .usdz                                                                                                                | enabled (requires ALLOWUNSAFEEVAL)                  |
 | `threejs-viewer`                   | Three.js Viewer                   | 3d       | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .stp, .step, .iges, .igs, .brep                                                   | enabled                                             |
 | `physna-viewer`                    | Physna Viewer                     | 3d       | .3ds, .asm, .catpart, .catproduct, .glb, .iam, .iges, .igs, .ipt, .jt, .obj, .par, .prt, .sldasm, .sldprt, .stl, .step, .stp, .x_b, .x_t | enabled (requires PHYSNA_ADDON)                     |
+| `miris-stream-viewer`              | Miris Spatial Streaming           | 3d       | .usd, .usda, .usdc, .usdz                                                                                                                | enabled (requires MIRIS_ADDON, ALLOWUNSAFEEVAL)     |
 | `thatopenwebifc-viewer`            | ThatOpen IFC BIM Viewer           | 3d       | .ifc, .ifczip                                                                                                                            | enabled (requires ALLOWUNSAFEEVAL)                  |
 | `robotics-data-viewer`             | Robotics Data Viewer (Lichtblick) | data     | .mcap, .bag, .db3, .ulg, .ulog                                                                                                           | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
 | `preview-viewer`                   | Preview Viewer                    | preview  | \* (wildcard)                                                                                                                            | enabled                                             |
 
 > `supersplat-viewer` is an **iframe-embedded** viewer — it self-hosts a from-source SuperSplat build under `public/viewers/supersplat/` and loads files via a presigned URL `?load=` parameter (see "A Framed Viewer Must Not Receive a Signed URL in the Query String" below before copying that pattern). The build is WebGPU-only (no WebGL2 fallback). Under the production CSP its `<base>` element, inline script, and embedded `pc-icon` data-URI font are blocked without breaking the editor.
+
+> `miris-stream-viewer` (Miris Spatial Streaming add-on) streams the Miris asset recorded in a USD file's `miris_*` metadata. It asks `GET /addon/miris/asset-status` for the file's state, and only for a streamable file gets a viewer key from `POST /addon/miris/viewer-key` (in both viewer key modes, held in memory for that open) and then loads the `@miris-inc/*` SDK, bounded at 60 s; its entry has no `dependencyManagerMethod`, so the registry never loads the SDK up front. `autoSelect` opens it ahead of the Needle USD viewer, which its "not yet streamed" guidance names. The `@miris-inc/*` packages are pinned exactly and require `three` within `>=0.182.0 <0.186.0`, so upgrade them and `three` together.
 
 > `robotics-data-viewer` is an **iframe-embedded** viewer — `web/customInstalls/robotics/roboticsViewerInstall.js` builds the Lichtblick web app (MPL-2.0, pinned tag and commit) from source with the VAMS overlay in `web/customInstalls/robotics/overlay/` into `public/viewers/robotics/`. The host component (`RoboticsDataViewerPlugin/`) presigns each file under its own asset and hands the URLs over in the iframe's URL **fragment** (`roboticsDeepLink.ts`). `.mcap` (several files on one timeline) and `.bag` are read with HTTP Range requests; `.db3` (one file or a ROS 2 split bag) and `.ulg`/`.ulog` are downloaded whole, limited to `customParameters.maxWholeFileBytes` (1 GiB) across the selection. No Lichtblick extension can be installed or loaded: an extension is code run in the framed document, which is same-origin with VAMS, so the overlay entrypoint renders upstream `SharedRoot` with an empty extension loader list instead of upstream `WebRoot` (which always adds IndexedDB loaders). The install's build check and `roboticsBuild.test.ts` fail if that changes. User Scripts stay available (they run in a web worker).
 
@@ -294,13 +297,13 @@ An add-on is optional, upstream-maintained code enabled by configuration: it eit
 
 The registry loads three tiers, merged in this order by `core/viewerSources.ts`:
 
-| Tier   | Config                           | Manifest                           | Owner                                                                   |
-| ------ | -------------------------------- | ---------------------------------- | ----------------------------------------------------------------------- |
-| Core   | `config/viewerConfig.json`       | `viewers/manifest.ts`              | upstream                                                                |
-| Add-on | `config/addonViewerConfig.json`  | `viewers/addonManifest.ts`         | upstream (the Physna viewer and the licensed VNTANA and VEERUM viewers) |
-| Custom | `config/customViewerConfig.json` | `viewers/custom/customManifest.ts` | fork extension point (shipped empty)                                    |
+| Tier   | Config                           | Manifest                           | Owner                                                                                                |
+| ------ | -------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Core   | `config/viewerConfig.json`       | `viewers/manifest.ts`              | upstream                                                                                             |
+| Add-on | `config/addonViewerConfig.json`  | `viewers/addonManifest.ts`         | upstream (the Physna and Miris Spatial Streaming viewers and the licensed VNTANA and VEERUM viewers) |
+| Custom | `config/customViewerConfig.json` | `viewers/custom/customManifest.ts` | fork extension point (shipped empty)                                                                 |
 
-An add-on's viewer, and a licensed viewer that ships disabled (VNTANA, VEERUM), is registered in the add-on files, never in `viewerConfig.json` or `manifest.ts` (`infra/test/addon/addonCoreSeparation.test.ts`; `config/viewerConfig.test.ts` checks that the core files hold no `(LICENSED VIEWER)` entry). Its plugin directory stays under `viewers/` like a core viewer's (`viewers/VntanaViewerPlugin/`, `viewers/VeerumViewerPlugin/`, `viewers/PhysnaViewerPlugin/`). To enable a licensed viewer, set `"enabled": true` on its entry in `config/addonViewerConfig.json`; its install script (`web/customInstalls/vntana/`, `web/customInstalls/veerum/`, unchanged in the `postinstall` chain) decides whether to fetch the vendor package with `web/customInstalls/utility/checkViewerEnabled.js`, which reads the core, add-on and custom config files in the registry's order. A fork's viewer lives in `viewers/custom/<Name>Plugin/` and is registered in the custom files (Steps 1–4 apply with those paths); its install steps go in `web/customInstalls/custom/customInstall.js`, which `postinstall` already runs, so a fork does not edit the `postinstall` chain. A custom entry whose `id` repeats a core or add-on `id` is skipped with a console error, and a custom manifest key that repeats a shipped one is ignored, so a fork cannot replace a shipped viewer. Ids prefixed `custom-` are recommended, not enforced. The add-on viewers register after every core viewer, so a priority tie between a core and an add-on viewer resolves to the core one. The catalog table above lists core and add-on viewers only (`config/viewerConfig.test.ts` checks it against both files). `core/viewerSources.test.ts` covers the merge.
+An add-on's viewer, and a licensed viewer that ships disabled (VNTANA, VEERUM), is registered in the add-on files, never in `viewerConfig.json` or `manifest.ts` (`infra/test/addon/addonCoreSeparation.test.ts`; `config/viewerConfig.test.ts` checks that the core files hold no `(LICENSED VIEWER)` entry). Its plugin directory stays under `viewers/` like a core viewer's (`viewers/VntanaViewerPlugin/`, `viewers/VeerumViewerPlugin/`, `viewers/PhysnaViewerPlugin/`, `viewers/MirisStreamViewerPlugin/`). To enable a licensed viewer, set `"enabled": true` on its entry in `config/addonViewerConfig.json`; its install script (`web/customInstalls/vntana/`, `web/customInstalls/veerum/`, unchanged in the `postinstall` chain) decides whether to fetch the vendor package with `web/customInstalls/utility/checkViewerEnabled.js`, which reads the core, add-on and custom config files in the registry's order. A fork's viewer lives in `viewers/custom/<Name>Plugin/` and is registered in the custom files (Steps 1–4 apply with those paths); its install steps go in `web/customInstalls/custom/customInstall.js`, which `postinstall` already runs, so a fork does not edit the `postinstall` chain. A custom entry whose `id` repeats a core or add-on `id` is skipped with a console error, and a custom manifest key that repeats a shipped one is ignored, so a fork cannot replace a shipped viewer. Ids prefixed `custom-` are recommended, not enforced. The add-on viewers register after every core viewer, so a priority tie between a core and an add-on viewer resolves to the core one. The catalog table above lists core and add-on viewers only (`config/viewerConfig.test.ts` checks it against both files). `core/viewerSources.test.ts` covers the merge.
 
 ---
 
@@ -318,6 +321,7 @@ An add-on's viewer, and a licensed viewer that ships disabled (VNTANA, VEERUM), 
 | `supportsMultiFile`          | boolean           | Can handle multiple files at once                    |
 | `canFullscreen`              | boolean           | Supports fullscreen mode                             |
 | `priority`                   | number            | Lower = listed first when multiple viewers match     |
+| `autoSelect`                 | boolean?          | Auto-open as the sole top-priority match (visualize) |
 | `loadStrategy`               | "lazy" \| "eager" | When to load the component                           |
 | `category`                   | string            | Viewer category (3d, media, document, data, preview) |
 | `featuresEnabledRestriction` | string[]?         | Required feature flags                               |
@@ -330,12 +334,13 @@ An add-on's viewer, and a licensed viewer that ships disabled (VNTANA, VEERUM), 
 
 ## CSP / `unsafe-eval`
 
-Some viewers require the `ALLOWUNSAFEEVAL` feature flag because their loaders (WASM or JIT) use `eval`. Four carry the gate in `viewerConfig.json` (`featuresEnabledRestriction: ["ALLOWUNSAFEEVAL"]`), so the registry does not offer them at all when the deployment has not enabled `allowUnsafeEvalFeatures`:
+Some viewers require the `ALLOWUNSAFEEVAL` feature flag because their loaders (WASM or JIT) use `eval`. Five carry the gate (`featuresEnabledRestriction` includes `"ALLOWUNSAFEEVAL"`), four in `viewerConfig.json` and one in `addonViewerConfig.json`, so the registry does not offer them at all when the deployment has not enabled `allowUnsafeEvalFeatures`:
 
 -   Needle USD Viewer
 -   SuperSplat Editor (also iframe-embedded)
 -   ThatOpen IFC BIM Viewer (web-ifc)
 -   Robotics Data Viewer (Lichtblick, also iframe-embedded)
+-   Miris Spatial Streaming (add-on, also requires `MIRIS_ADDON`)
 
 The **Three.js viewer is deliberately not gated**: its mesh formats (.glb, .obj, .stl, …) need no `eval`, and gating the whole plugin would remove them too. Only its OCCT CAD path (.stp/.step/.iges/.igs/.brep) has the heavier requirements, and `loadFile()` in `ThreeJSViewerPlugin/utils/fileLoaders.ts` reports them as a message on the file rather than hiding the viewer — it checks for `SharedArrayBuffer` (the COI headers) and for the OCCT bundle before loading.
 
