@@ -47,9 +47,9 @@ infra/
       s3AssetBuckets.ts         # Global asset bucket registry
       security.ts               # KMS, CDK Nag, CSP, TLS enforcement, audit logging setup
       service-helper.ts         # ServiceFormatter: ARN(), Endpoint, Principal
-    lambdaBuilder/              # 17 builder files, ~40+ function builders (asset, database, metadata, auth, comment,
+    lambdaBuilder/              # 18 builder files, ~40+ function builders (asset, database, metadata, auth, comment,
                                 # config, pipeline, workflow, role, userRole, tag, tagType, subscription, sendEmail,
-                                # metadataSchema, assetsLink, searchIndexBucketSync)
+                                # metadataSchema, assetsLink, searchIndexBucketSync, miris)
     nestedStacks/
       vpc/vpcBuilder-nestedStack.ts      # VPC, subnets, VPC endpoints
       storage/
@@ -202,7 +202,7 @@ Configuration values resolve in order: CDK context (`-c key=value`) → `config/
 
 ## Lambda Builder Pattern
 
-All 17 lambda builder files in `lib/lambdaBuilder/` follow a strict, consistent pattern. Every function builder:
+All 18 lambda builder files in `lib/lambdaBuilder/` follow a strict, consistent pattern. Every function builder:
 
 ### Standard Function Signature + Configuration
 

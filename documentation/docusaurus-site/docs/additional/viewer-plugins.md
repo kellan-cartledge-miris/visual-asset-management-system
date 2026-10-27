@@ -20,6 +20,7 @@ Viewer plugins are configured in `web/src/visualizerPlugin/config/viewerConfig.j
 | `supportsMultiFile`          | boolean  | Whether the viewer can display multiple files simultaneously               |
 | `canFullscreen`              | boolean  | Whether fullscreen mode is supported                                       |
 | `priority`                   | number   | Lower number = listed first when multiple viewers match                    |
+| `autoSelect`                 | boolean  | Open without asking when the only match at the lowest priority             |
 | `loadStrategy`               | string   | `"lazy"` (loaded on demand) or `"eager"` (loaded at startup)               |
 | `category`                   | string   | Viewer category (`3d`, `media`, `document`, `data`, `preview`)             |
 | `enabled`                    | boolean  | Whether the plugin is active                                               |
@@ -33,12 +34,12 @@ Viewer plugins are configured in `web/src/visualizerPlugin/config/viewerConfig.j
 
 VAMS includes one Miris viewer plugin, which streams the Miris asset recorded in a USD file's stream metadata.
 
-| Plugin ID             | Extensions                        | Priority | Feature flag      | Role                                                                                                                          |
-| --------------------- | --------------------------------- | -------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `miris-stream-viewer` | `.usd`, `.usda`, `.usdc`, `.usdz` | 0        | `MIRIS_STREAMING` | Streams the Miris asset recorded in the file's `miris_asset_uuid` metadata, or shows how to stream it. Auto-selected for USD. |
+| Plugin ID             | Extensions                        | Priority | Feature flags                        | Role                                                                                                                                                        |
+| --------------------- | --------------------------------- | -------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `miris-stream-viewer` | `.usd`, `.usda`, `.usdc`, `.usdz` | 0        | `MIRIS_STREAMING`, `ALLOWUNSAFEEVAL` | Streams the Miris asset recorded in the file's `miris_asset_uuid` metadata, or shows how to stream it. Opens USD files without asking (`autoSelect: true`). |
 
 :::note
-For configuration, the stream metadata, the upload flow, architecture, and requirements, see the dedicated [Miris Spatial Streaming Integration](../developer/external-integrations/miris-spatial-streaming.md) guide. The viewer renders with the Miris web SDK (`@miris-inc/components`, `@miris-inc/three` and `@miris-inc/core`, pinned together) using WebGPU where the browser grants an adapter and WebGL 2 otherwise. The viewer streams with the viewer key configured in `app.miris.viewerKey`, or, with `app.miris.viewerKeyMode` set to `perView`, with a short-lived key that VAMS mints for each viewer open.
+For configuration, the stream metadata, the upload flow, architecture, and requirements, see the dedicated [Miris Spatial Streaming Integration](../developer/external-integrations/miris-spatial-streaming.md) guide. The viewer renders with the Miris web SDK (`@miris-inc/components`, `@miris-inc/three` and `@miris-inc/core`, pinned together) using WebGPU where the browser grants an adapter and WebGL 2 otherwise. GES assets need WebGPU; without a WebGPU adapter the SDK shows its own message in place of such an asset. The viewer streams with the viewer key configured in `app.miris.viewerKey`, or, with `app.miris.viewerKeyMode` set to `perView`, with a short-lived key that VAMS mints for each viewer open.
 :::
 
 ---

@@ -104,7 +104,7 @@ paths:
     /secure-config:
         get:
             summary: "Get secure runtime configuration."
-            description: "Returns the runtime configuration for the authenticated user, including the enabled feature flags, the Amazon Location Service map API URL (when enabled), and the deployed web application URL."
+            description: "Returns the runtime configuration for the authenticated user, including the enabled feature flags, the Amazon Location Service map API URL (when enabled), the deployed web application URL, and the Miris viewer key (when Miris Spatial Streaming uses a static viewer key)."
             responses:
                 "200":
                     description: Runtime configuration retrieved successfully.
@@ -123,10 +123,14 @@ paths:
                                     webDeployedUrl:
                                         type: string
                                         description: "Deployed web application URL; empty when not configured"
+                                    mirisViewerKey:
+                                        type: string
+                                        description: "Deployment-wide Miris viewer key that the Miris stream viewer authenticates with. Set only when `app.miris.enabled` is `true` and `app.miris.viewerKeyMode` is `static`; an empty string otherwise, including in `perView` mode."
                                 required:
                                     - featuresEnabled
                                     - locationServiceApiUrl
                                     - webDeployedUrl
+                                    - mirisViewerKey
                 "403":
                     description: Not authorized.
                     content:
@@ -9008,7 +9012,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /database/{databaseId}/assets/{assetId}/miris/asset-status:
         get:
             summary: "Get the Miris stream status of a file."
-            description: "Returns the Miris stream recorded on one asset file and the stream's processing state. The Miris asset UUID is read server side from the file's metadata (`miris_asset_uuid`); the request carries no UUID. The handler enforces GET on the asset before reading any metadata, then reads the `miris_asset_uuid`, `miris_source_version_id`, `miris_uploaded_at`, and `miris_display_name` keys of the file. The keys are read from the file's current metadata, including when the caller is viewing a historical asset version. When `miris_asset_uuid` holds a UUID, the handler asks Miris for the asset's processing state: in static viewer key mode it calls the Miris viewer API with the deployment viewer key (when a viewer key and API base URL are configured); in perView mode (`app.miris.viewerKeyMode: \"perView\"`) it reads the asset with the Miris Integration Key. This route is only deployed when `app.miris.enabled` is `true`."
+            description: "Returns the Miris stream recorded on one asset file and the stream's processing state. The Miris asset UUID is read server side from the file's metadata (`miris_asset_uuid`); the request carries no UUID. The handler enforces GET on the asset before reading any metadata, then reads the `miris_asset_uuid`, `miris_source_version_id`, `miris_uploaded_at`, and `miris_display_name` keys of the file. The keys are read from the file's current metadata, including when the caller is viewing a historical asset version. When `miris_asset_uuid` holds a UUID, the handler asks Miris for the asset's processing state: in static viewer key mode it calls the Miris viewer API with the deployment viewer key (when a viewer key and API base URL are configured); in perView mode (`app.miris.viewerKeyMode: \"perView\"`) it reads the asset and its tags with the Miris Integration Key, and reports `notBound` when Miris has no such asset (404) or the asset lacks either binding tag, `vams-asset-{assetId}` or `vams-database-{databaseId}`; a Miris error, redirect, or timeout gives `unknown`. This route is only deployed when `app.miris.enabled` is `true`."
             parameters:
               - name: "databaseId"
                 in: "path"
@@ -9061,7 +9065,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /database/{databaseId}/assets/{assetId}/miris/viewer-key:
         post:
             summary: "Mint a per-view Miris viewer key for a file."
-            description: "Creates a short-lived Miris viewer key that can stream only the Miris asset recorded on one asset file, and returns its key material once. The Miris asset UUID is read server side from the file's metadata (`miris_asset_uuid`); the request carries no UUID. The handler enforces GET on the asset before reading any metadata. The key is created with the Miris Integration Key, scoped to exactly that Miris asset, and expires `app.miris.perViewKey.ttlMinutes` minutes after it is minted. Its key ID (never the key material) is recorded in MirisViewerKeyStorageTable and in the audit log, and the key is deleted from Miris after it expires. The response carries `Cache-Control: no-cache, no-store`. This route is only deployed when `app.miris.enabled` is `true` and `app.miris.viewerKeyMode` is `perView`."
+            description: "Creates a short-lived Miris viewer key that can stream only the Miris asset recorded on one asset file, and returns its key material once. The Miris asset UUID is read server side from the file's metadata (`miris_asset_uuid`); the request carries no UUID. The handler enforces GET on the asset before reading any metadata, then reads the Miris asset with the Miris Integration Key and mints a key only when the Miris asset carries both binding tags, `vams-asset-{assetId}` and `vams-database-{databaseId}`. The key is created with the Miris Integration Key, scoped to exactly that Miris asset, and expires `app.miris.perViewKey.ttlMinutes` minutes after it is minted. Its key ID (never the key material) is recorded in MirisViewerKeyStorageTable and in the audit log, and the key is deleted from Miris after it expires. The response carries `Cache-Control: no-cache, no-store`. This route is only deployed when `app.miris.enabled` is `true` and `app.miris.viewerKeyMode` is `perView`."
             parameters:
               - name: "databaseId"
                 in: "path"
@@ -9100,11 +9104,11 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/mirisViewerKeyErrorResponse"
                 "403":
-                    description: "Caller lacks API-level access to POST on the route or GET access to the asset."
+                    description: "Caller lacks API-level access to POST on the route or GET access to the asset, or the Miris asset lacks either binding tag or Miris reports that it has no such asset (the body then carries `state: notBound`). No key is minted."
                     content:
                         application/json:
                             schema:
-                                $ref: '#/components/schemas/error'
+                                $ref: "#/components/schemas/mirisViewerKeyErrorResponse"
                 "404":
                     description: "The file records no Miris stream: `miris_asset_uuid` is absent or empty (the body carries `state: notStreamed`)."
                     content:
@@ -9118,7 +9122,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "502":
-                    description: "Miris did not create a usable viewer key: it returned a status other than 200 or 201, was unreachable, or returned a response without a key ID and key material. When Miris returned a key ID but no key material, VAMS deletes that key from Miris. The Miris response is not returned."
+                    description: "Miris could not be read or did not create a usable viewer key: it was unreachable or timed out, returned a redirect, returned an error status when the asset was read or a status other than 200 or 201 when the key was created, or returned a response without a key ID and key material. When Miris returned a key ID but no key material, VAMS deletes that key from Miris. The Miris response is not returned."
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "504":
+                    description: "Too little of the request deadline (at most 20 seconds, kept inside the API Gateway timeout) remained to start the next step: under 1 second before a Miris call, or under 8 seconds when the Integration Key must first be read from AWS Secrets Manager. A Miris call that starts and then times out returns 502."
                     content:
                         application/json:
                             schema:
@@ -13826,7 +13836,7 @@ components:
                     description: "Value of `miris_display_name`."
                 state:
                     type: string
-                    description: "`notStreamed` when `miris_asset_uuid` is absent or empty; `invalidUuid` when it is not a UUID; `unknown` when the processing state could not be established (no viewer key configured, or Miris unreachable, not visible to the viewer key, or returning no usable state); `processing` when Miris is still preparing the asset (its viewer API returned HTTP 400); otherwise the Miris processing state as reported, such as `preview`, `streamable`, `error`, or `failed`."
+                    description: "`notStreamed` when `miris_asset_uuid` is absent or empty; `invalidUuid` when it is not a UUID; `notBound` in perView mode when the Miris asset lacks either binding tag (`vams-asset-{assetId}`, `vams-database-{databaseId}`) or Miris reports that it has no such asset; `unknown` when the processing state could not be established (no viewer key configured, or Miris unreachable, not answering in time, not visible to the viewer key, or returning no usable state); `processing` when Miris is still preparing the asset (its viewer API returned HTTP 400); otherwise the Miris processing state as reported, such as `preview`, `streamable`, `error`, or `failed`."
             required:
                 - filePath
                 - mirisAssetUuid
@@ -13877,7 +13887,7 @@ components:
                     type: string
                 state:
                     type: string
-                    description: "`notStreamed` (404) or `invalidUuid` (400) when the file's stream metadata is the cause; absent otherwise."
+                    description: "`notStreamed` (404) or `invalidUuid` (400) when the file's stream metadata is the cause, and `notBound` (403) when the Miris asset is not bound to the asset; absent otherwise."
             required:
                 - message
 

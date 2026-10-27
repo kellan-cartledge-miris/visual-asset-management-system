@@ -96,7 +96,7 @@ VAMS includes the following built-in pipelines, each controlled by a configurati
 | [NVIDIA Isaac Lab Training](nvidia-isaac-lab.md)       | `useIsaacLabTraining`                                  | NVIDIA Isaac Lab reinforcement learning training and evaluation for robotic simulation                                                                                 | Custom simulation configs                                                                               | AWS Batch (GPU)                    | Yes          |
 | [RapidPipeline](rapidpipeline.md)                      | `useRapidPipeline.useEcs` or `useRapidPipeline.useEks` | Optimize and convert 3D models with the licensed DGG RapidPipeline engine                                                                                              | GLB, GLTF, OBJ, FBX, STL, PLY, USD, USDZ, DAE, ABC                                                      | Amazon ECS (Fargate) or Amazon EKS | Yes          |
 | [ModelOps](model-ops.md)                               | `useModelOps`                                          | Optimize and convert 3D models with the licensed VNTANA Intelligent 3D Optimization Engine                                                                             | GLB, GLTF, OBJ, FBX, STL, PLY, USD, USDZ, DAE, ABC                                                      | Amazon ECS (Fargate)               | Yes          |
-| [Miris Auto-Upload](miris-upload.md)                   | `app.miris.upload`                                     | Upload USD assets to Miris Spatial Streaming; record the Miris asset in the USD file's metadata                                                                        | USD, USDA, USDC, USDZ                                                                                   | Lambda                             | No           |
+| [Miris Auto-Upload](miris-upload.md)                   | `app.miris.upload`                                     | Upload USD assets to Miris Spatial Streaming; record the Miris asset in the USD file's metadata                                                                        | USD, USDA, USDC, USDZ                                                                                   | AWS Batch (Fargate)                | Yes          |
 
 :::note[Licensed container pipelines]
 RapidPipeline and ModelOps run third-party container images that require a subscription from the vendor. Supply the image through the pipeline's `ecrContainerImageURI` option as an Amazon ECR image URI. See [RapidPipeline](rapidpipeline.md) and [ModelOps](model-ops.md) for licensing details and prerequisites.
@@ -152,7 +152,7 @@ All container pipelines share a common set of interface endpoints: **AWS Batch**
 | :-------------------------------------- | :----------- | :--------------------------------- | :------------------------------------------------- |
 | 3D Basic Conversion                     | No           | AWS Lambda                         | — (runs outside VPC)                               |
 | CAD/Mesh Metadata Extraction            | No           | AWS Lambda                         | — (runs outside VPC)                               |
-| Coordinate Transform                    | Yes          | AWS Batch (Fargate)                | Amazon ECS                                         |
+| Coordinate Transform                    | Yes          | AWS Batch (Fargate)                | — (shared Batch/ECR endpoints only)                |
 | Potree Point Cloud Viewer               | Yes          | AWS Batch (Fargate)                | — (shared Batch/ECR endpoints only)                |
 | 3D Preview Thumbnail                    | Yes          | AWS Batch (Fargate)                | — (shared Batch/ECR endpoints only)                |
 | GenAI Metadata Labeling                 | Yes          | AWS Batch (Fargate)                | Amazon Bedrock Runtime, Amazon Rekognition¹        |
@@ -163,13 +163,16 @@ All container pipelines share a common set of interface endpoints: **AWS Batch**
 | NVIDIA Isaac Lab Training               | Yes          | AWS Batch (GPU)                    | Amazon ECS, Amazon ECS Agent, Amazon ECS Telemetry |
 | RapidPipeline                           | Yes          | Amazon ECS (Fargate) or Amazon EKS | Amazon ECS²                                        |
 | ModelOps                                | Yes          | Amazon ECS (Fargate)               | Amazon ECS²                                        |
+| Miris Auto-Upload                       | Yes          | AWS Batch (Fargate)                | Amazon ECS³                                        |
 
 ¹ Amazon Bedrock Runtime and Amazon Rekognition endpoints are created only when GenAI Metadata Labeling is enabled **and** all Lambda functions run in the VPC (`useGlobalVpc.useForAllLambdas`).
 
 ² RapidPipeline and ModelOps containers run in private subnets with internet egress so they can reach the AWS Marketplace metering API. Enabling either pipeline adds public and private subnets to the VAMS VPC; when importing an external VPC, supply both public and private subnet IDs in `app.useGlobalVpc`, or configuration validation fails.
 
+³ The Miris Auto-Upload jobs run in private subnets and reach the Miris service on the public internet through the NAT gateway; no VPC endpoint reaches Miris. When importing an external VPC, supply private subnet IDs with a route to the internet.
+
 :::info[Endpoint placement and ECS consolidation]
-Pipeline interface endpoints are placed in the isolated subnets, except the Amazon ECS endpoint, which is placed in private subnets for the container pipelines that need egress (Coordinate Transform, Gaussian Splatting, NVIDIA Cosmos, NVIDIA Cosmos 3, NVIDIA Gr00t, RapidPipeline, ModelOps) and in isolated subnets for Isaac Lab Training. Only one Amazon ECS interface endpoint can exist per VPC when private DNS is enabled, so VAMS consolidates ECS endpoint subnets across pipeline types — private subnets take priority over isolated subnets when both are needed. Amazon ECS Agent and Amazon ECS Telemetry are distinct services from Amazon ECS and do not conflict with that single ECS endpoint.
+Pipeline interface endpoints are placed in the isolated subnets, except the Amazon ECS endpoint, which is placed in private subnets for the container pipelines that need egress (Gaussian Splatting, NVIDIA Cosmos, NVIDIA Cosmos 3, NVIDIA Gr00t, RapidPipeline, ModelOps, Miris Auto-Upload) and in isolated subnets for Isaac Lab Training. Only one Amazon ECS interface endpoint can exist per VPC when private DNS is enabled, so VAMS consolidates ECS endpoint subnets across pipeline types — private subnets take priority over isolated subnets when both are needed. Amazon ECS Agent and Amazon ECS Telemetry are distinct services from Amazon ECS and do not conflict with that single ECS endpoint.
 :::
 
 :::warning[VPC Endpoint Costs]

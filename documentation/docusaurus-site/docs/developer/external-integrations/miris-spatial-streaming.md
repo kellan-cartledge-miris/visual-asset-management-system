@@ -1,6 +1,6 @@
 # Miris Spatial Streaming Integration
 
-[Miris Spatial Streaming](https://miris.com) is a platform that delivers 3D geometry progressively — assets load at a lower fidelity first and sharpen to full quality within seconds, similar to video streaming but for 3D content. VAMS integrates with Miris so that USD assets can be uploaded to the Miris platform and then streamed directly inside the VAMS web viewer, without downloading the full geometry to the browser.
+[Miris Spatial Streaming](https://miris.com) delivers 3D geometry progressively: an asset loads at a lower fidelity first and sharpens to full quality within seconds, much as a video stream does. VAMS integrates with Miris so that USD assets can be uploaded to Miris and then streamed directly inside the VAMS web viewer, without downloading the full geometry to the browser.
 
 ---
 
@@ -11,10 +11,10 @@ The integration has two halves that work together:
 -   **The Miris viewer plugin** renders Miris-hosted assets in the VAMS file viewer. When a user opens a USD file, the viewer streams the Miris asset recorded in that file's [stream metadata](#stream-metadata).
 -   **The Miris Auto-Upload pipeline** uploads supported USD source assets to Miris, waits for processing, and records the resulting Miris asset as file metadata on the source USD file. See the [Miris Auto-Upload Pipeline](../../pipelines/miris-upload.md) for the pipeline details.
 
-The end-to-end flow is: a USD asset is uploaded to Miris (automatically on file upload, or on demand through the file manager's **Automation** action) → Miris processes it into a streamable asset → the Miris asset UUID is written to the USD file's metadata → the viewer streams the asset when a user opens the USD file. The stream metadata can also be set by hand, for example to point a USD file at an asset that is already on Miris.
+The end-to-end flow is: a USD asset is uploaded to Miris (automatically on file upload, or on demand through the file manager's **Automation** action) → Miris processes it into a streamable asset → the Miris asset UUID is written to the metadata of the asset's root USD file → the viewer streams the asset when a user opens the USD file. The stream metadata can also be set by hand, for example to point a USD file at an asset that is already on Miris.
 
 :::info
-Miris integration is optional and does not affect core VAMS functionality. It cannot be enabled in GovCloud or air-gapped deployments, and it requires the `unsafe-eval` Content Security Policy directive (see [Requirements](#requirements-and-limitations)).
+Miris integration is optional and does not affect core VAMS functionality. Miris is a service on the public internet, so the integration cannot be enabled when `app.govCloud.enabled` is `true`, as the restricted partitions (AWS GovCloud (US), AWS European Sovereign Cloud, and the ISO partitions) require. It also requires the `unsafe-eval` Content Security Policy directive (see [Requirements](#requirements-and-limitations)).
 :::
 
 ---
@@ -23,16 +23,19 @@ Miris integration is optional and does not affect core VAMS functionality. It ca
 
 VAMS includes one Miris viewer plugin for USD files.
 
-| Plugin ID             | Extensions                        | Priority | Feature flag      | Role                                                                |
-| --------------------- | --------------------------------- | -------- | ----------------- | ------------------------------------------------------------------- |
-| `miris-stream-viewer` | `.usd`, `.usda`, `.usdc`, `.usdz` | 0        | `MIRIS_STREAMING` | Streams the Miris asset recorded in the USD file's stream metadata. |
+| Plugin ID             | Extensions                        | Priority | Feature flags                           | Role                                                                |
+| --------------------- | --------------------------------- | -------- | --------------------------------------- | ------------------------------------------------------------------- |
+| `miris-stream-viewer` | `.usd`, `.usda`, `.usdc`, `.usdz` | 0        | `MIRIS_STREAMING` and `ALLOWUNSAFEEVAL` | Streams the Miris asset recorded in the USD file's stream metadata. |
 
-Because it has priority `0`, the plugin is auto-selected over other USD viewers (such as the Needle USD Viewer) when `MIRIS_STREAMING` is enabled; the viewer selector remains available to switch viewers. When a USD file is opened, the plugin calls the [stream status endpoint](../../api/miris.md) with the file's object key and acts on the result:
+The plugin's `viewerConfig.json` entry sets `autoSelect: true`, so when it is the only USD viewer at the lowest priority (`0`) it opens automatically instead of waiting for the user to choose; other USD viewers, such as the Needle USD Viewer, remain in the viewer selector. When a USD file is opened, the plugin calls the [stream status endpoint](../../api/miris.md) with the file's object key and acts on the result:
 
--   **The file has no Miris asset UUID**: shows a "Not yet streamed with Miris" note pointing to the file manager's **Automation** action, which runs the **Stream with Miris** template of the auto-registered `miris-upload` workflow on the file. The viewer does not start an upload itself.
+-   **The file has no Miris asset UUID**: shows a "Not yet streamed with Miris" note. The note suggests the **Needle USD Viewer (Experimental)** for viewing the file now, and the file manager's **Automation** action, which runs the **Stream with Miris** template of the auto-registered `miris-upload` workflow on the file, for streaming it. The viewer does not start an upload itself.
 -   **Miris is still preparing the asset**: shows a "preparing" overlay (processing typically takes 1–2 hours after upload) and refreshes automatically when the asset becomes streamable.
 -   **The asset is streamable, or Miris could not be queried**: streams the asset with a viewer key, with `miris_display_name` as the overlay label. In `static` mode the key is the deployment's viewer key; in [`perView` mode](#per-view-viewer-keys) the viewer first requests a key from VAMS, and shows an error instead of the stream if the request is denied (`403`) or fails. The status check is advisory and does not block streaming.
+-   **The Miris asset is not bound to this VAMS asset** (`perView` mode): the Miris asset lacks one of the [binding tags](#binding-tags), or Miris reports that it has no such asset because it was deleted or is not visible to the Integration Key's workspace. Shows an error that names both tags instead of the stream.
 -   **The stored UUID is not a valid UUID, or Miris reports a processing failure**: shows an error message instead of the stream.
+
+Each error message offers a **Retry** button that loads the stream again, starting with the status check.
 
 When the file records the Amazon S3 version it was streamed from (`miris_source_version_id`) and that version differs from the version being viewed, the viewer streams the recorded asset and shows a banner: "This stream was built from a different version of this file. Run Stream with Miris again to update it." When neither a file version nor an asset version is selected, the viewer compares against the file's current version; viewing a historical asset version without a file version shows no banner. A file without a recorded source version, which is typical of hand-edited metadata, shows no banner.
 
@@ -48,9 +51,9 @@ The viewer renders with the Miris web SDK, which VAMS bundles from three npm pac
 
 ### Rendering
 
-The SDK renders with WebGPU where the browser grants a WebGPU adapter. When it does not, the viewer selects the SDK's WebGL 2 engine before the first scene mounts. A device with neither shows "Miris streaming is not supported on this device" as soon as the viewer opens, instead of a blank panel. Browsers that grant a WebGPU adapter need no WebGL 2 context.
+The viewer loads the SDK only after the status check reports a stream to open, so a file that is not streamed never loads it. The SDK renders with WebGPU where the browser grants a WebGPU adapter. When it does not, the viewer selects the SDK's WebGL 2 engine before the first scene mounts. A device with neither shows "Miris streaming is not supported on this device" instead of a blank panel. Browsers that grant a WebGPU adapter need no WebGL 2 context.
 
-Adding `?shark=0` to the page's query string, before the `#`, forces the WebGL 2 engine on a browser that supports WebGPU (for example `https://vams.example.com/?shark=0#/databases`). Use it to tell an engine-specific rendering problem from a streaming problem.
+Miris assets in the GES format need WebGPU. On a browser without a WebGPU adapter the viewer still opens them, and the SDK shows its own message that the asset needs WebGPU in place of the stream. Other assets stream with the WebGL 2 engine.
 
 ### Content Security Policy
 
@@ -59,7 +62,8 @@ With `app.miris.enabled`, the Content Security Policy gains `blob:` in `script-s
 ### Troubleshooting
 
 -   **The panel shows "Miris streaming is not supported on this device"**: the browser grants neither a WebGPU adapter nor a WebGL 2 context, or the WebGL 2 engine could not compile its shaders. Enable hardware acceleration, or use a supported browser.
--   **A render problem on a WebGPU browser**: reload with `?shark=0` to use the WebGL 2 engine.
+-   **The SDK reports that WebGPU is required**: the asset is a GES asset and the browser grants no WebGPU adapter. Open it in a browser that supports WebGPU, such as a current Chrome or Edge, with hardware acceleration enabled.
+-   **"The Miris asset recorded for this file is not linked to this VAMS asset"** (`perView` mode): add the two [binding tags](#binding-tags) to the Miris asset, or run **Stream with Miris** on the file again. The error also appears when Miris reports that it has no such asset: it was deleted, or it is not visible to the Integration Key's workspace.
 -   **"The Miris viewer failed to load"**: the viewer waits 60 seconds for the SDK to load and then stops. Check the Network tab for blocked or stalled SDK and `.wasm` requests and the console for CSP violations.
 -   **"Timed out waiting for Miris to start streaming"**: the stream sends no first frame within 60 seconds. An invalid or wrong-workspace viewer key and a blocked `*.miris.com` connection also surface this way, because they fire no event.
 
@@ -74,7 +78,7 @@ The Miris stream for a USD file is described by four keys in that file's metadat
 | `miris_uploaded_at`       | `date`   | When the Miris upload completed (ISO 8601 UTC, for example `2026-10-14T09:30:00Z`).                                                       |
 | `miris_display_name`      | `string` | Label shown over the stream in the viewer. The upload pipeline sets it to the name of the Miris asset.                                    |
 
-The [upload pipeline](../../pipelines/miris-upload.md#what-the-pipeline-writes) writes all four keys on the USD file it ran for (the root layer of a multi-file USD). The keys do not begin with `VAMS_` or `_`, so they are indexed for search like any other metadata.
+The [upload pipeline](../../pipelines/miris-upload.md#what-the-pipeline-writes) writes all four keys on the asset's root USD file, the one no other USD layer in the asset references (see [How the root is chosen](../../pipelines/miris-upload.md#how-the-root-is-chosen)). The keys do not begin with `VAMS_` or `_`, so they are indexed for search like any other metadata.
 
 ### Miris stream metadata schema
 
@@ -91,9 +95,9 @@ The schema record is written by a deployment custom resource:
 
 The keys are ordinary file metadata, and users can edit them through the **Miris stream** fields in the file metadata editor, the API, or the CLI. To stream a USD file from an asset that is already on Miris, set `miris_asset_uuid` on the file to that asset's UUID; `miris_display_name` is optional, and leaving `miris_source_version_id` empty streams without the different-version banner. Clearing `miris_asset_uuid` returns the file to the "Not yet streamed" state.
 
--   **Who can change the keys.** Any user with `PUT` permission on the asset can change or clear the keys. The viewer has no separate lock on them.
+-   **Who can change the keys.** Any user with `PUT` permission on the asset can change or clear the keys. The viewer has no separate lock on them. In `perView` mode a new `miris_asset_uuid` streams only when that Miris asset carries the asset's [binding tags](#binding-tags); `static` mode checks no tags.
 -   **Moving, renaming, and deleting.** Moving or renaming the USD file carries its metadata, including the stream keys, to the new path. Deleting the file deletes its metadata. Neither operation changes the asset on Miris.
--   **Re-running the upload.** Running **Stream with Miris** again overwrites the keys with the new Miris asset. See the [upload pipeline](../../pipelines/miris-upload.md#what-the-pipeline-writes) for details.
+-   **Re-running the upload.** Running **Stream with Miris** again always uploads, and a trigger on changed USD files uploads too; either overwrites the keys with the new Miris asset. See the [upload pipeline](../../pipelines/miris-upload.md#what-the-pipeline-writes) for details.
 
 ### Finding streamed files
 
@@ -115,7 +119,7 @@ Enable Miris by setting `app.miris.enabled` to `true` and either providing a vie
             "enabled": true,
             "viewerKeyMode": "static",
             "viewerKey": "your-miris-viewer-key",
-            "apiKeySecretArn": "arn:aws:secretsmanager:REGION:ACCOUNT:secret:miris-integration-key-XXXX",
+            "apiKeySecretArn": "arn:aws:secretsmanager:REGION:ACCOUNT:secret:miris-integration-key-AbCdEf",
             "mirisApiBaseUrl": "https://app.miris.com",
             "perViewKey": {
                 "ttlMinutes": 15
@@ -133,23 +137,23 @@ Enable Miris by setting `app.miris.enabled` to `true` and either providing a vie
 }
 ```
 
-| Field                             | Required                | Description                                                                                                                                                   |
-| --------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `miris.enabled`                   | Yes                     | Enables the Miris integration, the stream status endpoint, and the Miris stream schema, and in `static` mode puts the viewer key in `/secure-config`.         |
-| `miris.viewerKeyMode`             | No                      | `"static"` (default) streams with `viewerKey`. `"perView"` mints a short-lived viewer key per viewer open with the Integration Key, and needs no `viewerKey`. |
-| `miris.viewerKey`                 | In `static` mode        | Miris viewer key used by the stream viewer for authentication. Treat as a secret; only shown once at creation in Miris. Ignored in `perView` mode.            |
-| `miris.apiKeySecretArn`           | For upload or `perView` | AWS Secrets Manager ARN holding the Miris Integration Key used by the upload pipeline and to mint per-view viewer keys.                                       |
-| `miris.mirisApiBaseUrl`           | No                      | Miris API base URL (default `https://app.miris.com`).                                                                                                         |
-| `miris.perViewKey.ttlMinutes`     | No                      | Lifetime of a per-view viewer key, in whole minutes from 1 to 60 (default 15).                                                                                |
-| `miris.upload.enabled`            | For upload              | Deploys the auto-upload pipeline (the `MIRIS_UPLOAD` feature).                                                                                                |
-| `miris.upload.triggerExtensions`  | For upload              | Comma-separated extensions that auto-trigger the pipeline (default `.usd,.usda,.usdc,.usdz`).                                                                 |
-| `miris.upload.taskTimeoutSeconds` | For upload              | Maximum time the upload container waits for Miris processing.                                                                                                 |
-| `miris.upload.maxAssetSizeBytes`  | For upload              | Maximum source asset size accepted for upload.                                                                                                                |
-| `webUi.allowUnsafeEvalFeatures`   | Yes                     | Must be `true`; the Miris SDK compiles code at runtime and requires the `unsafe-eval` CSP directive.                                                          |
+| Field                             | Required                | Description                                                                                                                                                                                                                                                                                                                      |
+| --------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `miris.enabled`                   | Yes                     | Enables the Miris integration, the stream status endpoint, and the Miris stream schema, and in `static` mode puts the viewer key in `/secure-config`.                                                                                                                                                                            |
+| `miris.viewerKeyMode`             | No                      | `"static"` (default) streams with `viewerKey`. `"perView"` mints a short-lived viewer key per viewer open with the Integration Key, and needs no `viewerKey`.                                                                                                                                                                    |
+| `miris.viewerKey`                 | In `static` mode        | Miris viewer key the stream viewer authenticates with. `/secure-config` returns it to every signed-in user whose role allows `GET /secure-config`, so scope it in Miris with tags and an expiry (see [Security model and limits](#security-model-and-limits)). Miris shows it only once, at creation. Ignored in `perView` mode. |
+| `miris.apiKeySecretArn`           | For upload or `perView` | Complete AWS Secrets Manager ARN, including the six-character suffix that AWS Secrets Manager appends to the secret name, of the secret holding the Miris Integration Key used by the upload pipeline and to mint per-view viewer keys.                                                                                          |
+| `miris.mirisApiBaseUrl`           | No                      | Miris API base URL (default `https://app.miris.com`).                                                                                                                                                                                                                                                                            |
+| `miris.perViewKey.ttlMinutes`     | No                      | Lifetime of a per-view viewer key, in whole minutes from 1 to 60 (default 15).                                                                                                                                                                                                                                                   |
+| `miris.upload.enabled`            | For upload              | Deploys the auto-upload pipeline (the `MIRIS_UPLOAD` feature).                                                                                                                                                                                                                                                                   |
+| `miris.upload.triggerExtensions`  | No                      | Comma-separated lowercase extensions that auto-trigger the pipeline, each one the Miris stream schema accepts (default `.usd,.usda,.usdc,.usdz`).                                                                                                                                                                                |
+| `miris.upload.taskTimeoutSeconds` | No                      | Seconds the upload container waits after the upload for Miris to report the asset as `preview` or `streamable` (default 1800). A positive whole number.                                                                                                                                                                          |
+| `miris.upload.maxAssetSizeBytes`  | No                      | Largest source, in bytes, the pipeline uploads (default 5000000000): a lone `.usdz` root alone, otherwise every file under the asset root. A larger source fails the run. A positive whole number.                                                                                                                               |
+| `webUi.allowUnsafeEvalFeatures`   | Yes                     | Must be `true`; the Miris SDK compiles code at runtime and requires the `unsafe-eval` CSP directive.                                                                                                                                                                                                                             |
 
 `miris.upload.apiKeySecretArn` and `miris.upload.mirisApiBaseUrl` are accepted as deprecated aliases of `miris.apiKeySecretArn` and `miris.mirisApiBaseUrl`; see the [Configuration Reference](../../deployment/configuration-reference.md#miris-auto-upload-pipeline-appmirisupload).
 
-Database scope for the auto-trigger is a property of the workflow that owns it, not a pipeline-level setting. The upload pipeline auto-registers a GLOBAL workflow (`miris-upload`) whose `fileUpload` trigger fires for a matching USD upload in any database. To restrict auto-uploads to specific databases, disable the global trigger and register a database-scoped copy of the workflow for each database that should auto-trigger — VAMS resolves database scope natively when it matches an uploaded file against workflow triggers.
+Database scope for the auto-trigger is a property of the workflow that owns it, not a pipeline-level setting. The upload pipeline auto-registers a GLOBAL workflow (`miris-upload`) whose `fileUpload` trigger fires for a matching USD upload in any database. To restrict auto-uploads to specific databases, disable the global trigger and register a database-scoped copy of the workflow for each database that should auto-trigger. VAMS resolves database scope natively when it matches an uploaded file against workflow triggers.
 
 Enabling these options sets the corresponding feature flags, which the frontend reads from `/api/secure-config`:
 
@@ -165,7 +169,7 @@ For the complete configuration reference, see the [Configuration Reference](../.
 
 ## Per-view viewer keys
 
-With `app.miris.viewerKeyMode` set to `"perView"`, the viewer asks VAMS for a viewer key each time it opens a USD file. VAMS checks the caller's permission on the asset, then creates a Miris viewer key scoped to that file's single Miris asset (`tags: []`, `asset_ids: [uuid]`) that expires after `app.miris.perViewKey.ttlMinutes` (default 15, from 1 to 60). No shared viewer key is deployed or sent to the browser, and a shared key that a browser cached earlier is removed from its cached configuration once the feature is active. The key is held in memory by the viewer and is not written to browser storage. See the [viewer key endpoint](../../api/miris.md#per-view-viewer-key) for the request and response.
+With `app.miris.viewerKeyMode` set to `"perView"`, the viewer asks VAMS for a viewer key each time it opens a USD file. VAMS checks the caller's permission on the asset and that the file's Miris asset carries the asset's [binding tags](#binding-tags), then creates a Miris viewer key scoped to that single Miris asset (`tags: []`, `asset_ids: [uuid]`) that expires after `app.miris.perViewKey.ttlMinutes` (default 15, from 1 to 60). No shared viewer key is deployed or sent to the browser, and a shared key that a browser cached earlier is removed from its cached configuration once the feature is active. The key is held in memory by the viewer and is not written to browser storage. See the [viewer key endpoint](../../api/miris.md#per-view-viewer-key) for the request and response.
 
 ```json
 {
@@ -173,12 +177,24 @@ With `app.miris.viewerKeyMode` set to `"perView"`, the viewer asks VAMS for a vi
         "miris": {
             "enabled": true,
             "viewerKeyMode": "perView",
-            "apiKeySecretArn": "arn:aws:secretsmanager:REGION:ACCOUNT:secret:miris-integration-key-XXXX",
+            "apiKeySecretArn": "arn:aws:secretsmanager:REGION:ACCOUNT:secret:miris-integration-key-AbCdEf",
             "perViewKey": { "ttlMinutes": 15 }
         }
     }
 }
 ```
+
+### Binding tags
+
+A Miris asset is bound to a VAMS asset by two tags on the Miris asset: `vams-asset-{assetId}` and `vams-database-{databaseId}`. Both are needed, because an asset ID is unique only within its database. In `perView` mode the status endpoint and the viewer key endpoint read the Miris asset with the Integration Key and accept it only when it carries both tags of the VAMS asset being viewed. A Miris asset that lacks either tag, or that Miris reports as missing because it was deleted or is not visible to the Integration Key's workspace, is `notBound`: no viewer key is minted, and the viewer shows an error that names both tags.
+
+Miris assets that the upload pipeline creates always carry both tags, and the pipeline drops any configured tag that uses either prefix. A Miris asset linked by hand, by setting `miris_asset_uuid` on a file, needs them added in the Miris Portal or with the Miris CLI:
+
+```bash
+miris asset update <miris-asset-uuid> --add-tags vams-asset-<assetId>,vams-database-<databaseId>
+```
+
+`static` mode does not check tags; see [Security model and limits](#security-model-and-limits).
 
 ### Requirements
 
@@ -189,6 +205,8 @@ With `app.miris.viewerKeyMode` set to `"perView"`, the viewer asks VAMS for a vi
 
 ### Security model and limits
 
+-   In `static` mode `/secure-config` returns the deployment's viewer key at sign-in to every signed-in user whose role allows `GET /secure-config`, which every shipped permission template allows. The user receives it whether or not they open the viewer or can read any asset, and VAMS checks no Miris tags, so the key can stream every Miris asset it is scoped to in Miris. Scope the static key in Miris with tags and an expiry, and use `perView` mode where access to a stream must follow VAMS permissions.
+-   In `perView` mode a key is minted only for a user who can read the VAMS asset, and only for a Miris asset that carries that asset's [binding tags](#binding-tags).
 -   A minted key can start streams of one Miris asset, for at most the configured lifetime.
 -   Expiry or revocation stops new streams from starting within seconds. It does not end a stream that is already open.
 -   The Miris SDK sends the viewer key in the query string of its request, so the key can appear in URL logs of intermediaries. A short lifetime limits that exposure.
@@ -224,7 +242,7 @@ See the [viewer key endpoint authorization](../../api/miris.md#per-view-viewer-k
 flowchart LR
     subgraph VAMS
         UP["USD upload\n(auto-trigger or Automation action)"]
-        GATE["Upload gate\n(claims the asset version)"]
+        GATE["Upload gate\n(claims the asset's USD content)"]
         PIPE["Miris Auto-Upload pipeline\nAWS Batch container"]
         MD["Stream metadata on the USD file"]
         STATUS["Stream status endpoint"]
@@ -237,7 +255,7 @@ flowchart LR
     end
 
     UP --> GATE
-    GATE -->|first execution proceeds| PIPE
+    GATE -->|first execution per content proceeds| PIPE
     PIPE -->|package and upload USD| API
     API -->|asset UUID| PIPE
     PIPE -->|write miris_* keys| MD
@@ -248,7 +266,7 @@ flowchart LR
     MINT -.->|create scoped, expiring key| API
 ```
 
-The upload pipeline packages a multi-file USD root into a single `.usdz` (using OpenUSD dependency resolution) before upload, since the Miris content API accepts one self-contained file per asset. The viewer plugin streams the prepared asset directly from the Miris platform using a viewer key (the deployment's key, or a per-view key); VAMS never proxies or stores the streamed geometry.
+The upload pipeline chooses the asset's root USD file and packages a multi-file root into a single `.usdz` (using OpenUSD dependency resolution) before upload, since the Miris content API accepts one self-contained file per asset. The viewer plugin streams the prepared asset directly from Miris Spatial Streaming using a viewer key (the deployment's key, or a per-view key); VAMS never proxies or stores the streamed geometry.
 
 ---
 
@@ -258,7 +276,7 @@ The viewer-plugin registry selects a plugin by **file extension** alone, but whe
 
 The viewer is a read-only status surface; it never triggers the pipeline itself. Triggering an upload is a standard Workflows/Executions operation: run the auto-registered `miris-upload` workflow from the file manager's **Automation -> Execute Workflow** action (selecting the USD source file), or let the auto-registered `fileUpload` trigger fire automatically when `app.miris.upload.autoRegisterAutoTriggerOnFileUpload` is enabled.
 
-Because a `fileUpload` trigger fires once per matching file, a multi-file USD asset made up of several standalone `.usd`/`.usda`/`.usdc` layers can fan out to one execution per layer. The gate Lambda (`mirisUploadGate`) collapses that fan-out to a single upload by claiming the asset's `(assetId, currentVersionId)` pair with a conditional S3 put — the first execution to reach the gate proceeds, and every other execution for the same asset version reports itself as skipped and exits as a no-op. See the [Miris Auto-Upload Pipeline](../../pipelines/miris-upload.md) for the pipeline-side detail.
+Because a `fileUpload` trigger fires once per matching file, a multi-file USD asset can fan out to one execution per layer. The gate Lambda (`mirisUploadGate`) collapses that fan-out with a conditional Amazon S3 put of a claim keyed on a fingerprint of the asset's USD files (path and ETag): the first execution to write the claim proceeds, and every other execution for the same content reports itself as skipped and exits as a no-op. Changed USD content uploads again, and a manual run always uploads. See [Duplicate uploads and re-runs](../../pipelines/miris-upload.md#duplicate-uploads-and-re-runs) for the details and limitations.
 
 ---
 
@@ -267,10 +285,10 @@ Because a `fileUpload` trigger fires once per matching file, a multi-file USD as
 -   `app.miris.enabled` must be `true`, with a valid `app.miris.viewerKey` in the default `static` viewer key mode, or with `app.miris.viewerKeyMode` set to `perView` and `app.miris.apiKeySecretArn` set.
 -   `app.webUi.allowUnsafeEvalFeatures` must be `true`: the Miris SDK compiles code at runtime and requires the `unsafe-eval` CSP directive. Review this with your security team.
 -   When `app.miris.enabled` is `true`, the Content Security Policy also lists `blob:` in `script-src`, because the Miris SDK loads part of its engine from a `blob:` script, and `https://*.miris.com` and `wss://*.miris.com` in `connect-src`. With Miris disabled the policy carries neither.
--   The upload pipeline requires a Miris Integration Key stored in AWS Secrets Manager, referenced by `app.miris.apiKeySecretArn`.
--   Browser support: Chrome 90+, Firefox 88+, Safari 14+, Edge 90+, with WebSocket support and either WebGPU or WebGL 2.0 (see [Rendering](#rendering)). HTTPS is mandatory.
+-   The upload pipeline requires a Miris Integration Key stored in AWS Secrets Manager, referenced by `app.miris.apiKeySecretArn`, and a VPC (`app.useGlobalVpc.enabled`). Its AWS Batch jobs run in private subnets and reach Miris through the NAT gateway (see [Network Architecture](../../architecture/networking.md)).
+-   Browser support: Chrome 90+, Firefox 88+, Safari 14+, Edge 90+, with WebSocket support and either WebGPU or WebGL 2.0. GES assets need WebGPU (see [Rendering](#rendering)). HTTPS is mandatory.
 -   After upload, Miris processes an asset (typically 1–2 hours) before it is streamable.
--   Cannot be enabled in GovCloud or air-gapped deployments.
+-   Cannot be enabled when `app.govCloud.enabled` is `true`, which the restricted partitions (AWS GovCloud (US), AWS European Sovereign Cloud, and the ISO partitions) require. Every browser and the upload pipeline must be able to reach `*.miris.com`.
 
 ---
 

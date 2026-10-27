@@ -90,12 +90,17 @@ variants likewise fetch LPIPS and ZoeDepth weights at run time.
 
 Some viewer plugins and processing pipelines require separate commercial licenses:
 
-| Component                     | Vendor                                                        | License         |
-| ----------------------------- | ------------------------------------------------------------- | --------------- |
-| VNTANA 3D Model Viewer        | [VNTANA](https://www.vntana.com/)                             | Commercial      |
-| VNTANA 3D Optimization Engine | VNTANA (AWS Marketplace)                                      | Commercial EULA |
-| Veerum 3D Viewer              | [Veerum](https://veerum.com/)                                 | Commercial      |
-| RapidPipeline 3D Processor    | [RapidPipeline](https://rapidpipeline.com/) (AWS Marketplace) | Commercial      |
+| Component                     | Vendor                                                        | License            |
+| ----------------------------- | ------------------------------------------------------------- | ------------------ |
+| VNTANA 3D Model Viewer        | [VNTANA](https://www.vntana.com/)                             | Commercial         |
+| VNTANA 3D Optimization Engine | VNTANA (AWS Marketplace)                                      | Commercial EULA    |
+| Veerum 3D Viewer              | [Veerum](https://veerum.com/)                                 | Commercial         |
+| RapidPipeline 3D Processor    | [RapidPipeline](https://rapidpipeline.com/) (AWS Marketplace) | Commercial         |
+| Miris Spatial Streaming       | [Miris](https://miris.com/) (hosted service)                  | Commercial service |
+
+### Miris Spatial Streaming Notice
+
+Miris Spatial Streaming is a commercial service on the public internet. The optional Miris stream viewer streams assets from it, and the optional Miris upload pipeline uploads USD assets to it, so enabling either sends data to Miris and requires a Miris account subject to the Miris terms of service. The viewer uses the Miris web SDK (`@miris-inc/components`, `@miris-inc/three`, `@miris-inc/core`, Apache-2.0). The upload pipeline container is built on the `python:3.12-slim` image and installs `usd-core` (OpenUSD, Modified Apache-2.0), `requests`, `boto3`, and `botocore` (Apache-2.0).
 
 ### NVIDIA License Notices
 

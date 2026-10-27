@@ -74,9 +74,11 @@ backend/
 │   │   ├── miris/                                  # Miris streaming: getAssetStatus (stream status
 │   │   │                                           #   of a file), mintViewerKey (per-view viewer key,
 │   │   │                                           #   perView mode only), viewerKeyCleanup (TTL stream
-│   │   │                                           #   consumer); mirisIntegration (Integration Key
-│   │   │                                           #   client) and streamMetadata (file stream keys)
-│   │   │                                           #   are shared modules
+│   │   │                                           #   consumer); mirisIntegration (Miris API
+│   │   │                                           #   client, never follows redirects) and
+│   │   │                                           #   streamMetadata (file stream keys and the
+│   │   │                                           #   shared Tier 2 load_readable_asset) are
+│   │   │                                           #   shared modules
 │   │   └── assetLinks, comments, config, databases, indexing, metadata,
 │   │       metadataschema, roles, search, sendEmail, subscription,
 │   │       tags, tagTypes, userRoles               # Domain handlers (folder per domain)

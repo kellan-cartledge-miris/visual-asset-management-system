@@ -9,9 +9,10 @@ Run once against a real Miris account before merging changes to this pipeline.
     plaintext secret. Capture the ARN.
 -   `app.miris.upload.enabled: true` and `app.miris.apiKeySecretArn` pointing at that ARN.
 -   `app.webUi.allowUnsafeEvalFeatures: true` (inherited gate).
--   A known good `.usdz` file, and a multi-file USD asset (a root `.usda` plus
-    at least one additional standalone `.usd`/`.usda`/`.usdc` layer as a
-    sibling file, not referenced via sublayer/reference) you can upload to VAMS.
+-   A known good `.usdz` file, and a multi-file USD asset (a root `.usda` that
+    sublayers or references at least one other `.usd`/`.usda`/`.usdc` layer in
+    the same asset) you can upload to VAMS. Two layers that nothing references
+    fail the run with `ambiguous_root`.
 
 ## Steps
 
@@ -39,7 +40,7 @@ trigger should be enabled when `autoRegisterAutoTriggerOnFileUpload: true`.
 -   [ ] In Step Functions, find the new execution. Trace through: gate
         Lambda -> vamsExecuteMirisUpload -> openMirisUploadPipeline -> inner
         SFN -> Batch container.
--   [ ] Container logs (CloudWatch) show, in order: `downloaded`, `start_upload`
+-   [ ] Container logs (CloudWatch) show, in order: `root_chosen`, `artifact_ready`, `start_upload`
         (POST /v1/content), `sigv4_put_complete`, `upload_marked_complete`
         (PUT /v1/content/{id}), `terminal_state_reached` with `state=preview`
         (or already `streamable`), `generate_triggered` OR `generate_skipped`
@@ -59,18 +60,19 @@ trigger should be enabled when `autoRegisterAutoTriggerOnFileUpload: true`.
 ### 4. Multi-file USD asset produces exactly ONE Miris upload
 
 This is the case the claim gate exists for: a `fileUpload` trigger fires once
-per uploaded file, so an asset made of several standalone `.usd` layers fans
-out to one execution per layer before the gate collapses them.
+per uploaded file, so an asset made of several `.usd` layers (a root and the
+layers it references) fans out to one execution per layer before the gate
+collapses them.
 
--   [ ] Upload the multi-file USD asset from the prerequisites — several
-        `.usd`/`.usda`/`.usdc` files landing in the same asset version, each
-        independently matching the trigger's file filter.
+-   [ ] Upload the multi-file USD asset from the prerequisites: several
+        `.usd`/`.usda`/`.usdc` files uploaded together, each independently
+        matching the trigger's file filter.
 -   [ ] In Step Functions, confirm one execution reaches the Batch container
         and every other execution triggered by the same upload reports a
         `{"status": "skipped", ...}` output and completes immediately (no
         Batch job).
--   [ ] Exactly one layer (the one whose execution won the claim) carries the
-        `miris_*` metadata keys, and the Miris Portal shows exactly one asset for
+-   [ ] Only the root layer (the one no other layer references) carries the
+        `miris_*` metadata keys, whichever execution won the claim, and the Miris Portal shows exactly one asset for
         this upload, not one per `.usd` layer.
 
 ### 5. Upload to a database not covered by the workflow
@@ -92,23 +94,16 @@ produces no execution: no Batch job and no `miris_*` metadata on the file.
 -   [ ] Selecting the whole asset (`/`) instead blocks **Continue** with
         "Workflow does not allow whole-asset ('/') selection" — the workflow
         takes exactly one file.
--   [ ] Because the asset's current version already holds a claim, this run
-        reports `skipped` and does not re-upload.
--   [ ] Delete the claim object at
-        `s3://<auxiliary-bucket>/locks/miris-upload/<assetId>/<currentVersionId>.claim`
-        and run the workflow again from **Automation -> Execute Workflow**.
-        The pipeline runs to completion, `miris_asset_uuid` on the file holds
-        the new Miris asset's UUID, and the previous Miris asset is still
-        listed in the Miris Portal.
--   [ ] Creating a new **asset version** (the _Create Asset Version_ action)
-        also re-runs the pipeline, since the claim key includes the version
-        id. Re-uploading files into the same asset does **not** create an
-        asset version, so it keeps the same claim key: deleting the claim
-        object is the way to force a re-run after a file re-upload.
+-   [ ] The run uploads even though the content is unchanged: a manual run
+        writes no claim. The pipeline runs to completion, `miris_asset_uuid` on
+        the root file holds the new Miris asset's UUID, and the previous Miris
+        asset is still listed in the Miris Portal.
+-   [ ] Change one USD layer and upload it. The fingerprint changes, so the
+        trigger uploads again rather than reporting `skipped`.
 -   [ ] Force a container failure (for example with the oversize limit from
-        step 8) on an asset version with no claim yet. The claim is released
-        automatically, so the next Automation run for that same version starts
-        a new upload rather than reporting `skipped`.
+        step 8) on content that has no claim yet. The claim is released
+        automatically, so the next trigger on that same content starts a new
+        upload rather than reporting `skipped`.
 
 ### 7. Validation gate
 
@@ -122,15 +117,15 @@ produces no execution: no Batch job and no `miris_*` metadata on the file.
         redeploy. Upload anything larger. Container fails clean with
         `file_too_large` log entry. The outer workflow records a failure
         within seconds (the pipeline reports `SendTaskFailure`; it does not
-        sit until the workflow task timeout), and the claim for that asset
-        version is gone from the auxiliary bucket. Revert the config after.
+        sit until the workflow task timeout), and the claim for that content
+        is gone from `locks/miris-upload/<assetId>/` in the auxiliary bucket. Revert the config after.
 
 ### 9. Multi-file USD (textures / sublayers, single upload)
 
 -   [ ] Upload a USD asset folder: a root `.usda` plus a `textures/` subfolder it
         references by relative path.
--   [ ] Container logs show, in order: `artifact_ready`, `packaged_usdz`
-        (with `assets` >= 1), `start_upload`, `sigv4_put_complete`,
+-   [ ] Container logs show, in order: `root_chosen`, `packaged_usdz`
+        (with `assets` >= 1), `artifact_ready`, `start_upload`, `sigv4_put_complete`,
         `upload_marked_complete`, `terminal_state_reached`.
 -   [ ] The Miris asset reaches `preview`/`streamable` (textures resolved).
 

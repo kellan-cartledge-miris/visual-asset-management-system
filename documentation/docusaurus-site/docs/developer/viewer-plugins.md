@@ -42,11 +42,11 @@ VAMS ships with viewer plugins across five categories: 3D, Media, Document, Data
 For the complete list of all viewers, supported extensions, priority resolution, and extension-to-viewer mapping, see [File Viewers](../concepts/viewers.md).
 
 :::info[Miris Spatial Streaming Viewer]
-VAMS includes one Miris viewer plugin, `miris-stream-viewer` (USD files, `MIRIS_STREAMING`, priority `0`), which streams the Miris asset recorded in the file's stream metadata with a deployment viewer key or, in `perView` mode, a short-lived key minted for each viewer open. It renders with the Miris web SDK (`@miris-inc/components`, `@miris-inc/three` and `@miris-inc/core`, pinned to one version) and needs `blob:` in `script-src` as well as `'unsafe-eval'`. For the full integration (viewer behavior, the upload pipeline's auto-trigger and Automation launch, configuration, and architecture), see the dedicated [Miris Spatial Streaming Integration](external-integrations/miris-spatial-streaming.md) guide and the [Miris Auto-Upload Pipeline](../pipelines/miris-upload.md).
+VAMS includes one Miris viewer plugin, `miris-stream-viewer` (USD files, `MIRIS_STREAMING` and `ALLOWUNSAFEEVAL`, priority `0` with `autoSelect: true`, so it opens USD files without asking), which streams the Miris asset recorded in the file's stream metadata with a deployment viewer key or, in `perView` mode, a short-lived key minted for each viewer open. It renders with the Miris web SDK (`@miris-inc/components`, `@miris-inc/three` and `@miris-inc/core`, pinned to one version) and needs `blob:` in `script-src` as well as `'unsafe-eval'`. For the full integration (viewer behavior, the upload pipeline's auto-trigger and Automation launch, configuration, and architecture), see the dedicated [Miris Spatial Streaming Integration](external-integrations/miris-spatial-streaming.md) guide and the [Miris Auto-Upload Pipeline](../pipelines/miris-upload.md).
 :::
 
 :::info[Priority System]
-When multiple viewers support the same file extension, `getCompatibleViewers()` returns them sorted by `priority`, lowest number first, and the viewer selector lists them in that order. In a default deployment, for example, a `.json` file matches the Text Viewer (priority 1) and the Cesium 3D Tileset Viewer (priority 2).
+When multiple viewers support the same file extension, `getCompatibleViewers()` returns them sorted by `priority`, lowest number first, and the viewer selector lists them in that order. In a default deployment, for example, a `.json` file matches the Text Viewer (priority 1) and the Cesium 3D Tileset Viewer (priority 2). With several matches VAMS opens none until the user chooses, unless the first viewer sets `autoSelect: true` and no other match shares its priority.
 :::
 
 ## Creating a New Viewer Plugin
@@ -235,6 +235,7 @@ Review existing custom install scripts in `web/customInstalls/` for patterns. Vi
 | `supportsMultiFile`          | boolean  | Yes      | Whether the viewer can handle multiple files simultaneously        |
 | `canFullscreen`              | boolean  | Yes      | Whether the viewer supports fullscreen mode                        |
 | `priority`                   | number   | Yes      | Selection order (lower = listed first when multiple viewers match) |
+| `autoSelect`                 | boolean  | No       | Open without asking when the only match at the lowest priority     |
 | `dependencies`               | string[] | Yes      | Required library names (informational)                             |
 | `loadStrategy`               | string   | Yes      | `"lazy"` (load on demand) or `"eager"` (load at startup)           |
 | `category`                   | string   | Yes      | Viewer category: `3d`, `media`, `document`, `data`, or `preview`   |

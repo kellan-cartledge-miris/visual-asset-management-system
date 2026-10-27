@@ -227,4 +227,4 @@ The VAMS API is organized into the following functional groups:
 | **Subscriptions**  | Event subscriptions and notification opt-in                                                       | [Subscriptions](subscriptions.md)   |
 | **Authorization**  | Permission constraints, API route listings, roles, user-role assignments, Cognito users, API keys | [Authorization](auth.md)            |
 | **Add-ons**        | Endpoints contributed by optional add-ons                                                         | [Add-ons](addon.md)                 |
-| **Miris**          | Stream status of a file and per-view viewer keys for Miris spatial streaming                      | [Miris](miris.md)                   |
+| **Miris**          | Stream status of a file and per-view viewer keys for Miris Spatial Streaming                      | [Miris](miris.md)                   |

@@ -294,10 +294,11 @@ VAMS creates no Amazon CloudWatch alarm on dead-letter queue depth, so an interr
 
 ## Amazon EventBridge
 
-| Resource                         | Purpose                                                                   |
-| -------------------------------- | ------------------------------------------------------------------------- |
-| **Orchestration Bus**            | Top-level custom event bus for event-driven VAMS features                 |
-| **Orchestration Bus Audit Rule** | Routes all events from the deployment's sources to a CloudWatch log group |
+| Resource                              | Purpose                                                                                                                                                                                                                                                                                           |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Orchestration Bus**                 | Top-level custom event bus for event-driven VAMS features                                                                                                                                                                                                                                         |
+| **Orchestration Bus Audit Rule**      | Routes all events from the deployment's sources to a CloudWatch log group                                                                                                                                                                                                                         |
+| **Miris Upload Execution Ended Rule** | On the default event bus, routes the `FAILED`, `TIMED_OUT`, and `ABORTED` status changes of the Miris upload pipeline's inner state machine to the pipeline's end Lambda function, which releases the upload claim and fails the workflow task. Created when `app.miris.upload.enabled` is `true` |
 
 The bus name and event source prefix are deployment-unique, so multiple VAMS deployments can coexist in one AWS Region. The bus uses optional AWS KMS customer-managed-key encryption in the commercial AWS partition. Amazon EventBridge does not support customer managed keys on event buses in the AWS GovCloud (US) or AWS European Sovereign Cloud partitions, so in those partitions the bus uses EventBridge's default AWS owned key encryption at rest regardless of the `useKmsCmkEncryption` setting.
 
@@ -338,7 +339,7 @@ The AWS WAF groups are the one set outside the `/aws/vendedlogs/` namespace: AWS
 
 ### Pipeline Log Groups (per enabled pipeline)
 
-Each enabled pipeline's Step Functions state machine logs to `/aws/vendedlogs/VAMSstateMachine-<PipelineName>[-<modelKey>]<hash>` or `/aws/vendedlogs/VAMSStateMachine-<PipelineName><hash>` — the case of `stateMachine` varies by pipeline, and Amazon CloudWatch log group names are case sensitive, so a search must cover both spellings. Examples: `VAMSstateMachine-SplatToolboxPipeline`, `VAMSstateMachine-Preview3dThumbnailPipeline`, `VAMSstateMachine-CosmosPredict-<modelKey>`, `VAMSStateMachine-CoordTransform`, `VAMSStateMachine-Metadata3dLabelingPipeline`. Container-based pipelines additionally create groups under `/aws/vendedlogs/Pipelines/` for their container output. The AWS Fargate job groups carry the deployment's KMS key when `useKmsCmkEncryption` is enabled, and the workflow execution-service role is granted read access to every group under that prefix.
+Each enabled pipeline's Step Functions state machine logs to `/aws/vendedlogs/VAMSstateMachine-<PipelineName>[-<modelKey>]<hash>` or `/aws/vendedlogs/VAMSStateMachine-<PipelineName><hash>` — the case of `stateMachine` varies by pipeline, and Amazon CloudWatch log group names are case sensitive, so a search must cover both spellings. Examples: `VAMSstateMachine-SplatToolboxPipeline`, `VAMSstateMachine-Preview3dThumbnailPipeline`, `VAMSstateMachine-MirisUploadPipeline`, `VAMSstateMachine-CosmosPredict-<modelKey>`, `VAMSStateMachine-CoordTransform`, `VAMSStateMachine-Metadata3dLabelingPipeline`. Container-based pipelines additionally create groups under `/aws/vendedlogs/Pipelines/` for their container output. The AWS Fargate job groups carry the deployment's KMS key when `useKmsCmkEncryption` is enabled, and the workflow execution-service role is granted read access to every group under that prefix.
 
 | Log Group                                                           | Container                                 | Created When                       | Removal Policy | Custom Name |
 | ------------------------------------------------------------------- | ----------------------------------------- | ---------------------------------- | -------------- | ----------- |
@@ -347,6 +348,7 @@ Each enabled pipeline's Step Functions state machine logs to `/aws/vendedlogs/VA
 | `/aws/vendedlogs/Pipelines/Preview3dThumbnail<hash>`                | 3D thumbnail renderer (AWS Fargate)       | `usePreview3dThumbnail`            | DESTROY        | Yes         |
 | `/aws/vendedlogs/Pipelines/PcPotreeViewerPDAL<hash>`                | PDAL point cloud conversion (AWS Fargate) | `usePreviewPcPotreeViewer`         | DESTROY        | Yes         |
 | `/aws/vendedlogs/Pipelines/PcPotreeViewerPotree<hash>`              | Potree octree conversion (AWS Fargate)    | `usePreviewPcPotreeViewer`         | DESTROY        | Yes         |
+| `/aws/vendedlogs/Pipelines/MirisUpload<hash>`                       | Miris upload (AWS Fargate)                | `app.miris.upload`                 | DESTROY        | Yes         |
 | `/aws/vendedlogs/Pipelines/<containerName>`                         | RapidPipeline, ModelOps containers        | `useRapidPipeline`, `useModelOps`  | DESTROY        | Yes         |
 
 :::note[Log Retention]

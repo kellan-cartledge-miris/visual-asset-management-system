@@ -166,6 +166,8 @@ The That Open Engine packages, `camera-controls`, `fflate`, and `web-ifc` are bu
 | VNTANA 3D Model Viewer | [@vntana/viewer@2.2.0](https://www.npmjs.com/package/@vntana/viewer) | PAID - Commercial |
 | Veerum 3D Model Viewer | [@veerum/viewer@2.0.12](https://veerum.github.io/veerum-viewer/)     | PAID - Commercial |
 
+Miris Spatial Streaming is a commercial service from [Miris](https://miris.com) that the optional Miris stream viewer and Miris upload pipeline call over the internet. Using them requires a Miris account and is subject to the Miris terms of service. The Miris web SDK packages (`@miris-inc/*`) are listed under the web application components.
+
 ---
 
 ## THIRD PARTY COMPONENTS - BACKEND
@@ -273,6 +275,19 @@ Copyright (c) 2012, Howard Butler, hobu.inc at gmail.com
 Copyright (c) 2020, Thomas Montaigu, thomas.montaigu@laposte.net
 All rights reserved.
 ```
+
+### Miris Upload Pipeline
+
+**Miris Upload Pipeline Dependencies**
+
+| Name     | Version | License             | Notes                                                                   |
+| :------- | :------ | :------------------ | :---------------------------------------------------------------------- |
+| usd-core | 25.11   | Modified Apache-2.0 | OpenUSD Python bindings for USD dependency discovery and USDZ packaging |
+| requests | 2.32.3  | Apache-2.0          | HTTPS client for the Miris API                                          |
+| boto3    | 1.35.99 | Apache-2.0          | AWS SDK for Python                                                      |
+| botocore | 1.35.99 | Apache-2.0          | AWS SDK for Python core                                                 |
+
+The Miris upload container uses the Docker Official Image `python:3.12-slim` as its base image. The pipeline uploads USD assets to the Miris Spatial Streaming service, which is a commercial service (see Third Party Paid Components - Web Viewers).
 
 ### Gaussian Splat Toolbox Pipeline
 

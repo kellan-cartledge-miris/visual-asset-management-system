@@ -12,8 +12,7 @@ The VAMS web interface is a React 18 application built with Vite and the AWS Clo
 
 VAMS includes built-in viewer plugins across five categories (3D, Media, Document, Data, and Preview), covering 3D meshes, CAD, point clouds, Gaussian splats, USD, and IFC/BIM models. The plugin-based architecture supports lazy loading, per-plugin dependency management, automatic viewer selection based on file extension, and fullscreen mode. Two additional licensed viewers (VNTANA and VEERUM) provide commercial-grade rendering for GLB models and point clouds.
 
--   **Miris Spatial Streaming** — Stream 3D assets at progressive levels of detail via the Miris platform. Opening a USD file streams the Miris asset recorded in the file's metadata, with a deployment viewer key or, optionally, a short-lived key minted for each view.
--   **Miris Auto-Upload Pipeline** — Uploads supported USD source assets to the Miris Spatial Streaming platform and records the Miris asset in the USD file's metadata, so assets become streamable in the VAMS viewer. Runs automatically on upload, or on demand via the file manager's **Automation** action.
+-   **Miris Spatial Streaming** -- Streams 3D assets from the Miris Spatial Streaming service at progressive levels of detail. Opening a USD file streams the Miris asset recorded in the file's metadata, with a deployment viewer key or, optionally, a short-lived key minted for each view. The [Miris Auto-Upload pipeline](#built-in-pipelines) uploads USD assets to Miris and records that metadata.
 
 For the complete list of supported file viewers and extensions, see [File Viewers](../concepts/viewers.md).
 
@@ -176,7 +175,7 @@ The Deadline Cloud execution type requires `app.pipelines.deadlineCloudExecution
 
 ### Built-In Pipelines
 
-VAMS includes twenty-four built-in processing pipelines, each deployable through configuration flags. Pipeline families that ship several model variants register each variant as its own pipeline with its own flag.
+VAMS includes twenty-five built-in processing pipelines, each deployable through configuration flags. Pipeline families that ship several model variants register each variant as its own pipeline with its own flag.
 
 | Pipeline                                | Config Flag                                       | Description                                                                                                              | Default  |
 | --------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | -------- |
@@ -204,6 +203,7 @@ VAMS includes twenty-four built-in processing pipelines, each deployable through
 | RapidPipeline 3D Processor              | `useRapidPipeline.useEcs`                         | Licensed 3D model optimization and conversion on Amazon ECS                                                              | Disabled |
 | RapidPipeline (EKS)                     | `useRapidPipeline.useEks`                         | Licensed 3D model optimization and conversion on Amazon EKS                                                              | Disabled |
 | VNTANA ModelOps 3D Optimization         | `useModelOps`                                     | Licensed 3D model optimization and conversion using the VNTANA engine                                                    | Disabled |
+| Miris Auto-Upload                       | `app.miris.upload`                                | Uploads USD assets to Miris Spatial Streaming and records the Miris asset in the USD file's metadata                     | Disabled |
 
 :::note[Model variant flags]
 A model variant flag takes effect only when its family flag is also enabled: `useNvidiaCosmos.enabled` for the Cosmos Predict, Reason, and Transfer variants, `useNvidiaCosmos3.enabled` for the Cosmos 3 variants, and `useNvidiaGr00t.enabled` for the Gr00t variant.

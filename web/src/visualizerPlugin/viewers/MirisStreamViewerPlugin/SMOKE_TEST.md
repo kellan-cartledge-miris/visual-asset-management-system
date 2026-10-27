@@ -1,4 +1,4 @@
-# Miris Stream Viewer: Manual Smoke Test
+# Miris Spatial Streaming Viewer: Manual Smoke Test
 
 Run once against a real Miris account before merging changes to this viewer. Unit tests cover the status handling and component lifecycle with a mocked SDK and API; this checklist is the only verification of the live `*.miris.com` streaming path.
 
@@ -9,9 +9,9 @@ The viewer streams the Miris asset recorded in a USD file's `miris_asset_uuid` f
 -   A Miris account with at least one streamable asset, and its asset UUID. A second streamable asset UUID is needed for step 5.
 -   A valid Miris viewer key (16+ chars) from the same Miris workspace as those assets. Generate one in the Miris Portal or with `miris viewerkey create`.
 -   A small USD file (`.usdz` recommended) to upload to VAMS. Its geometry does not matter; the viewer streams the Miris asset, not the file.
--   A VAMS dev stack you can deploy to (commercial region; GovCloud is blocked by `getConfig()`).
+-   A VAMS dev stack you can deploy to in the commercial partition (`getConfig()` rejects Miris when `app.govCloud.enabled` is `true`, as in every restricted partition).
 -   Browser DevTools open on the Network tab (WS and Fetch/XHR filters) and the Console.
--   A browser with WebGPU (current desktop Chrome or Edge) for the default engine; step 4b also covers the WebGL 2 engine and an unsupported device.
+-   A browser with WebGPU (current desktop Chrome or Edge) for the default engine; step 4b also covers a browser without WebGPU and an unsupported device. A GES asset UUID is useful for step 4b.
 -   The viewer renders with `@miris-inc/components`, `@miris-inc/three` and `@miris-inc/core`, all pinned to `0.0.8-a2ebb07` in `web/package.json`. After an SDK upgrade, confirm the three versions in `web/package-lock.json` still match.
 -   Docker Desktop with the **containerd image store disabled** (Settings → General → uncheck "Use containerd for pulling and storing images"). With it enabled, CDK Lambda layer bundling fails because BuildKit-built images aren't visible to `docker run`.
 -   CDK bootstrap in **two regions**: your primary region (e.g. `us-west-2`) AND `us-east-1`. The CloudFront WAF stack lives in us-east-1 regardless of where the main stack deploys.
@@ -112,9 +112,8 @@ Reopen `smoke-test.usdz`. Verify:
 ### 4b. Renderer selection and unsupported devices
 
 -   [ ] In a WebGPU browser the stream renders with the default engine.
--   [ ] The browser console shows which engine started: `webgpu is available! initializing shark renderer` for WebGPU, `shark is turned off. initializing spork renderer` for WebGL 2. These lines come from the SDK and can change between SDK versions, so treat them as informational.
--   [ ] Reload with `?shark=0` in the real query string, before the `#` (for example `https://<vams-host>/?shark=0#/...`). The stream renders with the WebGL 2 engine, and the framing and controls from step 4 behave the same.
--   [ ] In a browser with no WebGPU adapter, the viewer selects the WebGL 2 engine on its own and streams.
+-   [ ] In a browser with no WebGPU adapter (for example with hardware acceleration disabled), the viewer selects the WebGL 2 engine on its own and streams a non-GES asset, and the framing and controls from step 4 behave the same.
+-   [ ] In that browser, a GES asset shows the SDK's own message that the asset needs WebGPU, legible on the black backdrop, instead of a stream.
 -   [ ] In a browser with neither WebGPU nor WebGL 2 (for example WebGL disabled in the browser settings), opening the file shows "Miris streaming is not supported on this device" immediately, not a blank panel or a 60-second wait.
 
 ### 5. Switch and clear the stream
@@ -168,7 +167,7 @@ cd infra && npx cdk deploy --all --require-approval never
 Reload the web UI. Open the same USD file. Verify:
 
 -   [ ] The Miris viewer no longer appears in the viewer selector.
--   [ ] `/secure-config` no longer includes the viewer key.
+-   [ ] `/secure-config` returns an empty `mirisViewerKey`.
 -   [ ] The **Miris stream** schema and the file's `miris_*` metadata are still present (the schema is not removed when Miris is disabled).
 
 ### 9b. Verify the validation gate (optional)
@@ -179,13 +178,13 @@ To confirm the security gate works, try to deploy with `miris.enabled: true` but
 
 ## Per-view viewer keys
 
-Run when the deployment sets `app.miris.viewerKeyMode: "perView"` (the stack then records `MIRIS_PER_VIEW_KEYS`). No shared viewer key is deployed in this mode.
+Run when the deployment sets `app.miris.viewerKeyMode: "perView"` (the stack then records `MIRIS_PER_VIEW_KEYS`). No shared viewer key is deployed in this mode. Each Miris asset you stream must carry the tags `vams-asset-<asset-id>` and `vams-database-<database-id>` of the VAMS asset whose file records it (`miris asset update <miris-asset-uuid> --add-tags vams-asset-<asset-id>,vams-database-<database-id>`).
 
--   [ ] `/secure-config` lists `MIRIS_PER_VIEW_KEYS` in `featuresEnabled` and has no `mirisViewerKey` field.
+-   [ ] `/secure-config` lists `MIRIS_PER_VIEW_KEYS` in `featuresEnabled`, and its `mirisViewerKey` is an empty string.
 -   [ ] Opening a streamed USD file in the Miris viewer sends one `POST .../assets/{assetId}/miris/viewer-key` request with body `{"filePath": "/<object key>"}` after the `asset-status` request, and the stream renders.
 -   [ ] The response carries `viewerKey`, `mirisAssetUuid` (matching the status UUID) and `expiresAt`; the key does not appear in `localStorage`, `sessionStorage` or the console.
 -   [ ] Closing and reopening the viewer sends a new mint request.
--   [ ] A user without access to the asset sees "You do not have permission to stream this asset." and no stream.
+-   [ ] A user whose role allows the status route but not `POST` on the viewer key route sees "You do not have permission to stream this asset." and no stream.
 
 ## Sign-off
 

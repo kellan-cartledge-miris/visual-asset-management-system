@@ -832,7 +832,7 @@ The 3D/media viewer system is a plugin-based architecture under `src/visualizerP
 -   **PluginRegistry** singleton at `visualizerPlugin/core/PluginRegistry.ts` manages all viewers
 -   **Extension mapping** and per-viewer metadata (name, priority, category, `enabled`, `featuresEnabledRestriction`) live in `visualizerPlugin/config/viewerConfig.json`
 -   **`viewers/manifest.ts`** exposes componentPath -> import paths so Vite can statically analyze dynamic imports
--   Some viewers require the `ALLOWUNSAFEEVAL` feature flag (Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Three.js CAD formats); the SuperSplat Editor is iframe-embedded under `public/viewers/supersplat/`
+-   Some viewers require the `ALLOWUNSAFEEVAL` feature flag (Needle USD, Miris Spatial Streaming, SuperSplat Editor, ThatOpen IFC BIM, Three.js CAD formats); the SuperSplat Editor is iframe-embedded under `public/viewers/supersplat/`
 -   Per-viewer install steps live in `web/customInstalls/` and run via the `postinstall` chain in `web/package.json`
 
 For the current viewer catalog, plugin config field reference, and the step-by-step "adding a new viewer plugin" walkthrough, see `web/src/visualizerPlugin/CLAUDE.md` (auto-loaded when editing viewer-plugin code).
@@ -883,7 +883,7 @@ Known feature flags:
 
 -   `LOCATIONSERVICES` -- Map/geospatial features
 -   `NOOPENSEARCH` -- Disable OpenSearch-dependent features
--   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, and Three.js CAD formats (WASM loaders use eval)
+-   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Three.js CAD formats, and the Miris web SDK (WASM loaders and the Miris engine compile code at runtime)
 -   Additional flags may exist in deployed configurations
 
 ### 9.4 Synonyms (Display Name Customization)
@@ -1217,7 +1217,8 @@ See section 9.4 for the full Synonyms rules.
 | `@badgateway/oauth2-client`     | 2.4.2                | External OAuth2 PKCE flow            |
 | `react-router-dom`              | ^6.0.0               | Client-side routing                  |
 | `styled-components`             | ^5.3.3               | CSS-in-JS (legacy usage)             |
-| `three`                         | (via customInstalls) | 3D rendering engine                  |
+| `three`                         | ^0.185.1 (+ 0.182.0) | 3D engine; 0.182.0 in customInstalls |
+| `@miris-inc/*` (3 packages)     | one exact pin        | Miris web SDK, upgraded together     |
 | `maplibre-gl`                   | ^6.9.0               | Map rendering                        |
 | `react-pdf`                     | ^10.1.0              | PDF viewing                          |
 | `papaparse`                     | ^5.4.1               | CSV parsing                          |

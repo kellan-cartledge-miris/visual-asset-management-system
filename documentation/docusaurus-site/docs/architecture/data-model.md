@@ -497,6 +497,20 @@ Tags and tag types are database-namespaced. The partition key is the `databaseId
 | AppFeatureEnabledStorageTable | `featureName` | --                                                   |
 | S3AssetBucketsStorageTable    | `bucketId`    | `bucketName:baseAssetsPrefix` (GSI: `bucketNameGSI`) |
 
+### Miris Viewer Key Table
+
+`MirisViewerKeyStorageTable` exists only when `app.miris.enabled` is `true` and `app.miris.viewerKeyMode` is `"perView"`. It records each per-view Miris viewer key that VAMS mints, never the key material.
+
+| Attribute          | Type   | Key           |
+| ------------------ | ------ | ------------- |
+| `mirisViewerKeyId` | String | Partition Key |
+
+**DynamoDB Streams:** KEYS_ONLY
+
+**Time to Live:** `ttl`, one hour after the key's expiry. The stream's TTL deletions invoke the cleanup Lambda function that deletes the key from Miris.
+
+**Common Attributes:** `databaseId`, `assetId`, `filePath`, `userId`, `mirisAssetUuid`, `createdAt`, `expiresAt`, `ttl`
+
 ## Amazon S3 Bucket Organization
 
 ### Asset Buckets
@@ -538,6 +552,7 @@ by the input file that the data was derived from and one keyed by the execution 
 ```
 {databaseId}/{assetFileKey}/preview/{viewer_subfolder}/{generated_files}
 pipelines/{pipelineName}/{executionId}/{working_files}
+locks/miris-upload/{assetId}/{fingerprint}.claim
 ```
 
 Where:
@@ -551,6 +566,11 @@ Where:
     subfolder (for example `PotreeViewer`) so several viewers can coexist for one file
 -   `pipelineName` / `executionId` scope temporary working files to a single run, so concurrent runs of the
     same pipeline cannot collide
+-   `locks/miris-upload/` holds the claim objects of the [Miris Auto-Upload pipeline](../pipelines/miris-upload.md)'s
+    upload gate, at the bucket root and outside any execution's prefix, so that executions triggered by several
+    files of one asset find the same claim once all of its USD files are in place. `fingerprint` is the SHA-256 digest of the path and ETag of the
+    asset's files with a trigger extension. A successful upload keeps its claim and deletes the asset's
+    other claims, and a run that does not succeed deletes its own
 
 Common uses:
 

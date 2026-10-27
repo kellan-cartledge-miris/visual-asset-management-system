@@ -582,7 +582,7 @@ A private collection (`allowPublic = false`) is reachable only from inside the V
 
 #### VPC is now required for certain features
 
-In earlier releases, enabling a feature that needs a VPC while `app.useGlobalVpc.enabled` was `false` silently turned the VPC on. In v2.6 this is a configuration error instead: the deployment fails and lists the features that require a VPC. The VPC-requiring features are ALB (`useAlb`), OpenSearch Provisioned (`openSearch.useProvisioned`), and the container-based pipelines (Potree viewer, 3D preview thumbnail, GenAI labeling, Gaussian splatting, RapidPipeline ECS/EKS, ModelOps, Isaac Lab, NVIDIA Cosmos, NVIDIA Gr00t).
+In earlier releases, enabling a feature that needs a VPC while `app.useGlobalVpc.enabled` was `false` silently turned the VPC on. In v2.6 this is a configuration error instead: the deployment fails and lists the features that require a VPC. The VPC-requiring features are ALB (`useAlb`), OpenSearch Provisioned (`openSearch.useProvisioned`), and the container-based pipelines (Potree viewer, 3D preview thumbnail, GenAI labeling, Gaussian splatting, RapidPipeline ECS/EKS, ModelOps, Isaac Lab, NVIDIA Cosmos, NVIDIA Gr00t, Miris upload).
 
 If your existing `config.json` relied on the old implicit behavior, update it before deploying v2.6: set `app.useGlobalVpc.enabled` to `true` (the value the deployment was effectively using all along), or disable the listed features. No infrastructure changes result from setting the flag to the value that was already in effect — this is a configuration-file correction only.
 

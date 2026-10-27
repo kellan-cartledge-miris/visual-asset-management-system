@@ -173,11 +173,12 @@ None.
 {
     "featuresEnabled": "CLOUDFRONTDEPLOY,LOCATIONSERVICES,AUTHPROVIDER_COGNITO",
     "locationServiceApiUrl": "https://maps.geo.us-east-1.amazonaws.com/v2/styles/Standard/descriptor?key=<apiKey>",
-    "webDeployedUrl": "https://example.cloudfront.net"
+    "webDeployedUrl": "https://example.cloudfront.net",
+    "mirisViewerKey": ""
 }
 ```
 
-`featuresEnabled` is a comma-separated string of the enabled feature flags. `locationServiceApiUrl` and `webDeployedUrl` are empty strings when Amazon Location Service or the web deployment URL is not configured.
+`featuresEnabled` is a comma-separated string of the enabled feature flags. `locationServiceApiUrl` and `webDeployedUrl` are empty strings when Amazon Location Service or the web deployment URL is not configured. `mirisViewerKey` is the deployment-wide Miris viewer key that the Miris Spatial Streaming viewer authenticates with. It is set only when `app.miris.enabled` is `true` and `app.miris.viewerKeyMode` is `static`, and is then returned to every caller allowed this route, whatever assets the caller can read. It is an empty string otherwise; in `perView` mode the viewer requests a key per view from the [Miris viewer key endpoint](miris.md#per-view-viewer-key).
 
 **Error Responses:**
 
