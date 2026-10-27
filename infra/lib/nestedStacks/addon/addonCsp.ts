@@ -9,6 +9,14 @@ import * as Config from "../../../config/config";
 export interface AddonCspSources {
     connectSrc: string[];
     frameSrc: string[];
+    /**
+     * Merged into `script-src`, one source expression per entry: `blob:`, `'self'`,
+     * `'unsafe-hashes'`, `'wasm-unsafe-eval'`, a `'sha256-'`/`'sha384-'`/`'sha512-'` hash, or an
+     * `https://` or `wss://` host source. Anything else fails synthesis
+     * (`generateContentSecurityPolicy()`); `'unsafe-eval'` is added only by
+     * `app.webUi.allowUnsafeEvalFeatures`, which an add-on that needs it requires in `getConfig()`.
+     */
+    scriptSrc: string[];
 }
 
 /**
@@ -16,7 +24,7 @@ export interface AddonCspSources {
  * `generateContentSecurityPolicy()` (`lib/helper/security.ts`).
  */
 export function addonCspSources(config: Config.Config): AddonCspSources {
-    const sources: AddonCspSources = { connectSrc: [], frameSrc: [] };
+    const sources: AddonCspSources = { connectSrc: [], frameSrc: [], scriptSrc: [] };
 
     // When the Physna add-on is enabled the viewer plugin embeds Physna's
     // hosted viewer URL directly in an `<iframe src>`. Allow that origin

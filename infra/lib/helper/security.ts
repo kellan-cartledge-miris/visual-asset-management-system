@@ -56,6 +56,89 @@ function findUnsafeInlineToken(entry: string): string | undefined {
         .find((token) => SCRIPT_SRC_UNSAFE_INLINE_TOKENS.includes(token.toLowerCase()));
 }
 
+const ADDON_SCRIPT_SRC_UNSAFE_INLINE_REASON =
+    "inline scripts are allowed by SHA-256 hash, and browsers ignore the keyword in a source " +
+    "list that carries a hash";
+const ADDON_SCRIPT_SRC_UNSAFE_EVAL_REASON =
+    "the keyword is added only by app.webUi.allowUnsafeEvalFeatures; require that setting for " +
+    "the add-on in getConfig() instead";
+const ADDON_SCRIPT_SRC_SCHEME_ONLY_REASON =
+    "a scheme-only source allows script from any host on that scheme";
+
+/**
+ * Sources refused in an add-on's `script-src` sources, keyed in lower case, with the reason the
+ * synthesis error gives.
+ */
+const ADDON_SCRIPT_SRC_REFUSED: Record<string, string> = {
+    "'unsafe-inline'": ADDON_SCRIPT_SRC_UNSAFE_INLINE_REASON,
+    "unsafe-inline": ADDON_SCRIPT_SRC_UNSAFE_INLINE_REASON,
+    "'unsafe-eval'": ADDON_SCRIPT_SRC_UNSAFE_EVAL_REASON,
+    "unsafe-eval": ADDON_SCRIPT_SRC_UNSAFE_EVAL_REASON,
+    "*": "it allows script from any host",
+    "https:": ADDON_SCRIPT_SRC_SCHEME_ONLY_REASON,
+    "http:": ADDON_SCRIPT_SRC_SCHEME_ONLY_REASON,
+    "data:": ADDON_SCRIPT_SRC_SCHEME_ONLY_REASON,
+    "'strict-dynamic'":
+        "it extends trust to any script an allowed script loads, and browsers then ignore the " +
+        "host and 'self' sources",
+};
+
+/** Keyword sources an add-on may contribute to `script-src`, in lower case. */
+const ADDON_SCRIPT_SRC_KEYWORDS = ["blob:", "'self'", "'unsafe-hashes'", "'wasm-unsafe-eval'"];
+
+/** A hash source: `'sha256-…'`, `'sha384-…'` or `'sha512-…'` with a base64 or base64url digest. */
+const ADDON_SCRIPT_SRC_HASH = /^'sha(256|384|512)-[a-z0-9+/_-]+={0,2}'$/i;
+
+/**
+ * A host source over HTTPS or secure WebSocket: an exact host or one `*.` subdomain wildcard,
+ * with an optional port and path. A wildcard alone (`https://*`) is not a host source here.
+ */
+const ADDON_SCRIPT_SRC_HOST =
+    /^(https|wss):\/\/(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)*(:([0-9]{1,5}|\*))?(\/[a-z0-9\-._~%/]*)?$/i;
+
+/**
+ * The enabled add-ons' `script-src` sources (`addonCspSources().scriptSrc`). Each entry must be one
+ * source expression: whitespace, `;` or `,` would let it carry further sources or a directive of its
+ * own, which ahead of the core `object-src` and `frame-ancestors` would replace them, as browsers
+ * honour the first occurrence of a directive. Only the keyword, hash and host sources above are
+ * accepted; anything else fails synthesis. CSP keyword sources are ASCII case-insensitive.
+ */
+function addonScriptSrcSources(sources: string[]): string[] {
+    const refuse = (entry: unknown, reason: string): never => {
+        throw new Error(
+            `Add-on CSP: ${JSON.stringify(entry)} in scriptSrc is not accepted: ${reason}.`
+        );
+    };
+    for (const entry of sources) {
+        if (typeof entry !== "string" || entry.length === 0) {
+            refuse(entry, "an entry must be one non-empty source expression");
+        }
+        if (/[\s;,]/.test(entry)) {
+            refuse(entry, "an entry must be one source expression, with no whitespace, ';' or ','");
+        }
+        const lower = entry.toLowerCase();
+        const refusedReason = ADDON_SCRIPT_SRC_REFUSED[lower];
+        if (refusedReason) {
+            refuse(entry, refusedReason);
+        }
+        if (lower.startsWith("'nonce-")) {
+            refuse(entry, "the policy is a static response header, so a nonce in it is public");
+        }
+        if (
+            !ADDON_SCRIPT_SRC_KEYWORDS.includes(lower) &&
+            !ADDON_SCRIPT_SRC_HASH.test(entry) &&
+            !ADDON_SCRIPT_SRC_HOST.test(entry)
+        ) {
+            refuse(
+                entry,
+                "an add-on may contribute blob:, 'self', 'unsafe-hashes', 'wasm-unsafe-eval', a " +
+                    "'sha256-'/'sha384-'/'sha512-' hash, or an https:// or wss:// host source"
+            );
+        }
+    }
+    return sources;
+}
+
 /**
  * Loads additional CSP configuration from JSON file with proper error handling
  * @returns CSPAdditionalConfig object or undefined if file doesn't exist or is invalid
@@ -629,6 +712,7 @@ export function generateContentSecurityPolicy(
     const addonSources = addonCspSources(config);
     connectSrc.push(...addonSources.connectSrc);
     frameSrc.push(...addonSources.frameSrc);
+    scriptSrc = mergeCSPSources(scriptSrc, addonScriptSrcSources(addonSources.scriptSrc));
 
     // Merge additional CSP sources if configuration is loaded
     if (additionalCSPConfig) {

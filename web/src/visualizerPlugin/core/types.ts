@@ -18,6 +18,12 @@ export interface ViewerPluginConfig {
     supportsMultiFile: boolean;
     canFullscreen: boolean;
     priority: number;
+    /**
+     * Opens automatically in visualize mode when this viewer is the top-priority match among
+     * several and no other match shares its priority. Off when absent: several matches then
+     * show the viewer chooser.
+     */
+    autoSelect?: boolean;
     dependencies: string[];
     loadStrategy: "lazy" | "eager";
     category: string;
