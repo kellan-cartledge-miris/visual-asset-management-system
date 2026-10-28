@@ -240,7 +240,7 @@ Review existing custom install scripts in `web/customInstalls/` for patterns. Vi
 | `priority`                   | number   | Yes      | Selection order (lower = listed first when multiple viewers match)                                              |
 | `autoSelect`                 | boolean  | No       | Opens the viewer automatically in visualize mode when it is the only match at the lowest priority among several |
 | `dependencies`               | string[] | Yes      | Required library names (informational)                                                                          |
-| `loadStrategy`               | string   | Yes      | `"lazy"` (load on demand) or `"eager"` (load at startup)                                                        |
+| `loadStrategy`               | string   | Yes      | `"lazy"` or `"eager"`. Not read; every viewer loads on first use.                                               |
 | `category`                   | string   | Yes      | Viewer category: `3d`, `media`, `document`, `data`, or `preview`                                                |
 | `enabled`                    | boolean  | Yes      | Whether the plugin is active                                                                                    |
 | `dependencyManager`          | string   | No       | Path to the dependency manager module                                                                           |
