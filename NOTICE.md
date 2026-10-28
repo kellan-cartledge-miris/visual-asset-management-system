@@ -50,9 +50,9 @@ This software includes third party software subject to the following copyrights:
 | @hookform/resolvers                 | ^3.9.0        | MIT                     |
 | @mapbox/mapbox-gl-draw              | ^1.4.1        | ISC                     |
 | @maplibre/maplibre-gl-geocoder      | ^1.5.0        | ISC                     |
-| @miris-inc/components               | 0.0.8-a2ebb07 | Apache-2.0              |
-| @miris-inc/core                     | 0.0.8-a2ebb07 | Apache-2.0              |
-| @miris-inc/three                    | 0.0.8-a2ebb07 | Apache-2.0              |
+| @miris-inc/components               | 0.0.8-d3cdf31 | Apache-2.0              |
+| @miris-inc/core                     | 0.0.8-d3cdf31 | Apache-2.0              |
+| @miris-inc/three                    | 0.0.8-d3cdf31 | Apache-2.0              |
 | @monaco-editor/react                | ^4.6.0        | MIT                     |
 | @radix-ui/react-context-menu        | ^2.2.2        | MIT                     |
 | @radix-ui/react-dialog              | ^1.1.2        | MIT                     |

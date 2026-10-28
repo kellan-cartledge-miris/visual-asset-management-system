@@ -12,7 +12,7 @@ The viewer streams the Miris asset recorded in a USD file's `miris_asset_uuid` f
 -   A VAMS dev stack you can deploy to in the commercial partition (`getConfig()` rejects Miris when `app.govCloud.enabled` is `true`, as in every restricted partition).
 -   Browser DevTools open on the Network tab (WS and Fetch/XHR filters) and the Console.
 -   A browser with WebGPU (current desktop Chrome or Edge) for the default engine; step 4b also covers a browser without WebGPU and an unsupported device. A GES asset UUID is useful for step 4b.
--   The viewer renders with `@miris-inc/components`, `@miris-inc/three` and `@miris-inc/core`, all pinned to `0.0.8-a2ebb07` in `web/package.json`. After an SDK upgrade, confirm the three versions in `web/package-lock.json` still match.
+-   The viewer renders with `@miris-inc/components`, `@miris-inc/three` and `@miris-inc/core`, all pinned to `0.0.8-d3cdf31` in `web/package.json`. After an SDK upgrade, confirm the three versions in `web/package-lock.json` still match.
 -   Docker Desktop with the **containerd image store disabled** (Settings → General → uncheck "Use containerd for pulling and storing images"). With it enabled, CDK Lambda layer bundling fails because BuildKit-built images aren't visible to `docker run`.
 -   CDK bootstrap in **two regions**: your primary region (e.g. `us-west-2`) AND `us-east-1`. The CloudFront WAF stack lives in us-east-1 regardless of where the main stack deploys.
 
