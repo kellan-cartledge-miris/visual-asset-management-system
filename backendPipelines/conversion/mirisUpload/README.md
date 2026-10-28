@@ -37,9 +37,9 @@ The pipeline is same-Region only: `vamsExecuteMirisUpload` rejects an input file
 
 1. **Gate check**
 
-    - A manual run (**Stream with Miris** from **Automation -> Execute Workflow**) always proceeds and writes no claim.
+    - A manual run (the **Miris Spatial Streaming Upload** workflow from **Automation -> Execute Workflow**) always proceeds and writes no claim.
     - A triggered run lists the asset's files with a trigger extension under the asset root and fingerprints their asset-relative keys and ETags (SHA-256). The gate claims `s3://<auxiliary-bucket>/locks/miris-upload/<assetId>/<fingerprint>.claim` with a conditional S3 put (`If-None-Match: *`). The first execution to write it proceeds; every other execution for the same content (for example, several layers uploaded together, or a repeat trigger on unchanged files) receives `PreconditionFailed`, reports its workflow task token as skipped, and exits as a no-op.
-    - A run that does not succeed releases its claim. A successful run keeps its claim and deletes the asset's claims on other content, so changed, added or reverted USD layers upload again. A change to non-USD files alone (textures) gives the same fingerprint; run **Stream with Miris** to upload it.
+    - A run that does not succeed releases its claim. A successful run keeps its claim and deletes the asset's claims on other content, so changed, added or reverted USD layers upload again. A change to non-USD files alone (textures) gives the same fingerprint; run the **Miris Spatial Streaming Upload** workflow to upload it.
 
 2. **List, size check, root selection and download**
 

@@ -40,12 +40,12 @@ The fingerprint is a SHA-256 digest of the asset-relative key and ETag of every 
 -   **Unchanged USD files.** A successful upload keeps its claim, so a later trigger on the same USD content is skipped.
 -   **Changed, added, or reverted USD files.** Any change to a USD layer's key or content gives a new fingerprint, so the next trigger uploads again. A successful upload also deletes the asset's claims on other content, so returning to earlier content uploads again.
 -   **Failed runs.** A run that does not succeed releases its claim, so the next trigger on the same content uploads.
--   **Manual runs.** **Stream with Miris** always uploads and writes no claim. When it succeeds it deletes the asset's existing claims, so the next trigger uploads again. No claim object needs to be deleted by hand.
+-   **Manual runs.** A run of the **Miris Spatial Streaming Upload** workflow from **Execute Workflow** always uploads and writes no claim. When it succeeds it deletes the asset's existing claims, so the next trigger uploads again. No claim object needs to be deleted by hand.
 
 ### Known limitations
 
--   **A change to non-USD files does not start an upload.** Only files with a trigger extension enter the fingerprint, so a change to textures or other files that leaves every USD file unchanged gives the same fingerprint and the trigger is skipped. Run **Stream with Miris** on the asset to upload the change.
--   **A queued run uploads the asset as it is when its job starts.** The container lists and downloads the asset when its AWS Batch job starts, not when the gate fingerprinted it. When newer files land while a run waits in the job queue, that run can upload the newer content under the earlier claim. The next trigger corrects the stream; so does running **Stream with Miris**.
+-   **A change to non-USD files does not start an upload.** Only files with a trigger extension enter the fingerprint, so a change to textures or other files that leaves every USD file unchanged gives the same fingerprint and the trigger is skipped. Run the **Miris Spatial Streaming Upload** workflow on one of the asset's USD files to upload the change.
+-   **A queued run uploads the asset as it is when its job starts.** The container lists and downloads the asset when its AWS Batch job starts, not when the gate fingerprinted it. When newer files land while a run waits in the job queue, that run can upload the newer content under the earlier claim. The next trigger corrects the stream; so does running the **Miris Spatial Streaming Upload** workflow.
 -   **A multi-file upload can upload twice.** Each uploaded file starts its own execution. A gate that runs before every USD file of the upload has landed computes a different fingerprint from the later ones, so that run uploads as well.
 
 ---
@@ -107,7 +107,7 @@ The pipeline adds no files to the asset. It writes one `.metadata.json` file at 
 
 When the run's metadata output path is missing, the pipeline fails before it submits the AWS Batch job, so nothing is uploaded to Miris without a place to record the result.
 
--   **Re-running.** Running **Stream with Miris** again, or a trigger on changed USD content, uploads a new Miris asset and overwrites the four keys with it. The previous Miris asset is not deleted; remove it in the Miris Portal if it is no longer needed.
+-   **Re-running.** Running the **Miris Spatial Streaming Upload** workflow again, or a trigger on changed USD content, uploads a new Miris asset and overwrites the four keys with it. The previous Miris asset is not deleted; remove it in the Miris Portal if it is no longer needed.
 -   **Output path extension.** The metadata file is applied at the path it is written to, relative to the run's output folder. The registered `miris-upload` workflow uses the default output path. A custom workflow that runs this pipeline with a `defaultOutputFileBaseExecutionPathExtension` shifts the path the metadata is applied to, so the keys do not land on the source USD file.
 
 After upload, Miris processes the asset, typically for 1–2 hours, before it is streamable. Opening the root USD file in the meantime shows the viewer's "preparing" overlay; see [Viewer plugin](../developer/miris-spatial-streaming.md#viewer-plugin).
@@ -153,7 +153,7 @@ A job stopped at its time limit, an inner execution that timed out or was stoppe
 
 ```mermaid
 flowchart LR
-    TRIG["fileUpload trigger or<br/>Stream with Miris"] --> VE["vamsExecuteMirisUpload"]
+    TRIG["fileUpload trigger or<br/>Execute Workflow"] --> VE["vamsExecuteMirisUpload"]
     VE --> GATE["mirisUploadGate<br/>(claim in auxiliary bucket)"]
     VE --> OPEN["openPipeline"]
     OPEN --> SFN["Inner state machine"]

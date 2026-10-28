@@ -320,7 +320,7 @@ All plugin behavior is defined in `viewerConfig.json`:
 -   **Priority**: 0, with `autoSelect`, so it opens ahead of the Needle USD viewer
 -   **Category**: 3d
 -   **Feature restriction**: `MIRIS_ADDON` (set when `app.addons.useMirisStreaming.enabled` is `true`) and `ALLOWUNSAFEEVAL`
--   **Note**: A file not yet streamed shows guidance that names the Needle USD viewer and the **Stream with Miris** workflow. The browser needs WebGL 2.0; some Miris assets need WebGPU.
+-   **Note**: A file not yet streamed shows guidance that names the Needle USD viewer and the **Miris Spatial Streaming Upload** workflow. The browser needs WebGL 2.0; some Miris assets need WebGPU.
 
 ### 21. ThreeJSViewerPlugin
 
