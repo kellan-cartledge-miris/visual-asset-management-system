@@ -83,12 +83,12 @@ function errorMessage(err: ViewerError): string {
         case "MINT_FAILED":
             return "Could not get access to stream this asset from Miris. Try again.";
         case "INVALID_UUID":
-            return "This file's miris_asset_uuid metadata is not a valid UUID. Correct it in the file's metadata, or run Stream with Miris again.";
+            return "This file's miris_asset_uuid metadata is not a valid UUID. Correct it in the file's metadata, or run the Miris Spatial Streaming Upload workflow on it again.";
         case "NOT_BOUND":
             return (
                 "The Miris asset recorded for this file is not linked to this VAMS asset: it must " +
                 `exist in the Miris workspace and carry the vams-asset-${err.assetId} and ` +
-                `vams-database-${err.databaseId} tags. Run Stream with Miris on this file again, ` +
+                `vams-database-${err.databaseId} tags. Run the Miris Spatial Streaming Upload workflow on this file again, ` +
                 "or add those tags to the Miris asset."
             );
         case "LOAD_FAILED":
@@ -407,8 +407,8 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                         </Box>
                         <Box variant="p" color="text-body-secondary">
                             To stream it, use the file manager&apos;s <strong>Automation</strong>{" "}
-                            action to run <strong>Stream with Miris</strong> on it; once processing
-                            completes, you can stream it here.
+                            action to run the <strong>Miris Spatial Streaming Upload</strong>{" "}
+                            workflow on it; once processing completes, you can stream it here.
                         </Box>
                     </SpaceBetween>
                 </div>
@@ -469,8 +469,8 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                     )}
                     {staleStream && (
                         <Alert type="warning" statusIconAriaLabel="Warning">
-                            This stream was built from a different version of this file. Run Stream
-                            with Miris again to update it.
+                            This stream was built from a different version of this file. Run the
+                            Miris Spatial Streaming Upload workflow again to update it.
                         </Alert>
                     )}
                 </div>

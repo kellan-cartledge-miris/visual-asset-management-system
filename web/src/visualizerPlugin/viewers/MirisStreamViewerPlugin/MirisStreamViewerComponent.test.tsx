@@ -434,7 +434,7 @@ describe("MirisStreamViewerComponent", () => {
             await waitFor(() =>
                 expect(screen.getByText(/not yet streamed with miris/i)).toBeInTheDocument()
             );
-            expect(screen.getByText("Stream with Miris")).toBeInTheDocument();
+            expect(screen.getByText("Miris Spatial Streaming Upload")).toBeInTheDocument();
             expect(screen.queryByRole("button")).not.toBeInTheDocument();
             expect(mockLoadMirisStream).not.toHaveBeenCalled();
             expect(sceneElement()).toBeNull();

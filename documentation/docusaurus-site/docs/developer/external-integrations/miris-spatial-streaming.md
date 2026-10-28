@@ -29,7 +29,7 @@ VAMS includes one Miris viewer plugin for USD files.
 
 The plugin's `viewerConfig.json` entry sets `autoSelect: true`, so when it is the only USD viewer at the lowest priority (`0`) it opens automatically instead of waiting for the user to choose; other USD viewers, such as the Needle USD Viewer, remain in the viewer selector. When a USD file is opened, the plugin calls the [stream status endpoint](../../api/miris.md) with the file's object key and acts on the result:
 
--   **The file has no Miris asset UUID**: shows a "Not yet streamed with Miris" note. The note suggests the **Needle USD Viewer (Experimental)** for viewing the file now, and the file manager's **Automation** action, which runs the **Stream with Miris** template of the auto-registered `miris-upload` workflow on the file, for streaming it. The viewer does not start an upload itself.
+-   **The file has no Miris asset UUID**: shows a "Not yet streamed with Miris" note. The note suggests the **Needle USD Viewer (Experimental)** for viewing the file now, and the file manager's **Automation** action, which runs the auto-registered **Miris Spatial Streaming Upload** workflow (`miris-upload`) on the file, for streaming it. The viewer does not start an upload itself.
 -   **Miris is still preparing the asset**: shows a "preparing" overlay (processing typically takes 1–2 hours after upload) and refreshes automatically when the asset becomes streamable.
 -   **The asset is streamable, or Miris could not be queried**: streams the asset with a viewer key, with `miris_display_name` as the overlay label. In `static` mode the key is the deployment's viewer key; in [`perView` mode](#per-view-viewer-keys) the viewer first requests a key from VAMS, and shows an error instead of the stream if the request is denied (`403`) or fails. The status check is advisory and does not block streaming.
 -   **The Miris asset is not bound to this VAMS asset** (`perView` mode): the Miris asset lacks one of the [binding tags](#binding-tags), or Miris reports that it has no such asset because it was deleted or is not visible to the Integration Key's workspace. Shows an error that names both tags instead of the stream.
@@ -37,7 +37,7 @@ The plugin's `viewerConfig.json` entry sets `autoSelect: true`, so when it is th
 
 Each error message offers a **Retry** button that loads the stream again, starting with the status check.
 
-When the file records the Amazon S3 version it was streamed from (`miris_source_version_id`) and that version differs from the version being viewed, the viewer streams the recorded asset and shows a banner: "This stream was built from a different version of this file. Run Stream with Miris again to update it." When neither a file version nor an asset version is selected, the viewer compares against the file's current version; viewing a historical asset version without a file version shows no banner. A file without a recorded source version, which is typical of hand-edited metadata, shows no banner.
+When the file records the Amazon S3 version it was streamed from (`miris_source_version_id`) and that version differs from the version being viewed, the viewer streams the recorded asset and shows a banner: "This stream was built from a different version of this file. Run the Miris Spatial Streaming Upload workflow again to update it." When neither a file version nor an asset version is selected, the viewer compares against the file's current version; viewing a historical asset version without a file version shows no banner. A file without a recorded source version, which is typical of hand-edited metadata, shows no banner.
 
 When a historical asset version is viewed, the viewer streams the Miris asset recorded in the file's current metadata, not in the version's metadata snapshot (see the [Miris API Reference](../../api/miris.md)).
 
@@ -63,7 +63,7 @@ With `app.miris.enabled`, the Content Security Policy gains `blob:` in `script-s
 
 -   **The panel shows "Miris streaming is not supported on this device"**: the browser grants neither a WebGPU adapter nor a WebGL 2 context, or the WebGL 2 engine could not compile its shaders. Enable hardware acceleration, or use a supported browser.
 -   **The SDK reports that WebGPU is required**: the asset is a GES asset and the browser grants no WebGPU adapter. Open it in a browser that supports WebGPU, such as a current Chrome or Edge, with hardware acceleration enabled.
--   **"The Miris asset recorded for this file is not linked to this VAMS asset"** (`perView` mode): add the two [binding tags](#binding-tags) to the Miris asset, or run **Stream with Miris** on the file again. The error also appears when Miris reports that it has no such asset: it was deleted, or it is not visible to the Integration Key's workspace.
+-   **"The Miris asset recorded for this file is not linked to this VAMS asset"** (`perView` mode): add the two [binding tags](#binding-tags) to the Miris asset, or run the **Miris Spatial Streaming Upload** workflow on the file again. The error also appears when Miris reports that it has no such asset: it was deleted, or it is not visible to the Integration Key's workspace.
 -   **"The Miris viewer failed to load"**: the viewer waits 60 seconds for the SDK to load and then stops. Check the Network tab for blocked or stalled SDK and `.wasm` requests and the console for CSP violations.
 -   **"Timed out waiting for Miris to start streaming"**: the stream sends no first frame within 60 seconds. An invalid or wrong-workspace viewer key and a blocked `*.miris.com` connection also surface this way, because they fire no event.
 
@@ -97,7 +97,7 @@ The keys are ordinary file metadata, and users can edit them through the **Miris
 
 -   **Who can change the keys.** Any user with `PUT` permission on the asset can change or clear the keys. The viewer has no separate lock on them. In `perView` mode a new `miris_asset_uuid` streams only when that Miris asset carries the asset's [binding tags](#binding-tags); `static` mode checks no tags.
 -   **Moving, renaming, and deleting.** Moving or renaming the USD file carries its metadata, including the stream keys, to the new path. Deleting the file deletes its metadata. Neither operation changes the asset on Miris.
--   **Re-running the upload.** Running **Stream with Miris** again always uploads, and a trigger on changed USD files uploads too; either overwrites the keys with the new Miris asset. See the [upload pipeline](../../pipelines/miris-upload.md#what-the-pipeline-writes) for details.
+-   **Re-running the upload.** Running the **Miris Spatial Streaming Upload** workflow again always uploads, and a trigger on changed USD files uploads too; either overwrites the keys with the new Miris asset. See the [upload pipeline](../../pipelines/miris-upload.md#what-the-pipeline-writes) for details.
 
 ### Finding streamed files
 

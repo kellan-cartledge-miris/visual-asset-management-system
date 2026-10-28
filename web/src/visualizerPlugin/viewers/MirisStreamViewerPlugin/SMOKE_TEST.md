@@ -77,7 +77,7 @@ vamscli file upload -d <database-id> -a <asset-id> ./smoke-test.usdz
 Navigate to the asset and click `smoke-test.usdz`. Verify:
 
 -   [ ] The **Miris Spatial Streaming** viewer is selected by default, and the Needle USD Viewer is still offered in the viewer selector.
--   [ ] The viewer shows **Not yet streamed with Miris**, pointing to the file manager's **Automation** action and **Stream with Miris**.
+-   [ ] The viewer shows **Not yet streamed with Miris**, pointing to the file manager's **Automation** action and the **Miris Spatial Streaming Upload** workflow.
 -   [ ] The Network tab shows a `miris/asset-status?filePath=...` request returning `"state": "notStreamed"`, and no download request for the file.
 
 ### 4. Point the USD file at an existing Miris asset by hand
@@ -129,14 +129,14 @@ Set `miris_asset_uuid` back to a streamable UUID, and set `miris_source_version_
 
 Upload a new version of `smoke-test.usdz` (any change to the file) without touching its metadata, then reopen it:
 
--   [ ] The asset still streams, with the banner "This stream was built from a different version of this file. Run Stream with Miris again to update it."
+-   [ ] The asset still streams, with the banner "This stream was built from a different version of this file. Run the Miris Spatial Streaming Upload workflow again to update it."
 
 ### 7. Verify the invalid-UUID error path
 
 Set `miris_asset_uuid` to `not-a-uuid` and reopen the file. Verify:
 
 -   [ ] `miris/asset-status` returns `"state": "invalidUuid"`.
--   [ ] An error overlay shows: "This file's miris_asset_uuid metadata is not a valid UUID. Correct it in the file's metadata, or run Stream with Miris again."
+-   [ ] An error overlay shows: "This file's miris_asset_uuid metadata is not a valid UUID. Correct it in the file's metadata, or run the Miris Spatial Streaming Upload workflow on it again."
 
 ### 8. Verify clean teardown on viewer switch
 

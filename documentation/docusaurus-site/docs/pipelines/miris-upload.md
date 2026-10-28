@@ -24,12 +24,12 @@ The fingerprint is a SHA-256 digest of the asset-relative path and ETag of every
 -   **Unchanged USD files.** A successful upload keeps its claim, so a later trigger on the same USD content reports `skipped`.
 -   **Changed, added, or reverted USD files.** Any change to a USD layer's path or content gives a new fingerprint, so the next trigger uploads again. A successful upload also deletes the asset's claims on other content, so returning to earlier content uploads again too.
 -   **Failed runs.** A run that does not succeed releases its claim, so the next trigger on the same content uploads.
--   **Manual runs.** **Stream with Miris** from **Automation -> Execute Workflow** always uploads and writes no claim. When it succeeds it deletes the asset's existing claims, so the next trigger uploads again. No claim object ever needs to be deleted by hand.
+-   **Manual runs.** A run of the **Miris Spatial Streaming Upload** workflow from **Automation -> Execute Workflow** always uploads and writes no claim. When it succeeds it deletes the asset's existing claims, so the next trigger uploads again. No claim object ever needs to be deleted by hand.
 
 ### Known limitations
 
--   **Non-USD files do not re-trigger an upload.** Only files with a trigger extension enter the fingerprint. A change to textures or other files that leaves every USD file unchanged gives the same fingerprint, so the trigger reports `skipped`. Run **Stream with Miris** on the asset to upload the change.
--   **A queued run uploads the asset as it is when its job starts.** The container lists and downloads the asset when its AWS Batch job starts, not when the gate fingerprinted it. When newer files land while a run waits in the job queue, that run can upload the newer content under the earlier claim. The next trigger corrects the stream; so does running **Stream with Miris**.
+-   **Non-USD files do not re-trigger an upload.** Only files with a trigger extension enter the fingerprint. A change to textures or other files that leaves every USD file unchanged gives the same fingerprint, so the trigger reports `skipped`. Run the **Miris Spatial Streaming Upload** workflow on one of the asset's USD files to upload the change.
+-   **A queued run uploads the asset as it is when its job starts.** The container lists and downloads the asset when its AWS Batch job starts, not when the gate fingerprinted it. When newer files land while a run waits in the job queue, that run can upload the newer content under the earlier claim. The next trigger corrects the stream; so does running the **Miris Spatial Streaming Upload** workflow.
 -   **A multi-file upload can upload twice.** Each uploaded file starts its own execution. A gate that runs before every USD file of the upload has landed computes a different fingerprint from the later ones, so that run uploads as well.
 
 ## Viewing the result
@@ -42,7 +42,7 @@ The pipeline adds no files to the asset. It writes one `.metadata.json` file to 
 
 When the run's metadata output path is missing, the pipeline fails before it submits the AWS Batch job, so nothing is uploaded to Miris without a place to record the result.
 
--   **Re-running.** Running **Stream with Miris** again, or a trigger on changed USD content, uploads a new Miris asset and overwrites the four keys with it. The previous Miris asset is not deleted; remove it in the Miris Portal if it is no longer needed.
+-   **Re-running.** Running the **Miris Spatial Streaming Upload** workflow again, or a trigger on changed USD content, uploads a new Miris asset and overwrites the four keys with it. The previous Miris asset is not deleted; remove it in the Miris Portal if it is no longer needed.
 -   **Output path extension.** The metadata file is applied to the path it is written at, relative to the run's output folder. The registered `miris-upload` workflow uses the default output path extension (`/`). A custom workflow that runs this pipeline with a `defaultOutputFileBaseExecutionPathExtension` (see [Pipelines and workflows](../concepts/pipelines-and-workflows.md)) shifts the path the metadata is applied to, so the keys do not land on the source USD file.
 
 ## Supported source formats
