@@ -1249,7 +1249,7 @@ See section 9.4 for the full Synonyms rules.
 | `react-router-dom`                                             | ^6.0.0                | Client-side routing                                                         |
 | `styled-components`                                            | ^5.3.3                | CSS-in-JS (legacy usage)                                                    |
 | `three`                                                        | ^0.185.1              | 3D rendering engine (Miris viewer; customInstalls viewers bundle their own) |
-| `@miris-inc/components`, `@miris-inc/core`, `@miris-inc/three` | 0.0.8-a2ebb07 (exact) | Miris Spatial Streaming SDK (add-on viewer)                                 |
+| `@miris-inc/components`, `@miris-inc/core`, `@miris-inc/three` | 0.0.8-d3cdf31 (exact) | Miris Spatial Streaming SDK (add-on viewer)                                 |
 | `maplibre-gl`                                                  | ^6.9.0                | Map rendering                                                               |
 | `react-pdf`                                                    | ^10.1.0               | PDF viewing                                                                 |
 | `papaparse`                                                    | ^5.4.1                | CSV parsing                                                                 |
