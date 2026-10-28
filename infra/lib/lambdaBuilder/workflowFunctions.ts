@@ -295,9 +295,8 @@ export function buildExecutionServiceFunction(
             // group '/aws/vendedlogs/Pipelines/*' (the ECS pipelines and the eight Fargate Batch
             // pipelines: coordinate transform, Blender renderer, 3D thumbnail, PDAL, Potree, video
             // SOP/BOM extraction, the GenAI CAD STEP agent on its `fargate` runtime, and Miris
-            // upload), AWS Batch's
-            // default container group
-            // '/aws/batch/job' and SageMaker's '/aws/sagemaker/TrainingJobs'. getConfig() rejects
+            // upload), AWS Batch's default container group '/aws/batch/job' and SageMaker's
+            // '/aws/sagemaker/TrainingJobs'. getConfig() rejects
             // '*', '/' and anything outside '/aws/', so the grant can never widen to the whole
             // vended-log namespace. Each entry is suffixed with ':*' for stream-level reads.
             resources: [

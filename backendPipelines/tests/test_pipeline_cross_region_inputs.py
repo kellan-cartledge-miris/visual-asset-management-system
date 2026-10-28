@@ -14,7 +14,7 @@ through the S3 gateway endpoint and in each cross-Region asset bucket's Region t
 cross-Region S3 interface endpoint the VPC builder creates there (`addCrossRegionS3Endpoints`). The
 CDK names those Regions in `CROSS_REGION_S3_ENDPOINT_REGIONS` on their `vamsExecute` Lambdas, and
 the handlers reject an input in any other Region before submitting the job, from inside the `try`
-that reports `SendTaskFailure`. The eight private-subnet pipelines, the GenAI CAD STEP agent (its
+that reports `SendTaskFailure`. The private-subnet pipelines, the GenAI CAD STEP agent (its
 container runs on Amazon Bedrock AgentCore outside the VPC, or on AWS Batch in private subnets) and
 the Lambda-container pipelines are not gated, because their compute has a route to Amazon S3 in the
 bucket Region, except the same-Region-only class below (third-party container images, and the Miris
