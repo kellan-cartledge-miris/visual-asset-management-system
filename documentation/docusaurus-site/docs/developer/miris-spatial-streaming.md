@@ -68,7 +68,7 @@ The add-on includes one viewer plugin for USD files.
 | --------------------- | --------------------------------- | -------- | ----------------------------------- | ------------------------------------------------------------------- |
 | `miris-stream-viewer` | `.usd`, `.usda`, `.usdc`, `.usdz` | 0        | `MIRIS_ADDON` and `ALLOWUNSAFEEVAL` | Streams the Miris asset recorded in the USD file's stream metadata. |
 
-The plugin's entry in `web/src/visualizerPlugin/config/addonViewerConfig.json` sets `autoSelect: true`. When the plugin is the only USD viewer at the lowest priority (`0`), it opens automatically in visualize mode instead of waiting for the user to choose; the Needle USD Viewer (priority `1`) stays in the viewer selector. In compare mode the viewer selector behaves as for any other file type.
+At priority `0`, the plugin is listed ahead of the Needle USD Viewer (priority `1`) in the viewer selector, and, as for any file that several viewers support, VAMS loads neither until the user chooses one.
 
 When a USD file is opened, the plugin acts on the stream status:
 
