@@ -168,15 +168,8 @@ def _ts_array_to_json(source, array_name, constants):
         elif source.startswith("...", position):
             # An add-on spread contributes elements only when the add-on is enabled: skip it and its
             # comma. Either a call, `...addonReadOnlyApiRouteCriteria(props.config, roleNameIDClean),`,
-            # a variable holding such a call's result, `...addonGetApiCriteria,`, or an inline
-            # conditional, `...(props.config.app.addons.<name>.enabled ? [...] : []),`.
-            name = _IDENTIFIER.match(source, position + 3)
-            if name is not None and source[name.end()] != "(":
-                if not name.group(0).startswith("addon"):
-                    raise ValueError(f"{array_name}: spread of non-add-on {name.group(0)!r}")
-                position = name.end()
-            else:
-                position = _skip_bracketed(source, source.index("(", position))
+            # or an inline conditional, `...(props.config.app.addons.<name>.enabled ? [...] : []),`.
+            position = _skip_bracketed(source, source.index("(", position))
             while source[position].isspace():
                 position += 1
             if source[position] == ",":

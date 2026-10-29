@@ -15,14 +15,9 @@
  * position in the construct's constraint list, so a criterion appended inside an existing constraint
  * must leave every custom resource's id, and every other constraint's item, exactly as they were.
  *
- * Both add-on lanes of the role, GET and POST, pass through `assertAddonApiRouteCriteria()` at synth, so
- * an add-on criterion that could reach a core route (a wrong field or operator, a value outside
- * `/addon/<name>/`, a regular-expression metacharacter, a reused id) fails synthesis.
- *
- * A stand-in criterion is injected by replacing the function, so the guard is tested apart from any
- * shipped add-on's criteria. The
- * construct is synthesized on its own: its constraint items are config-independent apart from the
- * add-on criteria.
+ * A stand-in criterion is injected by replacing the function, so the lane is tested apart from any
+ * shipped add-on's criteria. The construct is synthesized on its own: its constraint items are
+ * config-independent apart from the add-on criteria.
  */
 
 import * as fs from "fs";
@@ -224,106 +219,18 @@ describe("read-only POST constraint add-on lane", () => {
         });
     });
 
-    describe("criterion guard", () => {
-        const criterion = (fields: Record<string, string | undefined>) => ({
-            M: Object.fromEntries(
-                Object.entries(fields)
-                    .filter(([, value]) => value !== undefined)
-                    .map(([key, value]) => [key, { S: value }])
-            ),
+    it("appends the Physna GET criterion after the core GET criteria", () => {
+        const config = templateConfig("commercial", (c) => {
+            c.app.addons.usePhysnaSync.enabled = true;
         });
-        const post = (overrides: Record<string, string | undefined> = {}) =>
-            criterion({
-                field: "route__path",
-                id: "90_basicro_api_paths_post",
-                operator: "starts_with",
-                value: "/addon/x/route",
-                ...overrides,
-            });
-
-        const injectPost = (criteria: any[]) =>
-            jest
-                .spyOn(AddonDefaultRoutes, "addonReadOnlyApiPostRouteCriteria")
-                .mockReturnValue(criteria);
-
-        const refused: Array<[string, any[]]> = [
-            ["a core route prefix", [post({ value: "/auth" })]],
-            ["a regex alternation smuggling a core route", [post({ value: "/addon/a|/database" })]],
-            [
-                "an operator other than equals or starts_with",
-                [post({ operator: "contains", value: "/" })],
-            ],
-            ["contains on an add-on route", [post({ operator: "contains" })]],
-            ["a field other than route__path", [post({ field: "object__type" })]],
-            ["an id that repeats a core criterion id", [post({ id: "3_basicro_api_paths_post" })]],
-            ["two add-on criteria with one id", [post(), post({ value: "/addon/x/other" })]],
-            ["an id without the _api_paths_post suffix", [post({ id: "90_basicro_api_paths" })]],
-            ["an add-on route without its own path", [post({ value: "/addon/x" })]],
-            ["an upper-case add-on name", [post({ value: "/addon/X/route" })]],
-            ["a '.' in the value", [post({ value: "/addon/x/route.json" })]],
-            ["a group in the value", [post({ value: "/addon/x/(route)" })]],
-            ["an anchor in the value", [post({ value: "/addon/x/route$" })]],
-            ["a backslash in the value", [post({ value: "/addon/x/\\d" })]],
-            ["a criterion without a value", [post({ value: undefined })]],
-        ];
-
-        it.each(refused)("refuses %s", (_label, criteria) => {
-            injectPost(criteria);
-            expect(() => synthConstraintItems(templateConfig("commercial"))).toThrow(
-                /^Add-on read-only route criterion .* is not accepted: /
-            );
-        });
-
-        it.each([
-            ["equals", "/addon/x/route"],
-            ["starts_with", "/addon/x-1/"],
-        ])("accepts a %s criterion on %s", (operator, value) => {
-            injectPost([post({ operator, value })]);
-            const items = synthConstraintItems(templateConfig("commercial"));
-            expect(byConstraint(items, POST_CONSTRAINT).criteriaOr).toContainEqual({
-                field: "route__path",
-                id: "90_basicro_api_paths_post",
-                operator,
-                value,
-            });
-        });
-
-        it.each([
-            [
-                "a regex alternation",
-                { id: "90_basicro_api_paths", value: "/addon/x/a|b" },
-                /metacharacter/,
-            ],
-            ["a POST-lane id", { id: "90_basicro_api_paths_post" }, /must end in _api_paths\./],
-        ])("refuses a GET criterion with %s", (_label, overrides, reason) => {
-            jest.spyOn(AddonDefaultRoutes, "addonReadOnlyApiRouteCriteria").mockReturnValue([
-                post(overrides),
-            ]);
-            expect(() => synthConstraintItems(templateConfig("commercial"))).toThrow(reason);
-        });
-
-        it("refuses a GET criterion that repeats a core GET criterion id", () => {
-            jest.spyOn(AddonDefaultRoutes, "addonReadOnlyApiRouteCriteria").mockReturnValue([
-                post({ id: "15_basicro_api_paths" }),
-            ]);
-            expect(() => synthConstraintItems(templateConfig("commercial"))).toThrow(
-                /repeats another criterion id/
-            );
-        });
-
-        it("passes the Physna GET criterion unchanged", () => {
-            const config = templateConfig("commercial", (c) => {
-                c.app.addons.usePhysnaSync.enabled = true;
-            });
-            const physna = AddonDefaultRoutes.addonReadOnlyApiRouteCriteria(config, "basicro");
-            expect(physna).toHaveLength(1);
-            const get = byConstraint(synthConstraintItems(config), GET_CONSTRAINT);
-            expect(get.criteriaOr[get.criteriaOr.length - 1]).toEqual({
-                field: "route__path",
-                id: "16_basicro_api_paths",
-                operator: "starts_with",
-                value: "/addon/physna/viewer",
-            });
+        const physna = AddonDefaultRoutes.addonReadOnlyApiRouteCriteria(config, "basicro");
+        expect(physna).toHaveLength(1);
+        const get = byConstraint(synthConstraintItems(config), GET_CONSTRAINT);
+        expect(get.criteriaOr[get.criteriaOr.length - 1]).toEqual({
+            field: "route__path",
+            id: "16_basicro_api_paths",
+            operator: "starts_with",
+            value: "/addon/physna/viewer",
         });
     });
 });

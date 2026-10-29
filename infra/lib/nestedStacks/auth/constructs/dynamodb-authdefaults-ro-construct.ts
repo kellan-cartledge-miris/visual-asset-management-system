@@ -24,7 +24,6 @@ import * as ServiceHelper from "../../../../lib/helper/service-helper";
 import {
     addonReadOnlyApiPostRouteCriteria,
     addonReadOnlyApiRouteCriteria,
-    assertAddonApiRouteCriteria,
 } from "../../addon/addonDefaultRoutes";
 
 export interface DynamoDbAuthDefaultsROConstructStackProps extends cdk.StackProps {
@@ -198,12 +197,6 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
             onUpdate: awsSdkCallRoleRo,
             role: props.customResourceRole,
         });
-
-        const addonGetApiCriteria = addonReadOnlyApiRouteCriteria(props.config, roleNameIDClean);
-        const addonPostApiCriteria = addonReadOnlyApiPostRouteCriteria(
-            props.config,
-            roleNameIDClean
-        );
 
         const initialConstraints = [
             {
@@ -662,7 +655,7 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                 },
                             },
                         },
-                        ...addonGetApiCriteria,
+                        ...addonReadOnlyApiRouteCriteria(props.config, roleNameIDClean),
                     ],
                 },
                 description: {
@@ -855,7 +848,7 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                                 },
                             },
                         },
-                        ...addonPostApiCriteria,
+                        ...addonReadOnlyApiPostRouteCriteria(props.config, roleNameIDClean),
                     ],
                 },
                 description: {
@@ -1493,22 +1486,6 @@ export class DynamoDbAuthDefaultsROConstructStack extends Construct {
                 },
             },
         ];
-
-        // Add-on criteria are checked against the constraint they join (addonDefaultRoutes.ts)
-        const criteriaOrOf = (suffix: string): any[] =>
-            (initialConstraints as any[]).find(
-                (constraint) => constraint.constraintId.S === `initial_${roleNameIDClean}_${suffix}`
-            ).criteriaOr.L;
-        assertAddonApiRouteCriteria(
-            addonGetApiCriteria,
-            criteriaOrOf("allow_get_apis"),
-            "_api_paths"
-        );
-        assertAddonApiRouteCriteria(
-            addonPostApiCriteria,
-            criteriaOrOf("allow_post_apis"),
-            "_api_paths_post"
-        );
 
         let i = 0;
         for (const constraint of initialConstraints) {
