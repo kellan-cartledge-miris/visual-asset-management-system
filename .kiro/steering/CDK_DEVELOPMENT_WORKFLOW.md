@@ -2233,7 +2233,7 @@ export function generateContentSecurityPolicy(
 }
 ```
 
-Add-on sources come from `addonCspSources()` (`lib/nestedStacks/addon/addonCsp.ts`): `connectSrc` and `frameSrc` are appended, and `scriptSrc` is merged only from an allowlist (`addonScriptSrcSources()` in `security.ts`): `blob:`, `'self'`, `'unsafe-hashes'`, `'wasm-unsafe-eval'`, `'sha256-'`/`'sha384-'`/`'sha512-'` hash sources, and `https://` or `wss://` hosts (an exact host or one `*.` subdomain wildcard, optional port and path), one source expression per entry with no whitespace, `;` or `,`. `'unsafe-inline'`, `'unsafe-eval'`, `'strict-dynamic'`, nonces, `*`, `https://*`, `http://` hosts and scheme-only sources other than `blob:` fail synthesis; `'unsafe-eval'` comes only from `app.webUi.allowUnsafeEvalFeatures`, which an add-on that needs it requires in `getConfig()`. The Miris Spatial Streaming add-on adds `blob:` to `script-src` and `https://*.miris.com` and `wss://*.miris.com` to `connect-src` (`infra/test/addon/addonCspScriptSrc.test.ts`, `infra/test/addon/mirisAddonCsp.test.ts`).
+Add-on sources come from `addonCspSources()` (`lib/nestedStacks/addon/addonCsp.ts`): `connectSrc` and `frameSrc` are appended, and `scriptSrc` is merged into `script-src`. `'unsafe-eval'` comes only from `app.webUi.allowUnsafeEvalFeatures`, which an add-on that needs it requires in `getConfig()`. The Miris Spatial Streaming add-on adds `blob:` to `script-src` and `https://*.miris.com` and `wss://*.miris.com` to `connect-src` (`infra/test/addon/addonCspScriptSrc.test.ts`, `infra/test/addon/mirisAddonCsp.test.ts`).
 
 ### **Lambda Builder Integration in Nested Stacks**
 

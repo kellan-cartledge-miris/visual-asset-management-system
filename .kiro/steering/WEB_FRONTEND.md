@@ -438,12 +438,9 @@ the add-ons included. The Physna add-on's viewer frames Physna's own HTTPS origi
 policy's reach; the keyword would also be ignored on a VAMS page, because the hash sources are
 present. The Physna add-on contributes `frame-src` and `connect-src` origins and no `script-src`
 source. An add-on may contribute `script-src` sources (`addonCspSources().scriptSrc` in
-`infra/lib/nestedStacks/addon/addonCsp.ts`), which `generateContentSecurityPolicy()` merges only
-from an allowlist: `blob:`, `'self'`, `'unsafe-hashes'`, `'wasm-unsafe-eval'`, hash sources, and
-`https://` or `wss://` hosts (an exact host or a `*.` subdomain wildcard, optional port and path),
-one source expression per entry. `'unsafe-inline'`, `'unsafe-eval'`, `'strict-dynamic'`, nonces, `*`,
-`https://*`, `http://` hosts and scheme-only sources other than `blob:` fail synthesis. The Miris Spatial Streaming add-on adds
-`blob:`, from which its SDK imports part of its engine.
+`infra/lib/nestedStacks/addon/addonCsp.ts`), which `generateContentSecurityPolicy()` merges into
+`script-src`. The Miris Spatial Streaming add-on adds `blob:`, from which its SDK imports part of its
+engine.
 
 If a **new** viewer plugin needs inline script, hash that document's own inline blocks rather than
 moving `'unsafe-inline'` into `script-src` -- a hash source makes the keyword inert, so adding it

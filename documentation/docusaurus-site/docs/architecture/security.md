@@ -509,10 +509,6 @@ effect inside the iframe, and none on a VAMS page either, since the hash sources
 keyword. The hash-based protection is identical whether or not the add-on is enabled.
 :::
 
-:::note[What an add-on may add to script-src]
-An add-on contributes `script-src` sources through `scriptSrc` in `infra/lib/nestedStacks/addon/addonCsp.ts`, and synthesis accepts only `blob:`, `'self'`, `'unsafe-hashes'`, `'wasm-unsafe-eval'`, a `'sha256-'`, `'sha384-'`, or `'sha512-'` hash, or an `https://` or `wss://` host source, one source expression per entry. It fails on anything else, including `'unsafe-inline'`, `'unsafe-eval'` (which only `allowUnsafeEvalFeatures` adds), `'strict-dynamic'`, a nonce, `*`, and a scheme-only `https:`, `http:`, or `data:` source.
-:::
-
 ### Extensible CSP
 
 Additional CSP sources can be configured via `infra/config/csp/cspAdditionalConfig.json`. This JSON file supports adding entries to `connectSrc`, `scriptSrc`, `workerSrc`, `imgSrc`, `mediaSrc`, `fontSrc`, `styleSrc`, and `frameSrc` arrays.

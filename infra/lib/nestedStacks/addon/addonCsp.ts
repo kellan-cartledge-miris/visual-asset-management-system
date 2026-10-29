@@ -9,13 +9,7 @@ import * as Config from "../../../config/config";
 export interface AddonCspSources {
     connectSrc: string[];
     frameSrc: string[];
-    /**
-     * Merged into `script-src`, one source expression per entry: `blob:`, `'self'`,
-     * `'unsafe-hashes'`, `'wasm-unsafe-eval'`, a `'sha256-'`/`'sha384-'`/`'sha512-'` hash, or an
-     * `https://` or `wss://` host source. Anything else fails synthesis
-     * (`generateContentSecurityPolicy()`); `'unsafe-eval'` is added only by
-     * `app.webUi.allowUnsafeEvalFeatures`, which an add-on that needs it requires in `getConfig()`.
-     */
+    /** Sources merged into `script-src`. */
     scriptSrc: string[];
 }
 
