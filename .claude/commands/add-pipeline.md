@@ -402,7 +402,6 @@ After creating all files, verify:
 -   [ ] `VamsSchemaRegistration` is wired in the nested stack with the correct `resourceOverrides`
 -   [ ] Lambda handler paths in CDK match actual file locations in `backendPipelines/`
 -   [ ] Step Functions state machine references correct Lambda ARNs
--   [ ] `ConstructPipelineTask` has a `Catch` (`resultPath: "$.error"`) that reaches `PipelineEndTask`, so a failure the handler never reports still releases the workflow callback token (`infra/test/pipelines/constructPipelineTaskErrorRoute.test.ts`)
 -   [ ] Container Dockerfile builds successfully
 -   [ ] Container Dockerfile drops to a non-root `USER`, and every `COPY` of source that user reads is followed on the next line by `RUN chmod -R a+rX <path>` (`COPY --chown` alone is not sufficient)
 -   [ ] Config flag name matches between config.json, config templates, config.ts interface, and the pipelineBuilder check
