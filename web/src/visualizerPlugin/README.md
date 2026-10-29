@@ -317,7 +317,7 @@ All plugin behavior is defined in `viewerConfig.json`:
 -   **Features**: Streams the Miris asset recorded in the file's `miris_*` metadata with the Miris web SDK (`<miris-scene>`). The component reads the file's stream state through `GET /addon/miris/asset-status`, gets a viewer key through `POST /addon/miris/viewer-key` once the asset is streamable, and checks again every 90 seconds while Miris is still preparing it. A stream built from another version of the file shows a warning.
 -   **Multi-file**: No
 -   **Dependencies**: `@miris-inc/components`, `@miris-inc/core`, `@miris-inc/three` and `three`, loaded by a dynamic `import()` only when a file is streamed
--   **Priority**: 0, so it is listed ahead of the Needle USD viewer
+-   **Priority**: 0, with `autoSelect`, so it opens ahead of the Needle USD viewer
 -   **Category**: 3d
 -   **Feature restriction**: `MIRIS_ADDON` (set when `app.addons.useMirisStreaming.enabled` is `true`) and `ALLOWUNSAFEEVAL`
 -   **Note**: A file not yet streamed shows guidance that names the Needle USD viewer and the **Miris Spatial Streaming Upload** workflow. The browser needs WebGL 2.0; some Miris assets need WebGPU.

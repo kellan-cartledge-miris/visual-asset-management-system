@@ -84,6 +84,7 @@
             "supportsMultiFile": false,
             "canFullscreen": true,
             "priority": 0,
+            "autoSelect": true,
             "dependencies": [
                 "@miris-inc/components",
                 "@miris-inc/core",

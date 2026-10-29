@@ -48,6 +48,10 @@ For the complete list of all viewers, supported extensions, priority resolution,
 When multiple viewers support the same file extension, `getCompatibleViewers()` returns them sorted by `priority`, lowest number first, and the viewer selector lists them in that order. In a default deployment, for example, a `.json` file matches the Text Viewer (priority 1) and the Cesium 3D Tileset Viewer (priority 2).
 :::
 
+:::info[Automatic selection]
+When several viewers match, `DynamicViewer` waits for the user to choose one, unless the first viewer in priority order sets `autoSelect: true` and no other match shares its priority. That viewer then opens automatically in visualize mode; compare mode always shows the selector. `autoSelect` is off when absent. The Miris Spatial Streaming viewer sets it at priority `0`, so it opens USD files while the Needle USD Viewer stays in the selector.
+:::
+
 ## Creating a New Viewer Plugin
 
 Adding a new viewer requires three to five steps, with no changes to core system code.
@@ -224,28 +228,29 @@ Review existing custom install scripts in `web/customInstalls/` for patterns. Vi
 
 ## Plugin Configuration Fields
 
-| Field                        | Type     | Required | Description                                                        |
-| ---------------------------- | -------- | -------- | ------------------------------------------------------------------ |
-| `id`                         | string   | Yes      | Unique plugin identifier                                           |
-| `name`                       | string   | Yes      | Display name in the viewer selector UI                             |
-| `description`                | string   | Yes      | Description shown to users                                         |
-| `componentPath`              | string   | Yes      | Path for manifest lookup (must match manifest.ts key)              |
-| `supportedExtensions`        | string[] | Yes      | File extensions this viewer handles (e.g., `[".obj", ".fbx"]`)     |
-| `supportsMultiFile`          | boolean  | Yes      | Whether the viewer can handle multiple files simultaneously        |
-| `canFullscreen`              | boolean  | Yes      | Whether the viewer supports fullscreen mode                        |
-| `priority`                   | number   | Yes      | Selection order (lower = listed first when multiple viewers match) |
-| `dependencies`               | string[] | Yes      | Required library names (informational)                             |
-| `loadStrategy`               | string   | Yes      | `"lazy"` or `"eager"`. Not read; every viewer loads on first use.  |
-| `category`                   | string   | Yes      | Viewer category: `3d`, `media`, `document`, `data`, or `preview`   |
-| `enabled`                    | boolean  | Yes      | Whether the plugin is active                                       |
-| `dependencyManager`          | string   | No       | Path to the dependency manager module                              |
-| `dependencyManagerClass`     | string   | No       | Class name exported by the dependency module                       |
-| `dependencyManagerMethod`    | string   | No       | Static method to call for loading dependencies                     |
-| `dependencyCleanupMethod`    | string   | No       | Static method to call for cleanup                                  |
-| `featuresEnabledRestriction` | string[] | No       | Required feature flags (all must be enabled)                       |
-| `isPreviewViewer`            | boolean  | No       | `true` for the preview-only viewer                                 |
-| `requiresPreprocessing`      | boolean  | No       | `true` if the viewer needs a preprocessing pipeline                |
-| `customParameters`           | object   | No       | Viewer-specific configuration passed to the component              |
+| Field                        | Type     | Required | Description                                                                                                     |
+| ---------------------------- | -------- | -------- | --------------------------------------------------------------------------------------------------------------- |
+| `id`                         | string   | Yes      | Unique plugin identifier                                                                                        |
+| `name`                       | string   | Yes      | Display name in the viewer selector UI                                                                          |
+| `description`                | string   | Yes      | Description shown to users                                                                                      |
+| `componentPath`              | string   | Yes      | Path for manifest lookup (must match manifest.ts key)                                                           |
+| `supportedExtensions`        | string[] | Yes      | File extensions this viewer handles (e.g., `[".obj", ".fbx"]`)                                                  |
+| `supportsMultiFile`          | boolean  | Yes      | Whether the viewer can handle multiple files simultaneously                                                     |
+| `canFullscreen`              | boolean  | Yes      | Whether the viewer supports fullscreen mode                                                                     |
+| `priority`                   | number   | Yes      | Selection order (lower = listed first when multiple viewers match)                                              |
+| `autoSelect`                 | boolean  | No       | Opens the viewer automatically in visualize mode when it is the only match at the lowest priority among several |
+| `dependencies`               | string[] | Yes      | Required library names (informational)                                                                          |
+| `loadStrategy`               | string   | Yes      | `"lazy"` or `"eager"`. Not read; every viewer loads on first use.                                               |
+| `category`                   | string   | Yes      | Viewer category: `3d`, `media`, `document`, `data`, or `preview`                                                |
+| `enabled`                    | boolean  | Yes      | Whether the plugin is active                                                                                    |
+| `dependencyManager`          | string   | No       | Path to the dependency manager module                                                                           |
+| `dependencyManagerClass`     | string   | No       | Class name exported by the dependency module                                                                    |
+| `dependencyManagerMethod`    | string   | No       | Static method to call for loading dependencies                                                                  |
+| `dependencyCleanupMethod`    | string   | No       | Static method to call for cleanup                                                                               |
+| `featuresEnabledRestriction` | string[] | No       | Required feature flags (all must be enabled)                                                                    |
+| `isPreviewViewer`            | boolean  | No       | `true` for the preview-only viewer                                                                              |
+| `requiresPreprocessing`      | boolean  | No       | `true` if the viewer needs a preprocessing pipeline                                                             |
+| `customParameters`           | object   | No       | Viewer-specific configuration passed to the component                                                           |
 
 ## Dependency Chain Loading
 
