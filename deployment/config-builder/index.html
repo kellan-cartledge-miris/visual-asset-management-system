@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.2">
 <title data-rh="true">Configuration builder | Visual Asset Management System (VAMS)</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://awslabs.github.io/visual-asset-management-system/img/logo.png"><meta data-rh="true" name="twitter:image" content="https://awslabs.github.io/visual-asset-management-system/img/logo.png"><meta data-rh="true" property="og:url" content="https://awslabs.github.io/visual-asset-management-system/deployment/config-builder"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Configuration builder | Visual Asset Management System (VAMS)"><meta data-rh="true" name="description" content="This interactive builder helps you assemble a valid VAMS deployment configuration"><meta data-rh="true" property="og:description" content="This interactive builder helps you assemble a valid VAMS deployment configuration"><link data-rh="true" rel="icon" href="/visual-asset-management-system/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://awslabs.github.io/visual-asset-management-system/deployment/config-builder"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/deployment/config-builder" hreflang="en"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/deployment/config-builder" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Configuration builder","item":"https://awslabs.github.io/visual-asset-management-system/deployment/config-builder"}]}</script><link rel="stylesheet" href="/visual-asset-management-system/assets/css/styles.e6a99d95.css">
-<script src="/visual-asset-management-system/assets/js/runtime~main.9f4e9374.js" defer="defer"></script>
-<script src="/visual-asset-management-system/assets/js/main.410bd11a.js" defer="defer"></script>
+<script src="/visual-asset-management-system/assets/js/runtime~main.87aa0d2b.js" defer="defer"></script>
+<script src="/visual-asset-management-system/assets/js/main.c5a81bb3.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -23,7 +23,9 @@ options live under each section&#x27;s <strong>Show advanced options</strong> to
 <li class="">Watch the validation panel on the right. It mirrors the same cross-field checks
 that <code>getConfig()</code> enforces at deploy time (for example, GovCloud requires ALB
 instead of CloudFront, and external OAuth requires all of its fields).</li>
-<li class=""><strong>Download <code>config.json</code></strong> (or copy it) and place it at <code>infra/config/config.json</code>.</li>
+<li class=""><strong>Download <code>config.json</code></strong> (or copy it) and place it at <code>infra/config/config.json</code>, or save
+it under another name in <code>infra/config/</code> and deploy with <code>-c configFile=&lt;name&gt;</code>
+(<a class="" href="/visual-asset-management-system/deployment/configuration-reference#selecting-the-configuration-file">Selecting the configuration file</a>).</li>
 </ol><p>This builder is a helper, not a gate — you can download a partially-complete
 config to keep editing. Always run <code>cd infra &amp;&amp; npx cdk synth</code> before deploying to
 confirm the final configuration.</p></div></div>

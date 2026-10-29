@@ -1,0 +1,1020 @@
+<!doctype html>
+<html lang="en" dir="ltr" class="docs-wrapper plugin-docs plugin-id-default docs-version-current docs-doc-page docs-doc-id-pipelines/image-to-3d" data-has-hydrated="false">
+<head>
+<meta charset="UTF-8">
+<meta name="generator" content="Docusaurus v3.10.2">
+<title data-rh="true">Image to 3D Pipeline | Visual Asset Management System (VAMS)</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://awslabs.github.io/visual-asset-management-system/img/logo.png"><meta data-rh="true" name="twitter:image" content="https://awslabs.github.io/visual-asset-management-system/img/logo.png"><meta data-rh="true" property="og:url" content="https://awslabs.github.io/visual-asset-management-system/pipelines/image-to-3d"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Image to 3D Pipeline | Visual Asset Management System (VAMS)"><meta data-rh="true" name="description" content="The Image to 3D pipeline reconstructs a 3D mesh from a single photograph using open-weight image-to-3D models -- textured for most of them, geometry only for Stable3DGen, which can instead take its colour from the input photograph -- and optionally runs an automated print-readiness cleanup that repairs the mesh toward a watertight, manifold STL and then verifies it against a print-readiness gate. The pipeline runs on GPU-accelerated AWS Batch instances and writes the generated mesh, textures and a gate report back to the VAMS asset."><meta data-rh="true" property="og:description" content="The Image to 3D pipeline reconstructs a 3D mesh from a single photograph using open-weight image-to-3D models -- textured for most of them, geometry only for Stable3DGen, which can instead take its colour from the input photograph -- and optionally runs an automated print-readiness cleanup that repairs the mesh toward a watertight, manifold STL and then verifies it against a print-readiness gate. The pipeline runs on GPU-accelerated AWS Batch instances and writes the generated mesh, textures and a gate report back to the VAMS asset."><link data-rh="true" rel="icon" href="/visual-asset-management-system/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://awslabs.github.io/visual-asset-management-system/pipelines/image-to-3d"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/pipelines/image-to-3d" hreflang="en"><link data-rh="true" rel="alternate" href="https://awslabs.github.io/visual-asset-management-system/pipelines/image-to-3d" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Image to 3D Pipeline","item":"https://awslabs.github.io/visual-asset-management-system/pipelines/image-to-3d"}]}</script><link rel="stylesheet" href="/visual-asset-management-system/assets/css/styles.e6a99d95.css">
+<script src="/visual-asset-management-system/assets/js/runtime~main.87aa0d2b.js" defer="defer"></script>
+<script src="/visual-asset-management-system/assets/js/main.c5a81bb3.js" defer="defer"></script>
+</head>
+<body>
+<svg style="display: none;"><defs>
+<symbol id="theme-svg-external-link" viewBox="0 0 24 24"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"/></symbol>
+</defs></svg>
+<script>!function(){var t=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();document.documentElement.setAttribute("data-theme",t||(window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")),document.documentElement.setAttribute("data-theme-choice",t||"system")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}(),document.documentElement.setAttribute("data-announcement-bar-initially-dismissed",function(){try{return"true"===localStorage.getItem("docusaurus.announcement.dismiss")}catch(t){}return!1}())</script><div id="__docusaurus"><link rel="preload" as="image" href="/visual-asset-management-system/img/logo_dark.png"><link rel="preload" as="image" href="/visual-asset-management-system/img/logo.png"><div role="region" aria-label="Skip to main content"><a class="skipToContent_fXgn" href="#__docusaurus_skipToContent_fallback">Skip to main content</a></div><div class="theme-announcement-bar announcementBar_mb4j" style="background-color:#232f3e;color:#ffffff" role="banner"><div class="announcementBarPlaceholder_vyr4"></div><div class="content_knG7 announcementBarContent_xLdY">⭐ If you like VAMS, give it a star on <a target="_blank" rel="noopener noreferrer" href="https://github.com/awslabs/visual-asset-management-system">GitHub</a>! ⭐</div><button type="button" aria-label="Close" class="clean-btn close closeButton_CVFx announcementBarClose_gvF7"><svg viewBox="0 0 15 15" width="14" height="14"><g stroke="currentColor" stroke-width="3.1"><path d="M.75.75l13.5 13.5M14.25.75L.75 14.25"></path></g></svg></button></div><nav aria-label="Main" class="theme-layout-navbar navbar navbar--fixed-top"><div class="navbar__inner"><div class="theme-layout-navbar-left navbar__items"><button aria-label="Toggle navigation bar" aria-expanded="false" class="navbar__toggle clean-btn" type="button"><svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true"><path stroke="currentColor" stroke-linecap="round" stroke-miterlimit="10" stroke-width="2" d="M4 7h22M4 15h22M4 23h22"></path></svg></button><a class="navbar__brand" href="/visual-asset-management-system/"><div class="navbar__logo"><img src="/visual-asset-management-system/img/logo_dark.png" alt="VAMS" class="themedComponent_mlkZ themedComponent--light_NVdE"><img src="/visual-asset-management-system/img/logo.png" alt="VAMS" class="themedComponent_mlkZ themedComponent--dark_xIcU"></div><b class="navbar__title text--truncate"></b></a><a aria-current="page" class="navbar__item navbar__link navbar__link--active" href="/visual-asset-management-system/">Documentation</a></div><div class="theme-layout-navbar-right navbar__items navbar__items--right"><a href="https://github.com/awslabs/visual-asset-management-system" target="_blank" rel="noopener noreferrer" class="navbar__item navbar__link">GitHub<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a><a href="https://aws.amazon.com/solutions/guidance/visual-asset-management-system-on-aws/" target="_blank" rel="noopener noreferrer" class="navbar__item navbar__link">AWS Solutions<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a><div class="toggle_vylO colorModeToggle_DEke"><button class="clean-btn toggleButton_gllP toggleButtonDisabled_aARS" type="button" disabled="" title="system mode" aria-label="Switch between dark and light mode (currently system mode)"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP lightToggleIcon_pyhR"><path fill="currentColor" d="M12,9c1.65,0,3,1.35,3,3s-1.35,3-3,3s-3-1.35-3-3S10.35,9,12,9 M12,7c-2.76,0-5,2.24-5,5s2.24,5,5,5s5-2.24,5-5 S14.76,7,12,7L12,7z M2,13l2,0c0.55,0,1-0.45,1-1s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S1.45,13,2,13z M20,13l2,0c0.55,0,1-0.45,1-1 s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S19.45,13,20,13z M11,2v2c0,0.55,0.45,1,1,1s1-0.45,1-1V2c0-0.55-0.45-1-1-1S11,1.45,11,2z M11,20v2c0,0.55,0.45,1,1,1s1-0.45,1-1v-2c0-0.55-0.45-1-1-1C11.45,19,11,19.45,11,20z M5.99,4.58c-0.39-0.39-1.03-0.39-1.41,0 c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0s0.39-1.03,0-1.41L5.99,4.58z M18.36,16.95 c-0.39-0.39-1.03-0.39-1.41,0c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0c0.39-0.39,0.39-1.03,0-1.41 L18.36,16.95z M19.42,5.99c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06c-0.39,0.39-0.39,1.03,0,1.41 s1.03,0.39,1.41,0L19.42,5.99z M7.05,18.36c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06 c-0.39,0.39-0.39,1.03,0,1.41s1.03,0.39,1.41,0L7.05,18.36z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP darkToggleIcon_wfgR"><path fill="currentColor" d="M9.37,5.51C9.19,6.15,9.1,6.82,9.1,7.5c0,4.08,3.32,7.4,7.4,7.4c0.68,0,1.35-0.09,1.99-0.27C17.45,17.19,14.93,19,12,19 c-3.86,0-7-3.14-7-7C5,9.07,6.81,6.55,9.37,5.51z M12,3c-4.97,0-9,4.03-9,9s4.03,9,9,9s9-4.03,9-9c0-0.46-0.04-0.92-0.1-1.36 c-0.98,1.37-2.58,2.26-4.4,2.26c-2.98,0-5.4-2.42-5.4-5.4c0-1.81,0.89-3.42,2.26-4.4C12.92,3.04,12.46,3,12,3L12,3z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP systemToggleIcon_QzmC"><path fill="currentColor" d="m12 21c4.971 0 9-4.029 9-9s-4.029-9-9-9-9 4.029-9 9 4.029 9 9 9zm4.95-13.95c1.313 1.313 2.05 3.093 2.05 4.95s-0.738 3.637-2.05 4.95c-1.313 1.313-3.093 2.05-4.95 2.05v-14c1.857 0 3.637 0.737 4.95 2.05z"></path></svg></button></div><div class="navbarSearchContainer_Bca1"></div></div></div><div role="presentation" class="navbar-sidebar__backdrop"></div></nav><div id="__docusaurus_skipToContent_fallback" class="theme-layout-main main-wrapper mainWrapper_z2l0"><div class="docsWrapper_hBAB"><button aria-label="Scroll back to top" class="clean-btn theme-back-to-top-button backToTopButton_sjWU" type="button"></button><div class="docRoot_UBD9"><aside class="theme-doc-sidebar-container docSidebarContainer_YfHR"><div class="sidebarViewport_aRkj"><div class="sidebar_njMd"><nav aria-label="Docs sidebar" class="menu thin-scrollbar menu_SIkG menuWithAnnouncementBar_GW3s"><ul class="theme-doc-sidebar-menu menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/visual-asset-management-system/"><span class="linkLabel_WmDU">Visual Asset Management System (VAMS)</span></a></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="true" href="/visual-asset-management-system/overview/solution-overview"><span class="categoryLinkLabel_W154">Overview</span></a></div><ul class="menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/overview/solution-overview"><span class="linkLabel_WmDU">Solution Overview</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/overview/benefits"><span class="linkLabel_WmDU">Benefits</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/overview/use-cases"><span class="linkLabel_WmDU">Use Cases</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/overview/features"><span class="linkLabel_WmDU">Features</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/overview/costs"><span class="linkLabel_WmDU">Cost</span></a></li></ul></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/visual-asset-management-system/concepts/overview"><span class="categoryLinkLabel_W154">Core Concepts</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/visual-asset-management-system/architecture/overview"><span class="categoryLinkLabel_W154">Architecture</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/visual-asset-management-system/deployment/prerequisites"><span class="categoryLinkLabel_W154">Deployment</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/visual-asset-management-system/user-guide/getting-started"><span class="categoryLinkLabel_W154">User Guide</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret menu__link--active" role="button" aria-expanded="true" href="/visual-asset-management-system/developer/setup"><span class="categoryLinkLabel_W154">Developer Guide</span></a></div><ul class="menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/developer/setup"><span class="linkLabel_WmDU">Local Development Environment Setup</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/developer/agentic-development"><span class="linkLabel_WmDU">Agentic Development</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/developer/backend"><span class="linkLabel_WmDU">Backend Development</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/developer/frontend"><span class="linkLabel_WmDU">Frontend Development</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/developer/cdk"><span class="linkLabel_WmDU">CDK Infrastructure Development</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/developer/opensearch"><span class="linkLabel_WmDU">OpenSearch</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/developer/viewer-plugins"><span class="linkLabel_WmDU">Viewer Plugin Development</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/developer/audit-logging"><span class="linkLabel_WmDU">Audit Logging</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/developer/security"><span class="linkLabel_WmDU">Security: Developer Reference</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/developer/permissions"><span class="linkLabel_WmDU">Permissions: Developer Reference</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/developer/customizing-vams"><span class="linkLabel_WmDU">Extending VAMS in a Fork</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/developer/workflow-execution-data-model-handoff"><span class="linkLabel_WmDU">Workflow Execution Data Model</span></a></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/visual-asset-management-system/developer/data-syncing/overview"><span class="categoryLinkLabel_W154">Data Syncing</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/visual-asset-management-system/developer/addons-overview"><span class="categoryLinkLabel_W154">Add-ons</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret menu__link--active" role="button" aria-expanded="true" tabindex="0" href="/visual-asset-management-system/pipelines/overview"><span class="categoryLinkLabel_W154">Pipelines</span></a></div><ul class="menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/pipelines/overview"><span class="linkLabel_WmDU">Pipeline System Overview</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/pipelines/potree-viewer"><span class="linkLabel_WmDU">Potree Point Cloud Viewer Pipeline</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/pipelines/3d-thumbnail"><span class="linkLabel_WmDU">3D Preview Thumbnail Pipeline</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/pipelines/3d-conversion"><span class="linkLabel_WmDU">3D Basic Conversion Pipeline</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/pipelines/cad-mesh-extraction"><span class="linkLabel_WmDU">CAD/Mesh Metadata Extraction Pipeline</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/pipelines/coordinate-transform"><span class="linkLabel_WmDU">Coordinate Transform Pipeline</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/pipelines/genai-cad-step-agent"><span class="linkLabel_WmDU">GenAI CAD STEP Agent Pipeline</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/pipelines/gaussian-splatting"><span class="linkLabel_WmDU">Gaussian Splatting Pipeline</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/pipelines/genai-labeling"><span class="linkLabel_WmDU">GenAI 3D Metadata Labeling Pipeline</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/pipelines/video-sop-bom"><span class="linkLabel_WmDU">Video SOP/BOM Extraction Pipeline</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/pipelines/miris-upload"><span class="linkLabel_WmDU">Miris Upload</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/pipelines/nvidia-isaac-lab"><span class="linkLabel_WmDU">NVIDIA Isaac Lab Training Pipeline</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/pipelines/nvidia-cosmos-predict"><span class="linkLabel_WmDU">NVIDIA Cosmos Predict Pipeline</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/pipelines/nvidia-cosmos-reason"><span class="linkLabel_WmDU">NVIDIA Cosmos Reason Pipeline</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/pipelines/nvidia-cosmos-transfer"><span class="linkLabel_WmDU">NVIDIA Cosmos Transfer Pipeline</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/pipelines/nvidia-cosmos-3"><span class="linkLabel_WmDU">NVIDIA Cosmos 3 Pipeline</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/pipelines/nvidia-gr00t-finetune"><span class="linkLabel_WmDU">NVIDIA Gr00t Fine-Tuning Pipeline</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link menu__link--active" aria-current="page" tabindex="0" href="/visual-asset-management-system/pipelines/image-to-3d"><span class="linkLabel_WmDU">Image to 3D Pipeline</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/pipelines/image-to-3d-options"><span class="linkLabel_WmDU">Image to 3D: Stages, Models and Options</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/pipelines/rapidpipeline"><span class="linkLabel_WmDU">RapidPipeline 3D Processor</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/pipelines/model-ops"><span class="linkLabel_WmDU">ModelOps (VNTANA) Pipeline</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/pipelines/custom-pipelines"><span class="linkLabel_WmDU">Building custom pipelines</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/visual-asset-management-system/pipelines/migrating-pipelines-v25-to-v26"><span class="linkLabel_WmDU">Migrating pipelines (v2.5 → v2.6)</span></a></li></ul></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/visual-asset-management-system/cli/getting-started"><span class="categoryLinkLabel_W154">CLI Reference</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/visual-asset-management-system/api/overview"><span class="categoryLinkLabel_W154">API Reference</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/visual-asset-management-system/developer/utilities/overview"><span class="categoryLinkLabel_W154">Utilities</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/visual-asset-management-system/developer/external-integrations/overview"><span class="categoryLinkLabel_W154">External Tool Integrations</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/visual-asset-management-system/troubleshooting/common-issues"><span class="categoryLinkLabel_W154">Troubleshooting</span></a></div></li></ul></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_byQd menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/visual-asset-management-system/additional/quotas"><span class="categoryLinkLabel_W154">Additional</span></a></div></li></ul></nav><button type="button" title="Collapse sidebar" aria-label="Collapse sidebar" class="button button--secondary button--outline collapseSidebarButton_PEFL"><svg width="20" height="20" aria-hidden="true" class="collapseSidebarButtonIcon_kv0_"><g fill="#7a7a7a"><path d="M9.992 10.023c0 .2-.062.399-.172.547l-4.996 7.492a.982.982 0 01-.828.454H1c-.55 0-1-.453-1-1 0-.2.059-.403.168-.551l4.629-6.942L.168 3.078A.939.939 0 010 2.528c0-.548.45-.997 1-.997h2.996c.352 0 .649.18.828.45L9.82 9.472c.11.148.172.347.172.55zm0 0"></path><path d="M19.98 10.023c0 .2-.058.399-.168.547l-4.996 7.492a.987.987 0 01-.828.454h-3c-.547 0-.996-.453-.996-1 0-.2.059-.403.168-.551l4.625-6.942-4.625-6.945a.939.939 0 01-.168-.55 1 1 0 01.996-.997h3c.348 0 .649.18.828.45l4.996 7.492c.11.148.168.347.168.55zm0 0"></path></g></svg></button></div></div></aside><main class="docMainContainer_TBSr"><div class="container padding-top--md padding-bottom--lg"><div class="row"><div class="col docItemCol_VOVn"><div class="docItemContainer_Djhp"><article><nav class="theme-doc-breadcrumbs breadcrumbsContainer_Z_bl" aria-label="Breadcrumbs"><ul class="breadcrumbs"><li class="breadcrumbs__item"><a aria-label="Home page" class="breadcrumbs__link" href="/visual-asset-management-system/"><svg viewBox="0 0 24 24" class="breadcrumbHomeIcon_YNFT"><path d="M10 19v-5h4v5c0 .55.45 1 1 1h3c.55 0 1-.45 1-1v-7h1.7c.46 0 .68-.57.33-.87L12.67 3.6c-.38-.34-.96-.34-1.34 0l-8.36 7.53c-.34.3-.13.87.33.87H5v7c0 .55.45 1 1 1h3c.55 0 1-.45 1-1z" fill="currentColor"></path></svg></a></li><li class="breadcrumbs__item"><span class="breadcrumbs__link">Developer Guide</span></li><li class="breadcrumbs__item"><span class="breadcrumbs__link">Pipelines</span></li><li class="breadcrumbs__item breadcrumbs__item--active"><span class="breadcrumbs__link">Image to 3D Pipeline</span></li></ul></nav><div class="tocCollapsible_ETCw theme-doc-toc-mobile tocMobile_ITEo"><button type="button" class="clean-btn tocCollapsibleButton_TO0P">On this page</button></div><div class="theme-doc-markdown markdown"><header><h1>Image to 3D Pipeline</h1></header>
+<p>The Image to 3D pipeline reconstructs a 3D mesh from a single photograph using open-weight image-to-3D models -- textured for most of them, geometry only for Stable3DGen, which can instead take its colour from the input photograph -- and optionally runs an automated print-readiness cleanup that repairs the mesh toward a watertight, manifold STL and then verifies it against a print-readiness gate. The pipeline runs on GPU-accelerated AWS Batch instances and writes the generated mesh, textures and a gate report back to the VAMS asset.</p>
+<div class="theme-admonition theme-admonition-info admonition_xJq3 alert alert--info"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M7 2.3c3.14 0 5.7 2.56 5.7 5.7s-2.56 5.7-5.7 5.7A5.71 5.71 0 0 1 1.3 8c0-3.14 2.56-5.7 5.7-5.7zM7 1C3.14 1 0 4.14 0 8s3.14 7 7 7 7-3.14 7-7-3.14-7-7-7zm1 3H6v5h2V4zm0 6H6v2h2v-2z"></path></svg></span>Seven selectable generation paths</div><div class="admonitionContent_BuS1"><p>One deployment can carry up to seven generation paths -- <strong>Stable-X Stable3DGen</strong>, <strong>Microsoft TRELLIS.2</strong>, <strong>Meta SAM 3D Objects</strong>, <strong>VAST-AI TripoSR</strong>, <strong>StepFun Step1X-3D</strong>, <strong>Tencent Hunyuan3D-2</strong>, and a <strong>Blender agent</strong>: OpenAI&#x27;s Codex CLI reasoning with a vision model on Amazon Bedrock and building the subject in headless Blender, from photographs or by refining another path&#x27;s output. Each enabled model is built as its own container image and its own AWS Batch job definition, and a configuration template selects which one runs.</p></div></div>
+<div class="theme-admonition theme-admonition-tip admonition_xJq3 alert alert--success"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 12 16"><path fill-rule="evenodd" d="M6.5 0C3.48 0 1 2.19 1 5c0 .92.55 2.25 1 3 1.34 2.25 1.78 2.78 2 4v1h5v-1c.22-1.22.66-1.75 2-4 .45-.75 1-2.08 1-3 0-2.81-2.48-5-5.5-5zm3.64 7.48c-.25.44-.47.8-.67 1.11-.86 1.41-1.25 2.06-1.45 3.23-.02.05-.02.11-.02.17H5c0-.06 0-.13-.02-.17-.2-1.17-.59-1.83-1.45-3.23-.2-.31-.42-.67-.67-1.11C2.44 6.78 2 5.65 2 5c0-2.2 2.02-4 4.5-4 1.22 0 2.36.42 3.22 1.19C10.55 2.94 11 3.94 11 5c0 .66-.44 1.78-.86 2.48zM4 14h5c-.23 1.14-1.3 2-2.5 2s-2.27-.86-2.5-2z"></path></svg></span>Choosing a model and its options</div><div class="admonitionContent_BuS1"><p><a class="" href="/visual-asset-management-system/pipelines/image-to-3d-options">Image to 3D: Stages, Models and Options</a> maps every stage, every option each stage takes, which model-and-setting combinations produce colour, what each component is licensed under, and what has been measured so far.</p></div></div>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="overview">Overview<a href="#overview" class="hash-link" aria-label="Direct link to Overview" title="Direct link to Overview" translate="no">​</a></h2>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Property</th><th>Value</th></tr></thead><tbody><tr><td><strong>Models</strong></td><td><code>stable3dgen</code> (Stable-X Stable3DGen, default, geometry only), <code>trellis2</code> (Microsoft TRELLIS.2), <code>sam3d</code> (Meta SAM 3D Objects), <code>triposr</code> (VAST-AI TripoSR), <code>step1x3d</code> (Step1X-3D), <code>hunyuan3d</code> (Tencent Hunyuan3D-2), <code>blenderagent</code> (an agent driving Blender). Any combination can be enabled together, which is how one image is compared across models.</td></tr><tr><td><strong>Pipeline ID</strong></td><td><code>genai-image-to-3d</code> (database <code>GLOBAL</code>; the workflow uses the same identifier)</td></tr><tr><td><strong>Configuration flag</strong></td><td><code>app.pipelines.useImageTo3d.enabled</code>, per-model flags under <code>app.pipelines.useImageTo3d.models.*</code></td></tr><tr><td><strong>Execution type</strong></td><td>Lambda (asynchronous with task token callback)</td></tr><tr><td><strong>Supported input formats</strong></td><td><code>.png</code>, <code>.jpg</code>, <code>.jpeg</code> -- one image file per execution; up to four named views of one subject on the Hunyuan3D-2 multi-view template; up to eight photographs plus optionally one existing mesh (<code>.glb</code>, <code>.gltf</code>, <code>.obj</code>, <code>.stl</code>, <code>.ply</code>) on the Blender agent template</td></tr><tr><td><strong>Outputs</strong></td><td>GLB, OBJ with MTL and texture images, STL, and a mesh/gate report written as asset metadata</td></tr><tr><td><strong>Timeout</strong></td><td>2 hours (AWS Batch attempt), 3 hours (pipeline state machine), 4 hours (VAMS workflow task token)</td></tr></tbody></table>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="approximate-run-times">Approximate Run Times<a href="#approximate-run-times" class="hash-link" aria-label="Direct link to Approximate Run Times" title="Direct link to Approximate Run Times" translate="no">​</a></h2>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Phase</th><th>Duration</th><th>Notes</th></tr></thead><tbody><tr><td>Cold start (instance launch)</td><td>4-8 min</td><td>AWS Batch scales to zero between jobs, so every execution pays an instance launch</td></tr><tr><td>Container image pull</td><td>3-6 min</td><td>Cached after the first pull on an instance</td></tr><tr><td>Model weight restore (Amazon EFS)</td><td>&lt; 1 min</td><td>First run per model: 10-40 min while weights download from HuggingFace</td></tr><tr><td>Preprocess (validation + background removal)</td><td>5-30 sec</td><td>Depends on <code>BACKGROUND_REMOVAL</code>; <code>IMAGE_CLEANUP=skip</code> bypasses the step entirely</td></tr><tr><td>Generation -- Stable3DGen</td><td>30-90 sec</td><td>Normal prediction then geometry generation; estimate for this pipeline</td></tr><tr><td>Generation -- TRELLIS.2</td><td>30-120 sec</td><td>Published: roughly 3 sec at 512-cubed to 60 sec at 1536-cubed on an H100</td></tr><tr><td>Generation -- TripoSR</td><td>5-30 sec</td><td>Published: sub-second inference on an A100; the range here includes model load</td></tr><tr><td>Generation -- Step1X-3D</td><td>2-6 min</td><td>Two-stage geometry then texture synthesis; estimate for this pipeline</td></tr><tr><td>Generation -- Hunyuan3D-2</td><td>3-8 min</td><td>Flow-matching shape stage then a multi-view paint stage; estimate for this pipeline</td></tr><tr><td>Generation -- Blender agent</td><td>20-60 min</td><td>An agentic build-render-compare loop bounded by <code>BLENDERAGENT_MAX_MINUTES</code>; cost is model tokens, not GPU time</td></tr><tr><td>Generation -- Blender refit</td><td>1-5 min</td><td>Estimate for this pipeline: a fixed Blender chain on an existing mesh, with no model call; a metaball rebuild and QuadriFlow are the slow options</td></tr><tr><td>Generation -- SAM 3D Objects</td><td>1-4 min</td><td>Estimate for this pipeline</td></tr><tr><td>Mesh cleanup and print gate</td><td>20 sec - 5 min</td><td>Scales with <code>TARGET_FACE_COUNT</code> and the number of <code>REPAIR_BACKENDS</code> rungs reached</td></tr><tr><td>Export + Amazon S3 upload</td><td>&lt; 1 min</td><td>GLB, OBJ set and STL are typically a few MB to a few tens of MB</td></tr><tr><td><strong>Total (weights cached)</strong></td><td><strong>~8-20 min</strong></td><td>Including cold start and container pull; estimate for this pipeline</td></tr></tbody></table>
+<div class="theme-admonition theme-admonition-note admonition_xJq3 alert alert--secondary"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M6.3 5.69a.942.942 0 0 1-.28-.7c0-.28.09-.52.28-.7.19-.18.42-.28.7-.28.28 0 .52.09.7.28.18.19.28.42.28.7 0 .28-.09.52-.28.7a1 1 0 0 1-.7.3c-.28 0-.52-.11-.7-.3zM8 7.99c-.02-.25-.11-.48-.31-.69-.2-.19-.42-.3-.69-.31H6c-.27.02-.48.13-.69.31-.2.2-.3.44-.31.69h1v3c.02.27.11.5.31.69.2.2.42.31.69.31h1c.27 0 .48-.11.69-.31.2-.19.3-.42.31-.69H8V7.98v.01zM7 2.3c-3.14 0-5.7 2.54-5.7 5.68 0 3.14 2.56 5.7 5.7 5.7s5.7-2.55 5.7-5.7c0-3.15-2.56-5.69-5.7-5.69v.01zM7 .98c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.12-7-7 3.14-7 7-7z"></path></svg></span>Published benchmarks versus pipeline estimates</div><div class="admonitionContent_BuS1"><p>The TRELLIS.2 and TripoSR generation figures are the models&#x27; published inference characteristics on data-center GPUs. Every other duration in the table is an estimate for this pipeline&#x27;s own end-to-end run on the recommended instance types, and includes container startup, Amazon S3 transfer and mesh post-processing.</p></div></div>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="architecture">Architecture<a href="#architecture" class="hash-link" aria-label="Direct link to Architecture" title="Direct link to Architecture" translate="no">​</a></h2>
+<p>The pipeline runs each model in a dedicated container on a GPU-enabled AWS Batch compute environment. Every enabled model has its own container image and its own AWS Batch job definition; the configuration template applied to an execution names the model, and the pipeline state machine routes the run to that model&#x27;s job definition. Model weights are cached on a shared Amazon EFS file system and backed up to Amazon S3, so that only the first run of a model downloads from HuggingFace. The HuggingFace token is held in AWS Secrets Manager and reaches the container as a job secret. The Blender agent reasons with a foundation model on Amazon Bedrock, which the job invokes with its task role.</p>
+<!-- -->
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="processing-stages">Processing stages<a href="#processing-stages" class="hash-link" aria-label="Direct link to Processing stages" title="Direct link to Processing stages" translate="no">​</a></h3>
+<p>The first four stages run in AWS Lambda and the AWS Batch job&#x27;s start-up. The container stages after them are the ones a configuration template configures: its form labels every field with the stage that reads it -- <code>[1 Input]</code>, <code>[2 Generate]</code>, <code>[3 Cleanup]</code>, <code>[4 Colour]</code>, <code>[5 Print]</code> and <code>[6 Output]</code> -- in the order the run executes them, and shows only the stages its model uses.</p>
+<ol>
+<li class="">
+<p><strong>Input resolution and validation</strong> -- The <code>vamsExecute</code> Lambda function resolves the input file, the four output paths, the asset identifier and the database identifier from the execution manifest, resolves the model from the configuration template, and confirms the input files against what that model accepts -- one photograph for most models, up to four named views for Hunyuan3D-2, and up to eight photographs plus one optional mesh to refine for the Blender agent. A mesh handed to any other model is refused here. An unknown model name fails immediately with a clear error.</p>
+</li>
+<li class="">
+<p><strong>Extension gate and job submission</strong> -- The <code>openPipeline</code> Lambda function checks every input file&#x27;s extension against the pipeline&#x27;s allowed extensions (<code>.png</code>, <code>.jpg</code>, <code>.jpeg</code>, plus the mesh formats for the Blender agent alone), registers the run&#x27;s sub-process and log sources on the VAMS orchestration bus, generates a unique job name, and starts the pipeline state machine.</p>
+</li>
+<li class="">
+<p><strong>Definition construction</strong> -- The <code>constructPipeline</code> Lambda function builds the container definition -- input file location, output file, metadata and temporary prefixes, the asset and database identifiers, and the resolved model key. The model key is the discriminator the state machine routes on.</p>
+</li>
+<li class="">
+<p><strong>Model weight resolution (AWS Batch on GPU instances)</strong> -- The container resolves its weights from the Amazon EFS cache, restoring from the Amazon S3 backup when the cache is cold and downloading from HuggingFace only when neither is populated.</p>
+</li>
+<li class="">
+<p><strong><code>[1 Input]</code> Preprocessing and framing</strong> -- The input image is validated and the subject is segmented from its background so that the reconstruction sees a clean silhouette. The cutout is then cropped to the subject, centred, scaled so the subject fills <code>FRAMING_RATIO</code> of a square frame, and composited onto the flat <code>FRAMING_BACKGROUND</code> colour. Each model was trained on a particular framing, so the framing defaults come from the selected model rather than from one pipeline-wide value; a model whose own pipeline frames the cutout, or which reads the alpha channel as an object mask, declares <code>none</code> and receives the cutout untouched. Framing is skipped when <code>BACKGROUND_REMOVAL</code> is <code>none</code>, because there is then no mask to locate the subject in. Set <code>IMAGE_CLEANUP</code> to <code>skip</code> when the input is already a cut-out, which bypasses segmentation and framing together and removes their time and cost from the run.</p>
+</li>
+<li class="">
+<p><strong><code>[2 Generate]</code> Generation</strong> -- The selected model adapter reconstructs a mesh from the framed image. The Blender agent instead builds the subject in headless Blender against the photographs, or refines an existing mesh supplied beside them.</p>
+</li>
+<li class="">
+<p><strong><code>[3 Cleanup]</code> Print-readiness cleanup (optional)</strong> -- When <code>MESH_CLEANUP</code> is enabled, the mesh is optionally decimated to <code>TARGET_FACE_COUNT</code> and run through the repair ladder, then measured against the print-readiness gate. A mesh being decimated has its uv and normal seams welded first, because the decimator would otherwise treat the per-corner vertices a texture requires as distinct points and an edge collapse across a seam would leave the surface open. The model&#x27;s own colour is then carried onto the cleaned mesh.</p>
+</li>
+<li class="">
+<p><strong><code>[4 Colour]</code> Colour from the photograph (optional)</strong> -- When <code>PROJECT_PHOTO_COLOUR</code> is <code>auto</code> and the mesh carries no colour of its own, the camera the photograph was taken from is recovered by matching the mesh&#x27;s outline against the segmented subject, and the photograph is sampled onto the surface that camera could see. This runs after the cleanup, so the colours belong to the vertices that ship. See <a href="#colour-from-the-photograph" class="">Colour from the photograph</a>.</p>
+</li>
+<li class="">
+<p><strong><code>[5 Print]</code> Rescale, print features and the gate verdict</strong> -- The mesh is rescaled to <code>TARGET_SIZE_MM</code>, whether or not cleanup is enabled. When <code>PRINT_FEATURES</code> names one, a hanging loop or a stand base is attached; this runs after the rescale, so its millimetre dimensions describe the printed object, and the gate is re-measured against the result so its verdict covers the mesh that ships. <code>PRINT_GATE_POLICY</code> decides whether a failed gate stops the run.</p>
+</li>
+<li class="">
+<p><strong><code>[6 Output]</code> Export and upload</strong> -- The mesh is exported in every format listed in <code>EXPORT_FORMATS</code> and uploaded to the asset output prefix, preserving the input image&#x27;s relative location inside the asset. The gate and generation report is written to the metadata prefix, with per-stage timings when <code>BENCHMARK_REPORT</code> is on, and <code>PASS_THROUGH_INPUTS</code> copies the photographs beside the mesh for a later workflow step.</p>
+</li>
+<li class="">
+<p><strong>Completion</strong> -- The <code>pipelineEnd</code> Lambda function sends the workflow task token callback for both success and failure, so a failed AWS Batch job surfaces in the workflow execution rather than waiting for the task timeout.</p>
+</li>
+</ol>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="model-selection">Model selection<a href="#model-selection" class="hash-link" aria-label="Direct link to Model selection" title="Direct link to Model selection" translate="no">​</a></h2>
+<p>The model is chosen by the configuration template applied to the execution, not by a separate pipeline registration. Each shipped template -- a base template per model, plus variations that pre-select a stage configuration -- pins <code>MODEL</code> in its configuration body to one model key:</p>
+<div class="language-json codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-json codeBlock_bY9V thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#393A34"><span class="token punctuation" style="color:#393A34">{</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">    </span><span class="token property" style="color:#36acaa">&quot;MODEL&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">&quot;stable3dgen&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">    </span><span class="token property" style="color:#36acaa">&quot;BACKGROUND_REMOVAL&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">&quot;rembg&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">    </span><span class="token property" style="color:#36acaa">&quot;MESH_CLEANUP&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">&quot;true&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">    </span><span class="token property" style="color:#36acaa">&quot;PRINT_GATE_POLICY&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">&quot;failClosed&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">    </span><span class="token property" style="color:#36acaa">&quot;REPAIR_BACKENDS&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">&quot;trimesh,manifold3d,pymeshfix,pymeshlab&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">    </span><span class="token property" style="color:#36acaa">&quot;TARGET_FACE_COUNT&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token number" style="color:#36acaa">200000</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">    </span><span class="token property" style="color:#36acaa">&quot;TARGET_SIZE_MM&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token number" style="color:#36acaa">0</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">    </span><span class="token property" style="color:#36acaa">&quot;EXPORT_FORMATS&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">&quot;glb,obj,stl&quot;</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain"></span><span class="token punctuation" style="color:#393A34">}</span><br></div></code></pre></div></div>
+<p>The configuration template&#x27;s body is the only source of a run&#x27;s options. When it leaves <code>MODEL</code> unset, the pipeline uses <code>stable3dgen</code>.</p>
+<p>Asset and database metadata are deliberately not read as inputs. The model key selects the AWS Batch job definition, and therefore the container image, while the container separately selects its model adapter; a second input channel has to agree in both places, and a disagreement routes a run to one model&#x27;s adapter inside another model&#x27;s image without any error. Every option is therefore set on the execute form, where it is visible.</p>
+<p>The resolved model key is carried into the pipeline state machine, where a Choice state routes the execution to that model&#x27;s AWS Batch job definition. Only enabled models have a job definition, so selecting a model whose configuration is disabled fails fast with the error <code>ModelNotEnabled</code> rather than queuing a job that can never run. The <code>image-to-3d-stable3dgen</code> template is the default, matching the <code>stable3dgen</code> fallback above, so an execution that names no template runs that model. Operators who enable a different model apply that model&#x27;s template per execution or mark it as the default for their databases. The pipeline is registered as <code>genai-image-to-3d</code> in the <code>GLOBAL</code> database; see <a class="" href="/visual-asset-management-system/pipelines/image-to-3d-options#templates">Templates</a> for every template identifier and <a class="" href="/visual-asset-management-system/pipelines/image-to-3d-options#options-by-stage">Options by stage</a> for every option a template accepts.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="container-build-options">Container Build Options<a href="#container-build-options" class="hash-link" aria-label="Direct link to Container Build Options" title="Direct link to Container Build Options" translate="no">​</a></h2>
+<p>Each model brings its own upstream repository and its own pinned dependency stack, and those stacks are mutually incompatible in a single image. The pipeline therefore builds <strong>one container image per enabled model</strong> from a shared build specification, selecting the per-model Dockerfile at build time.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="aws-codebuild">AWS CodeBuild<a href="#aws-codebuild" class="hash-link" aria-label="Direct link to AWS CodeBuild" title="Direct link to AWS CodeBuild" translate="no">​</a></h3>
+<p>When <code>useCodeBuild: true</code>, each enabled model gets an Amazon ECR repository and an AWS CodeBuild project:</p>
+<ul>
+<li class="">The shared container source directory is uploaded to Amazon S3 during CDK deployment.</li>
+<li class="">Each CodeBuild project builds its model&#x27;s Dockerfile and pushes the image to its own Amazon ECR repository, using the previous image as a layer cache.</li>
+<li class="">Builds re-trigger automatically when the container source changes.</li>
+<li class="">Builds run in the same private VPC subnets as the pipeline AWS Batch compute, with NAT Gateway egress for pulling base images and upstream model repositories.</li>
+</ul>
+<p>Builds continue asynchronously after <code>cdk deploy</code> returns. A failed build leaves the deployment successful but the AWS Batch job failing on an image pull, so check build status before the first execution:</p>
+<div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#393A34"><span class="token plain">aws codebuild list-builds-for-project --project-name </span><span class="token operator" style="color:#393A34">&lt;</span><span class="token plain">ImageTo3d CodeBuild project</span><span class="token operator" style="color:#393A34">&gt;</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">aws codebuild batch-get-builds </span><span class="token parameter variable" style="color:#36acaa">--ids</span><span class="token plain"> </span><span class="token operator" style="color:#393A34">&lt;</span><span class="token plain">build-id</span><span class="token operator" style="color:#393A34">&gt;</span><br></div></code></pre></div></div>
+<div class="theme-admonition theme-admonition-warning admonition_xJq3 alert alert--warning"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 16 16"><path fill-rule="evenodd" d="M8.893 1.5c-.183-.31-.52-.5-.887-.5s-.703.19-.886.5L.138 13.499a.98.98 0 0 0 0 1.001c.193.31.53.501.886.501h13.964c.367 0 .704-.19.877-.5a1.03 1.03 0 0 0 .01-1.002L8.893 1.5zm.133 11.497H6.987v-2.003h2.039v2.003zm0-3.004H6.987V5.987h2.039v4.006z"></path></svg></span>Docker Hub rate limiting</div><div class="admonitionContent_BuS1"><p>Builds pull the <code>nvidia/cuda</code> base image, which is subject to anonymous pull rate limits and can fail with &quot;429 Too Many Requests&quot;. Configure registry credentials in AWS Secrets Manager and reference them from the build, or mirror the base image into a private Amazon ECR repository.</p></div></div>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="local-docker-asset">Local Docker asset<a href="#local-docker-asset" class="hash-link" aria-label="Direct link to Local Docker asset" title="Direct link to Local Docker asset" translate="no">​</a></h3>
+<p>When <code>useCodeBuild: false</code>, the images are built locally during <code>cdk deploy</code> and pushed to CDK-managed Amazon ECR repositories. Each image contains a full CUDA toolchain plus an upstream model repository, so a deployment with several models enabled requires substantial local disk, memory and bandwidth.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="model-weights">Model weights<a href="#model-weights" class="hash-link" aria-label="Direct link to Model weights" title="Direct link to Model weights" translate="no">​</a></h2>
+<p>Model weights are never baked into the container image. Each model has its own cache directory on a shared Amazon EFS file system mounted at <code>/mnt/efs/imageto3d-models</code>, with the HuggingFace cache for a model under <code>hf_cache/&lt;modelKey&gt;</code>. The same layout is mirrored into the model cache Amazon S3 bucket under the <code>imageTo3d/hf_cache/&lt;modelKey&gt;</code> prefix.</p>
+<p>On startup the container resolves weights in this order:</p>
+<ol>
+<li class=""><strong>Amazon EFS cache</strong> -- If the model&#x27;s cache directory on Amazon EFS is complete, it is used directly and no network transfer occurs.</li>
+<li class=""><strong>Amazon S3 restore</strong> -- If Amazon EFS is empty or incomplete, the cache is restored from the Amazon S3 backup prefix, which is faster and more reliable than a HuggingFace download and needs no HuggingFace availability.</li>
+<li class=""><strong>HuggingFace download</strong> -- If neither cache is populated, the weights are downloaded from HuggingFace using the configured token, then written to Amazon EFS and backed up to Amazon S3 for later runs.</li>
+</ol>
+<p>Setting the <code>INVALIDATE_MODEL_CACHE</code> parameter to <code>true</code> clears both the Amazon EFS cache and the Amazon S3 backup for the selected model and forces a fresh download. Because the file system is shared across AWS Batch instances, the container also clears stale partial-download and lock files on startup so that an interrupted earlier attempt cannot block later runs.</p>
+<div class="theme-admonition theme-admonition-info admonition_xJq3 alert alert--info"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M7 2.3c3.14 0 5.7 2.56 5.7 5.7s-2.56 5.7-5.7 5.7A5.71 5.71 0 0 1 1.3 8c0-3.14 2.56-5.7 5.7-5.7zM7 1C3.14 1 0 4.14 0 8s3.14 7 7 7 7-3.14 7-7-3.14-7-7-7zm1 3H6v5h2V4zm0 6H6v2h2v-2z"></path></svg></span>Amazon EFS costs</div><div class="admonitionContent_BuS1"><p>The Amazon EFS file system stores model weights and incurs standard Amazon EFS storage costs for as long as the cache exists. The file system uses General Purpose performance mode with elastic throughput. Monitor storage growth as models are enabled, and consider Amazon EFS lifecycle policies for long-term cost optimization.</p></div></div>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="prerequisites">Prerequisites<a href="#prerequisites" class="hash-link" aria-label="Direct link to Prerequisites" title="Direct link to Prerequisites" translate="no">​</a></h2>
+<div class="theme-admonition theme-admonition-warning admonition_xJq3 alert alert--warning"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 16 16"><path fill-rule="evenodd" d="M8.893 1.5c-.183-.31-.52-.5-.887-.5s-.703.19-.886.5L.138 13.499a.98.98 0 0 0 0 1.001c.193.31.53.501.886.501h13.964c.367 0 .704-.19.877-.5a1.03 1.03 0 0 0 .01-1.002L8.893 1.5zm.133 11.497H6.987v-2.003h2.039v2.003zm0-3.004H6.987V5.987h2.039v4.006z"></path></svg></span>Model licenses and HuggingFace access</div><div class="admonitionContent_BuS1"><p>Accept each model&#x27;s license on HuggingFace before enabling it, using the same HuggingFace account that issues the access token. Three repositories are gated and need an approved access request on that account -- see <strong>Model access</strong> below. The Meta SAM License additionally carries trade-control terms and a redistribute-under-the-same-license obligation -- review it against your deployment Region and distribution plans before enabling <code>sam3d</code>.</p></div></div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Model</th><th>Parameters</th><th>Minimum VRAM</th><th>License</th><th>Source</th></tr></thead><tbody><tr><td>Stable-X Stable3DGen</td><td>Not published</td><td>16 GB</td><td>MIT (weights MIT / Apache-2.0, none gated)</td><td><a href="https://github.com/Stable-X/Stable3DGen" target="_blank" rel="noopener noreferrer" class="">Stable-X/Stable3DGen</a></td></tr><tr><td>Microsoft TRELLIS.2</td><td>4B</td><td>24 GB</td><td>MIT code and weights, but renders through NVIDIA-licensed <code>nvdiffrast</code> and conditions on Meta&#x27;s <strong>gated</strong> DINOv3 encoder</td><td><a href="https://github.com/microsoft/TRELLIS.2" target="_blank" rel="noopener noreferrer" class="">microsoft/TRELLIS.2</a></td></tr><tr><td>Meta SAM 3D Objects</td><td>Not published</td><td>24 GB</td><td>Meta SAM License (trade-control terms; redistribute-as-same); estimates depth through the ungated Apache-2.0 MoGe model</td><td>Meta AI -- SAM 3D Objects (HuggingFace, license acceptance required)</td></tr><tr><td>VAST-AI TripoSR</td><td>Not published</td><td>8 GB</td><td>MIT</td><td><a href="https://github.com/VAST-AI-Research/TripoSR" target="_blank" rel="noopener noreferrer" class="">VAST-AI-Research/TripoSR</a></td></tr><tr><td>StepFun Step1X-3D</td><td>Not published</td><td>24 GB</td><td>Apache-2.0</td><td><a href="https://github.com/stepfun-ai/Step1X-3D" target="_blank" rel="noopener noreferrer" class="">stepfun-ai/Step1X-3D</a></td></tr><tr><td>Tencent Hunyuan3D-2</td><td>1.1B shape + 1.3B paint</td><td>16 GB</td><td>Tencent Hunyuan 3D 2.0 Community License -- <strong>no licence in the European Union, the United Kingdom or South Korea</strong>, and a separate Tencent licence above one million monthly active users</td><td><a href="https://github.com/Tencent-Hunyuan/Hunyuan3D-2" target="_blank" rel="noopener noreferrer" class="">Tencent-Hunyuan/Hunyuan3D-2</a></td></tr><tr><td>Blender agent</td><td>The configured Bedrock model</td><td>None required</td><td>Blender GPL-2.0-or-later (tooling), Codex CLI Apache-2.0, LiteLLM MIT, MoGe-2 MIT (the refit&#x27;s depth model); the model&#x27;s terms are Amazon Bedrock&#x27;s</td><td><a href="https://github.com/openai/codex" target="_blank" rel="noopener noreferrer" class="">openai/codex</a>, <a href="https://www.blender.org" target="_blank" rel="noopener noreferrer" class="">blender.org</a>, <a href="https://github.com/microsoft/MoGe" target="_blank" rel="noopener noreferrer" class="">microsoft/MoGe</a></td></tr></tbody></table>
+<p>The models differ in the form their colour arrives in, which the run reports as its texture status. Most return a UV atlas. Where the cleanup leaves the vertex set exactly as the atlas was measured over, that atlas and its UV array go back on unchanged and the status is <code>preserved</code>. Where the cleanup changed the topology, the atlas is <strong>re-baked</strong>: each cleaned vertex is located on the model&#x27;s original surface, the UV field is read there, and the original atlas is rasterised into a fresh layout over the cleaned mesh, reported as <code>rebakedFromAtlas</code>. Locating the vertex on the original surface rather than at the nearest surviving vertex is what keeps the colour on the right body part where a decimation has moved a vertex further than the gap to a neighbouring surface. Stable3DGen returns geometry alone. SAM 3D Objects returns colour per vertex, which the pipeline samples onto the cleaned mesh from the nearest captured vertex and leaves as a colour array: glTF carries one natively and exactly, and a renderer interpolates it across a triangle correctly. Colour held per vertex is limited to the detail the vertex spacing can carry, so it is reported as <code>fromVertexColors</code> rather than as a preserved texture.</p>
+<ul>
+<li class="">
+<p><strong>HuggingFace account and token</strong> -- Create an account at <a href="https://huggingface.co/" target="_blank" rel="noopener noreferrer" class="">huggingface.co</a> and generate a Read access token. Place the token value in the <code>huggingFaceToken</code> configuration field; CDK stores it in AWS Secrets Manager and the container receives it as a secret at job start, so it never appears in a CloudFormation template or an environment variable in the console.</p>
+</li>
+<li class="">
+<p><strong>Model access</strong> -- Accept the license on every model repository you plan to enable, using <strong>the same HuggingFace account that issued the <code>huggingFaceToken</code></strong>. Access is granted to that account, not to the deployment, so a licence accepted under a different account leaves the token unable to download the weights.</p>
+<p>Three repositories are <strong>gated</strong>. The account has to request access before the first run, and a pending request behaves exactly like a denied one. The failure surfaces only in the weight-cache stage -- after an AWS Batch GPU instance has been provisioned and the container image pulled -- so request access before deploying.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Gated repository</th><th>Approval</th><th>Needed by</th></tr></thead><tbody><tr><td><code>facebook/sam-3d-objects</code></td><td>Manual, by Meta, and not instant</td><td><code>sam3d</code></td></tr><tr><td><code>facebook/dinov3-vitl16-pretrain-lvd1689m</code></td><td>Manual, by Meta, and not instant</td><td><code>trellis2</code> -- its image encoder, required whenever the model is enabled</td></tr><tr><td><code>briaai/RMBG-2.0</code></td><td>Granted on accepting BRIA&#x27;s terms</td><td>Only <code>BACKGROUND_REMOVAL=rmbg2</code>, or <code>TRELLIS2_PREPROCESS_IMAGE=true</code></td></tr></tbody></table>
+<p>Every repository each model downloads, and whether the account needs approval for it:</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Model or option</th><th>HuggingFace repositories</th><th>Approval needed</th></tr></thead><tbody><tr><td><code>stable3dgen</code></td><td><code>Stable-X/trellis-normal-v0-1</code>, <code>Stable-X/yoso-normal-v1-8-1</code>, <code>ZhengPeng7/BiRefNet</code></td><td>None</td></tr><tr><td><code>trellis2</code></td><td><code>microsoft/TRELLIS.2-4B</code>, <code>facebook/dinov3-vitl16-pretrain-lvd1689m</code></td><td>DINOv3, from Meta</td></tr><tr><td><code>sam3d</code></td><td><code>facebook/sam-3d-objects</code>, <code>Ruicheng/moge-vitl</code></td><td>SAM 3D Objects, from Meta</td></tr><tr><td><code>triposr</code></td><td><code>stabilityai/TripoSR</code></td><td>None</td></tr><tr><td><code>step1x3d</code></td><td><code>stepfun-ai/Step1X-3D</code></td><td>None</td></tr><tr><td><code>hunyuan3d</code></td><td><code>tencent/Hunyuan3D-2</code>, <code>tencent/Hunyuan3D-2mv</code></td><td>None; the licence is territorial (see below)</td></tr><tr><td><code>blenderagent</code></td><td><code>Ruicheng/moge-2-vitl-normal</code>, the scripted refit&#x27;s depth model</td><td>None; Amazon Bedrock model access instead</td></tr><tr><td><code>BACKGROUND_REMOVAL=sam</code></td><td><code>facebook/sam-vit-huge</code></td><td>None</td></tr><tr><td><code>BACKGROUND_REMOVAL=rmbg2</code></td><td><code>briaai/RMBG-2.0</code></td><td>RMBG-2.0, from BRIA</td></tr></tbody></table>
+<p>The <code>rembg</code> and <code>birefnet</code> background removers fetch their weights from a GitHub release rather than HuggingFace. A repository&#x27;s owner sets its gating and can change it, and the repository&#x27;s HuggingFace page shows its current state.</p>
+<p>A model&#x27;s own license says nothing about what its dependencies require. TRELLIS.2 is the case that matters: its code and weights are MIT and ungated, but it conditions on Meta&#x27;s gated DINOv3 encoder, so a token that downloads <code>microsoft/TRELLIS.2-4B</code> without complaint is still refused for the encoder. The pipeline lists the encoder among TRELLIS.2&#x27;s weights, so that refusal is reported in the weight-cache stage and names the repository.</p>
+<div class="theme-admonition theme-admonition-caution admonition_xJq3 alert alert--warning"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 16 16"><path fill-rule="evenodd" d="M8.893 1.5c-.183-.31-.52-.5-.887-.5s-.703.19-.886.5L.138 13.499a.98.98 0 0 0 0 1.001c.193.31.53.501.886.501h13.964c.367 0 .704-.19.877-.5a1.03 1.03 0 0 0 .01-1.002L8.893 1.5zm.133 11.497H6.987v-2.003h2.039v2.003zm0-3.004H6.987V5.987h2.039v4.006z"></path></svg></span>caution</div><div class="admonitionContent_BuS1"><mdxadmonitiontitle>RMBG-2.0 is gated <em>and</em> restricted for commercial use</mdxadmonitiontitle><p><code>briaai/RMBG-2.0</code> requires a separate commercial license agreement with BRIA in addition to accepting its terms on HuggingFace. Neither the default background removal (<code>rembg</code>) nor the default TRELLIS.2 configuration touches it, so no approval is needed unless you select <code>BACKGROUND_REMOVAL=rmbg2</code> or set <code>TRELLIS2_PREPROCESS_IMAGE=true</code>. Review BRIA&#x27;s terms against your deployment before enabling either.</p></div></div>
+</li>
+<li class="">
+<p><strong>GPU instance availability</strong> -- The compute environment uses <code>BEST_FIT_PROGRESSIVE</code> across the configured instance types. Confirm that at least one configured type has capacity in the deployment Region, and request a quota increase if jobs stay in <code>RUNNABLE</code>.</p>
+</li>
+<li class="">
+<p><strong>Amazon EFS</strong> -- The pipeline creates a shared, encrypted Amazon EFS file system for the model cache and mounts it on every AWS Batch instance at <code>/mnt/efs/imageto3d-models</code>.</p>
+</li>
+<li class="">
+<p><strong>VPC with internet egress</strong> -- AWS Batch compute runs in private subnets that reach the internet through a NAT Gateway, which is required for HuggingFace downloads on the first run per model and for the container build. Enabling the pipeline requires the global VPC.</p>
+</li>
+</ul>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="configuration">Configuration<a href="#configuration" class="hash-link" aria-label="Direct link to Configuration" title="Direct link to Configuration" translate="no">​</a></h2>
+<p>Add the following to your <code>config.json</code> under <code>app.pipelines</code>:</p>
+<div class="language-json codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-json codeBlock_bY9V thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#393A34"><span class="token punctuation" style="color:#393A34">{</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">    </span><span class="token property" style="color:#36acaa">&quot;app&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">{</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">        </span><span class="token property" style="color:#36acaa">&quot;pipelines&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">{</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">            </span><span class="token property" style="color:#36acaa">&quot;useImageTo3d&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">{</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">                </span><span class="token property" style="color:#36acaa">&quot;enabled&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token boolean" style="color:#36acaa">true</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">                </span><span class="token property" style="color:#36acaa">&quot;huggingFaceToken&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">&quot;hf_yourTokenHere&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">                </span><span class="token property" style="color:#36acaa">&quot;useCodeBuild&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token boolean" style="color:#36acaa">true</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">                </span><span class="token property" style="color:#36acaa">&quot;autoRegisterWithVAMS&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token boolean" style="color:#36acaa">true</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">                </span><span class="token property" style="color:#36acaa">&quot;autoTriggerOnFileExtensionsUpload&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">&quot;&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">                </span><span class="token property" style="color:#36acaa">&quot;instanceTypes&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">[</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">                    </span><span class="token string" style="color:#e3116c">&quot;g6e.xlarge&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">                    </span><span class="token string" style="color:#e3116c">&quot;g6e.2xlarge&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">                    </span><span class="token string" style="color:#e3116c">&quot;g6e.4xlarge&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">                    </span><span class="token string" style="color:#e3116c">&quot;g6.2xlarge&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">                    </span><span class="token string" style="color:#e3116c">&quot;g6.4xlarge&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">                    </span><span class="token string" style="color:#e3116c">&quot;g6.8xlarge&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">                    </span><span class="token string" style="color:#e3116c">&quot;g5.2xlarge&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">                    </span><span class="token string" style="color:#e3116c">&quot;g5.4xlarge&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">                    </span><span class="token string" style="color:#e3116c">&quot;g5.8xlarge&quot;</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">                </span><span class="token punctuation" style="color:#393A34">]</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">                </span><span class="token property" style="color:#36acaa">&quot;maxVCpus&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token number" style="color:#36acaa">48</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">                </span><span class="token property" style="color:#36acaa">&quot;models&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">{</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">                    </span><span class="token property" style="color:#36acaa">&quot;stable3dgen&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">{</span><span class="token plain"> </span><span class="token property" style="color:#36acaa">&quot;enabled&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token boolean" style="color:#36acaa">true</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">}</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">                    </span><span class="token property" style="color:#36acaa">&quot;trellis2&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">{</span><span class="token plain"> </span><span class="token property" style="color:#36acaa">&quot;enabled&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token boolean" style="color:#36acaa">false</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">}</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">                    </span><span class="token property" style="color:#36acaa">&quot;sam3d&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">{</span><span class="token plain"> </span><span class="token property" style="color:#36acaa">&quot;enabled&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token boolean" style="color:#36acaa">false</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">}</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">                    </span><span class="token property" style="color:#36acaa">&quot;triposr&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">{</span><span class="token plain"> </span><span class="token property" style="color:#36acaa">&quot;enabled&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token boolean" style="color:#36acaa">false</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">}</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">                    </span><span class="token property" style="color:#36acaa">&quot;step1x3d&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">{</span><span class="token plain"> </span><span class="token property" style="color:#36acaa">&quot;enabled&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token boolean" style="color:#36acaa">false</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">}</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">                    </span><span class="token property" style="color:#36acaa">&quot;hunyuan3d&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">{</span><span class="token plain"> </span><span class="token property" style="color:#36acaa">&quot;enabled&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token boolean" style="color:#36acaa">false</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">}</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">                    </span><span class="token property" style="color:#36acaa">&quot;blenderagent&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">{</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">                        </span><span class="token property" style="color:#36acaa">&quot;enabled&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token boolean" style="color:#36acaa">false</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">                        </span><span class="token property" style="color:#36acaa">&quot;bedrockModelId&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">&quot;global.openai.gpt-6-astra&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">                        </span><span class="token property" style="color:#36acaa">&quot;useStabilityImageEditing&quot;</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token boolean" style="color:#36acaa">true</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">                    </span><span class="token punctuation" style="color:#393A34">}</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">                </span><span class="token punctuation" style="color:#393A34">}</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">            </span><span class="token punctuation" style="color:#393A34">}</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">        </span><span class="token punctuation" style="color:#393A34">}</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain">    </span><span class="token punctuation" style="color:#393A34">}</span><span class="token plain"></span><br></div><div class="token-line" style="color:#393A34"><span class="token plain"></span><span class="token punctuation" style="color:#393A34">}</span><br></div></code></pre></div></div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Option</th><th>Default</th><th>Description</th></tr></thead><tbody><tr><td><code>enabled</code></td><td><code>false</code></td><td>Deploy the Image to 3D pipeline infrastructure. Requires the global VPC.</td></tr><tr><td><code>huggingFaceToken</code></td><td><code>&quot;&quot;</code></td><td>HuggingFace Read access token value. CDK stores it in AWS Secrets Manager during deployment. Required when the pipeline is enabled.</td></tr><tr><td><code>useCodeBuild</code></td><td><code>true</code></td><td>When <code>true</code>, builds one container image per enabled model with AWS CodeBuild. When <code>false</code>, builds the images locally during <code>cdk deploy</code>.</td></tr><tr><td><code>autoRegisterWithVAMS</code></td><td><code>true</code></td><td>Register the pipeline, workflow and configuration templates with VAMS at deploy time.</td></tr><tr><td><code>autoTriggerOnFileExtensionsUpload</code></td><td><code>&quot;&quot;</code></td><td>Enables the workflow&#x27;s file-upload trigger when set to any non-empty value. The extensions that actually match are the workflow&#x27;s input file filters (<code>*.png</code>, <code>*.jpg</code>, <code>*.jpeg</code>), not this string.</td></tr><tr><td><code>instanceTypes</code></td><td>Nine <code>g6e</code>, <code>g6</code> and <code>g5</code> types</td><td>EC2 GPU instance types for the AWS Batch compute environment (<code>BEST_FIT_PROGRESSIVE</code>). The templates list <code>g6e.xlarge</code> through <code>g5.8xlarge</code>, as in the example above.</td></tr><tr><td><code>maxVCpus</code></td><td><code>48</code></td><td>Maximum vCPUs for the AWS Batch compute environment. Each job requests 4 vCPUs, about 26 GB of memory and 1 GPU.</td></tr><tr><td><code>models.stable3dgen.enabled</code></td><td><code>true</code></td><td>Build and register the Stable-X Stable3DGen model. This is the model the default configuration template selects. It produces geometry without texture.</td></tr><tr><td><code>models.trellis2.enabled</code></td><td><code>false</code></td><td>Build and register the Microsoft TRELLIS.2 model, kept available as a quality comparison. Its image needs a different Python and CUDA toolchain from the rest of the pipeline, and it pulls NVIDIA-licensed rendering components whose redistribution terms need review before distribution.</td></tr><tr><td><code>models.sam3d.enabled</code></td><td><code>false</code></td><td>Build and register the Meta SAM 3D Objects model. Review the Meta SAM License before enabling.</td></tr><tr><td><code>models.triposr.enabled</code></td><td><code>false</code></td><td>Build and register the VAST-AI TripoSR model.</td></tr><tr><td><code>models.step1x3d.enabled</code></td><td><code>false</code></td><td>Build and register the StepFun Step1X-3D model.</td></tr><tr><td><code>models.hunyuan3d.enabled</code></td><td><code>false</code></td><td>Build and register the Tencent Hunyuan3D-2 model. Its licence grants no rights in the European Union, the United Kingdom or South Korea, and enabling it in an AWS Region inside that territory is rejected. Review the Tencent Hunyuan 3D 2.0 Community License Agreement before enabling.</td></tr><tr><td><code>models.blenderagent.enabled</code></td><td><code>false</code></td><td>Build and register the Blender agent: OpenAI Codex CLI driving headless Blender, reasoning with a vision model on Amazon Bedrock. The job role is granted <code>bedrock:InvokeModel</code> when enabled. Blender is GPL-2.0-or-later.</td></tr><tr><td><code>models.blenderagent.bedrockModelId</code></td><td><code>&quot;&quot;</code></td><td>The Amazon Bedrock model id or inference-profile id the agent reasons with; it must accept image input. Required when the agent is enabled. The commercial template carries <code>global.openai.gpt-6-astra</code> (GPT-6 Astra). The GovCloud and EU Sovereign templates leave it empty, because the <code>global.</code> cross-Region inference profile exists only in the commercial partition, and an id with a <code>global.</code> or <code>us.</code> prefix is rejected outside it. Every run of the deployment uses this model: it is not a template option, because the job role&#x27;s <code>bedrock:InvokeModel</code> grant names it.</td></tr><tr><td><code>models.blenderagent.useStabilityImageEditing</code></td><td><code>true</code> in the commercial template</td><td>Lets the agent complete the sides of a model the photographs never covered with Stability AI image-editing models on Amazon Bedrock, reached through their <code>us.</code> inference profiles. Those profiles exist only in the commercial partition&#x27;s US Regions, so the setting is rejected in any other Region, and it defaults to <code>true</code> there when the field is absent. With it <code>false</code> the agent textures from the photographs alone.</td></tr></tbody></table>
+<p>At least one model must be enabled when the pipeline is enabled, and <code>instanceTypes</code> must be a non-empty array.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="gpu-instance-recommendations">GPU Instance Recommendations<a href="#gpu-instance-recommendations" class="hash-link" aria-label="Direct link to GPU Instance Recommendations" title="Direct link to GPU Instance Recommendations" translate="no">​</a></h2>
+<p>Every enabled model shares one compute environment and one job queue, so the configured instance types must satisfy the most demanding model you enable.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Model</th><th>Minimum VRAM</th><th>Recommended instance</th><th>Notes</th></tr></thead><tbody><tr><td>Stable-X Stable3DGen</td><td>16 GB</td><td>Any configured type</td><td>The default model; geometry only</td></tr><tr><td>Microsoft TRELLIS.2</td><td>24 GB</td><td>g6e.xlarge (1x L40S 48 GB)</td><td><code>TRELLIS2_PIPELINE_TYPE</code> drives both run time and peak memory; the cascade tiers need headroom</td></tr><tr><td>Meta SAM 3D Objects</td><td>24 GB</td><td>g6e.xlarge (1x L40S 48 GB)</td><td>Strongest measured on cluttered real-world photographs with occlusion and background context</td></tr><tr><td>VAST-AI TripoSR</td><td>8 GB</td><td>g6e.xlarge (1x L40S 48 GB)</td><td>Fits comfortably in roughly 6-8 GB; instance choice is driven by the other enabled models</td></tr><tr><td>StepFun Step1X-3D</td><td>24 GB</td><td>g6e.2xlarge (1x L40S 48 GB)</td><td>Two-stage geometry and texture synthesis raises peak memory above the single-stage models</td></tr><tr><td>Tencent Hunyuan3D-2</td><td>16 GB</td><td>g6.8xlarge (1x L4 22 GB)</td><td>The lightest of the textured models: about 6 GB for the shape stage and about 16 GB with the paint stage, because the shape pipeline is released before the paint pipeline loads</td></tr></tbody></table>
+<div class="theme-admonition theme-admonition-tip admonition_xJq3 alert alert--success"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 12 16"><path fill-rule="evenodd" d="M6.5 0C3.48 0 1 2.19 1 5c0 .92.55 2.25 1 3 1.34 2.25 1.78 2.78 2 4v1h5v-1c.22-1.22.66-1.75 2-4 .45-.75 1-2.08 1-3 0-2.81-2.48-5-5.5-5zm3.64 7.48c-.25.44-.47.8-.67 1.11-.86 1.41-1.25 2.06-1.45 3.23-.02.05-.02.11-.02.17H5c0-.06 0-.13-.02-.17-.2-1.17-.59-1.83-1.45-3.23-.2-.31-.42-.67-.67-1.11C2.44 6.78 2 5.65 2 5c0-2.2 2.02-4 4.5-4 1.22 0 2.36.42 3.22 1.19C10.55 2.94 11 3.94 11 5c0 .66-.44 1.78-.86 2.48zM4 14h5c-.23 1.14-1.3 2-2.5 2s-2.27-.86-2.5-2z"></path></svg></span>Sizing for the whole model set</div><div class="admonitionContent_BuS1"><p>A single 48 GB GPU instance covers all seven paths; the Blender agent needs no GPU memory of its own. Enable only the models you intend to use -- each additional model adds a container image build, an Amazon ECR repository and its own weight download on first run.</p></div></div>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="print-readiness-mesh-cleanup">Print-readiness mesh cleanup<a href="#print-readiness-mesh-cleanup" class="hash-link" aria-label="Direct link to Print-readiness mesh cleanup" title="Direct link to Print-readiness mesh cleanup" translate="no">​</a></h2>
+<p>Generative reconstruction produces a mesh that renders correctly but is frequently not printable: it can contain holes, inverted or inconsistent normals, non-manifold edges where more than two faces meet, and zero-volume shells. When <code>MESH_CLEANUP</code> is enabled, the pipeline runs a repair ladder and then verifies the result against a print-readiness gate.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="repair-ladder">Repair ladder<a href="#repair-ladder" class="hash-link" aria-label="Direct link to Repair ladder" title="Direct link to Repair ladder" translate="no">​</a></h3>
+<p>All four backends are installed in every container image, and the ones named in <code>REPAIR_BACKENDS</code> -- all four of them by default -- are applied in a fixed order, stopping as soon as the gate passes:</p>
+<ol>
+<li class=""><strong><code>trimesh</code></strong> -- hole filling, normal fixing, winding correction and inversion correction. MIT licensed.</li>
+<li class=""><strong><code>manifold3d</code></strong> -- a manifold pass that resolves self-intersections and non-manifold topology. Apache-2.0 licensed.</li>
+<li class=""><strong><code>pymeshfix</code></strong> -- aggressive hole filling and shell repair. GPL-3.0 licensed.</li>
+<li class=""><strong><code>pymeshlab</code></strong> -- filter-based remeshing and repair. GPL-3.0 licensed.</li>
+</ol>
+<p>The ladder runs in this order whatever order <code>REPAIR_BACKENDS</code> names the backends in, so a run is reproducible. Naming a backend that is not one of these four rungs fails the run with a clear error rather than silently skipping it. A rung that is a valid name but cannot execute -- for example when the installed package raises on the call the ladder makes -- is skipped with a warning and recorded in the gate report, and the ladder continues with the remaining rungs, so an unusable rung does not cost the generation work already done.</p>
+<p>Every configuration template offers the ladder as a <strong>Mesh repair ladder</strong> field with three selections, so an operator chooses the rungs per run without editing the configuration body:</p>
+<ul>
+<li class=""><code>trimesh,manifold3d,pymeshfix,pymeshlab</code> -- the full ladder, and the default. It gives the best chance of a watertight, printable result.</li>
+<li class=""><code>trimesh,manifold3d</code> -- the permissively licensed rungs only, for a run that must exclude the GPL-3.0 backends.</li>
+<li class=""><code>trimesh</code> -- the single least invasive rung.</li>
+</ul>
+<p>The field applies only when <code>MESH_CLEANUP</code> is enabled; with cleanup off there is no ladder to walk.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="rejecting-a-destructive-repair">Rejecting a destructive repair<a href="#rejecting-a-destructive-repair" class="hash-link" aria-label="Direct link to Rejecting a destructive repair" title="Direct link to Rejecting a destructive repair" translate="no">​</a></h3>
+<p>The gate measures <strong>printability, not likeness</strong>, and the two are independent. A repair step that discards most of the model leaves something trivially watertight, manifold and defect-free, which passes every criterion while being useless: <code>pymeshfix</code> in particular reduces its input to a single closed body, so a reconstruction that arrived in several disconnected pieces can come out as one small fragment with a perfect gate report.</p>
+<p>Each rung&#x27;s result is therefore checked against the volume the mesh arrived with. A rung that leaves less than <code>MIN_VOLUME_RETENTION</code> of that volume is <strong>discarded</strong>, and the ladder continues from the mesh as it stood before that rung. Hole filling normally preserves or slightly increases volume, so a large loss indicates geometry was removed rather than repaired.</p>
+<p>A rejection is recorded in the gate report under <code>repairsRejected</code>, and as a <code>repair rejected -- &lt;backend&gt;: kept &lt;n&gt;% of the original volume</code> entry in <code>failures</code>, alongside the <code>volumeRetained</code> figure for the mesh that shipped. A run whose gate fails only because its most aggressive rung was rejected is a run that kept its geometry, which is usually the outcome you want; lower the floor to allow more aggressive repair, or set it to <code>0</code> to accept any result.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="print-readiness-gate">Print-readiness gate<a href="#print-readiness-gate" class="hash-link" aria-label="Direct link to Print-readiness gate" title="Direct link to Print-readiness gate" translate="no">​</a></h3>
+<p>After repair, the mesh must satisfy all of the following:</p>
+<ul>
+<li class="">The mesh is watertight.</li>
+<li class="">There are zero non-manifold edges.</li>
+<li class="">There are zero non-manifold vertices.</li>
+<li class="">The enclosed volume is greater than zero.</li>
+<li class="">There are no broken faces.</li>
+<li class="">The mesh is in one connected piece, plus one for each print feature attached by <code>concat</code>.</li>
+</ul>
+<p>The connectivity criterion catches what the others structurally cannot. Every other criterion describes the surface of a shell, so a subject that came apart satisfies all of them: a reconstruction whose mug handle had separated from its body measured watertight, fully manifold, free of broken faces and positive in volume, and would have printed as a loose crescent beside a mug. The report records <code>bodies</code> against <code>expectedBodies</code> so the allowance a print feature is given is visible rather than implied.</p>
+<p>These criteria are measured on a <strong>position-welded copy</strong> of the mesh, and the mesh that is exported keeps its original vertices. A texture needs two different UV coordinates wherever its atlas has a seam, so a textured mesh carries a separate vertex per face corner at every seam. That splits the shared edge into two edges each used by one face, and measured on the vertex indices alone each seam counts as a non-manifold edge: a sphere that is watertight with a single body reports thousands of non-manifold edges and one body per face purely by acquiring a texture, while enclosing exactly the same volume. Welding coincident positions for the measurement is what lets a textured mesh pass a criterion set written for a solid, and it masks nothing -- welding merges coincident positions, it does not fill holes, so a genuine hole is still reported.</p>
+<p><code>PRINT_GATE_POLICY</code> decides what happens when the gate does not pass:</p>
+<ul>
+<li class=""><strong><code>failClosed</code></strong> (default) -- the execution fails and <strong>no mesh output is written</strong>, so a non-printable mesh cannot be mistaken for a printable one. The gate report is still written so that the failing criteria are visible.</li>
+<li class=""><strong><code>bestEffort</code></strong> -- all outputs are written and the gate results are recorded in the report. Review the report before sending the mesh to a printer.</li>
+</ul>
+<p>The gate report carries the measured value behind every criterion, the verdict in <code>passed</code>, and two fields that explain how the ladder reached it:</p>
+<ul>
+<li class=""><code>backendsApplied</code> lists only the rungs that ran to completion, in ladder order, so a mesh that needed the GPL-3.0 rungs is distinguishable from one the permissive rungs repaired.</li>
+<li class=""><code>failures</code> lists the criteria the mesh still fails. A rung that was reached but could not execute appears here as <code>repair backend skipped -- &lt;backend&gt;: &lt;ExceptionType&gt;</code>, alongside the criteria, which is how a report shows that the ladder walked past a rung rather than through it.</li>
+</ul>
+<p>The report is written as the <code>IMAGE_TO_3D_PRINT_GATE_REPORT</code> asset metadata key. It reaches the asset through a document named <code>asset.metadata.json</code> under the execution&#x27;s metadata prefix: the workflow&#x27;s output processing treats any other <code>*.metadata.json</code> name as file-level metadata for the file its stem names, and fails the execution when that file is absent from the output. Since this pipeline&#x27;s outputs are meshes rather than the source photograph, the report is asset-level.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="cleanup-disabled">Cleanup disabled<a href="#cleanup-disabled" class="hash-link" aria-label="Direct link to Cleanup disabled" title="Direct link to Cleanup disabled" translate="no">​</a></h3>
+<p>With <code>MESH_CLEANUP</code> set to <code>false</code>, the mesh is exported exactly as the model generated it. Decimation, rescaling and the gate are all skipped, and the output is <strong>not guaranteed to be printable</strong>. Use this setting when the mesh is destined for visualization, review or a downstream tool that performs its own repair.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="colour-from-the-photograph">Colour from the photograph<a href="#colour-from-the-photograph" class="hash-link" aria-label="Direct link to Colour from the photograph" title="Direct link to Colour from the photograph" translate="no">​</a></h2>
+<p>Stable3DGen reconstructs geometry only -- it carries no appearance decoder, so there is nothing in the
+model to enable. <code>PROJECT_PHOTO_COLOUR</code> set to <code>auto</code> colours such a mesh from the other direction, by
+sampling the input photograph onto it. It applies to any mesh that reached the stage with no colour,
+and has no effect on a model that produced its own.</p>
+<p>The photograph does not record the camera it was taken from, so the pipeline supplies it from two
+sources, in order.</p>
+<p>Each model declares the <strong>view its own output frame puts the input photograph at</strong>, the way it declares
+its up axis, because a reconstruction is written into a frame keyed to that photograph -- the view is a
+property of the model, not of the run. Stable3DGen declares 0 degrees. Given a declared view, only the
+tilt is searched, along with a 15-degree window either side of the declared angle.</p>
+<p>A model with no declared view falls back to <strong>recovering the pose from the outline</strong>: the mesh&#x27;s
+silhouette is rendered over a grid of three up axes, 24 azimuths and five elevations, and each one
+scored against the segmented subject by intersection over union.</p>
+<p>The declaration comes first because the outline is not always enough to find the view, and where it is
+not enough it can prefer the wrong one. On a mug, whose handle makes its outline distinctive, the search
+recovers the declared view and agrees with it. On a standing figure -- whose outline is nearly the same
+from many directions -- the search preferred a view 225 degrees away from the right one, scoring it
+higher (0.838) than the correct view (0.776), and the colour it projected landed the photograph&#x27;s tones
+on the wrong parts of the body while every number the run reported looked healthy. A vertex is measured from the photograph when it faces the camera and lands
+on the subject; every other vertex takes the colour of the nearest vertex that was measured.</p>
+<p>What that means for the result is worth being plain about:</p>
+<ul>
+<li class=""><strong>The side the camera saw is measured, and the rest is inferred.</strong> On the reference mug, 34% of
+vertices were sampled from the photograph and the remaining 66% inherited a neighbour&#x27;s colour. On a
+roughly symmetric subject this reads as the front colour wrapping around; it is not a measurement of
+the back.</li>
+<li class=""><strong>The pose is reported with its provenance and its confidence.</strong> <code>poseFromDeclaredView</code> says the
+view came from the model&#x27;s declaration; <code>poseMargin</code> is a recovered pose&#x27;s lead over the best
+genuinely different one, and <code>poseDecisive</code> is false when that lead is small. A subject with no
+asymmetry -- a plain vase -- has no recoverable view at all, and a mirror-symmetric subject
+photographed at an angle has two that fit its outline equally and project mirrored colour.</li>
+<li class=""><strong>The tilt&#x27;s direction is weaker than its size.</strong> Tilting the camera up or down by the same angle
+gives nearly the same outline: measured on one subject, a planted +20 degrees scored 0.9858 while
+-20 scored 0.9859. <code>poseElevationSignMargin</code> reports that gap, and a projection from the wrong sign
+is shifted vertically on the subject.</li>
+<li class=""><strong>Only the surface the camera could see is sampled.</strong> A vertex has to face the camera, have no
+nearer surface of the same mesh in front of it, and land inside the subject rather than on the
+mask&#x27;s anti-aliased boundary. Without the depth test, vertices behind a forearm sampled the
+forearm&#x27;s pixels and painted skin-coloured blotches across a figure&#x27;s jeans.</li>
+<li class=""><strong>The view can be stated.</strong> <code>PROJECT_PHOTO_POSE</code> overrides both sources when a photograph was not
+taken from the view the model expects, or when the run report says the pose was not decisive and
+the colour looks misplaced. An angle alone states the direction and leaves the tilt to the search.</li>
+<li class=""><strong>No colour is projected when the photograph and the mesh do not correspond.</strong> A best pose below an
+intersection-over-union of 0.35 is refused, as is a subject mask derived from the background colour
+that covers more than 85% of the frame, which means the background was not separated and the sampled
+colour would be the background&#x27;s. Run with <code>BACKGROUND_REMOVAL</code> enabled, or supply an image with an
+alpha channel, and the mask comes from the segmentation instead.</li>
+</ul>
+<p>The run reports <code>IMAGE_TO_3D_TEXTURE_STATUS</code> as <code>projectedFromPhotograph</code>, and records the pose, its
+confidence, the share of vertices measured and where the subject mask came from under
+<code>IMAGE_TO_3D_PROJECTED_COLOUR</code>. The colour is attached per vertex and stays that way, which is what glTF
+carries natively; the OBJ export bakes it into a UV atlas, and STL carries no colour at all.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="print-features">Print features<a href="#print-features" class="hash-link" aria-label="Direct link to Print features" title="Direct link to Print features" translate="no">​</a></h2>
+<p><code>PRINT_FEATURES</code> attaches parametric geometry the reconstruction cannot produce on its own: <code>loop</code> adds a hanging ring at the top of the model, and <code>base</code> adds a flat-bottomed cylinder underneath so the model stands and the slicer gets a stable first layer.</p>
+<p>The feature dimensions are millimetres of the printed object, and they are applied <strong>after</strong> the rescale. Set <code>TARGET_SIZE_MM</code> alongside them: with it left at <code>0</code> the mesh keeps the model&#x27;s own arbitrary scale, and a millimetre dimension has no fixed meaning against it. A dimension left at <code>0</code> is sized as a fraction of the model instead, which is scale-independent and works either way.</p>
+<p>The gate is re-measured after a feature is attached, so its verdict describes the mesh that ships rather than the geometry the cleanup left behind. The repair rungs and volume retention recorded in the report still describe the cleanup, since re-measuring a finished mesh cannot recover them.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="attachment-and-colour">Attachment and colour<a href="#attachment-and-colour" class="hash-link" aria-label="Direct link to Attachment and colour" title="Direct link to Attachment and colour" translate="no">​</a></h3>
+<p>How a feature is attached is a genuine trade-off. A boolean union produces a single solid but <strong>discards the mesh&#x27;s texture entirely</strong> -- the resulting mesh carries no UV coordinates and no material at all. On a colour print that is the wrong outcome, and because the union still passes every print-readiness criterion, nothing about the gate result would reveal it.</p>
+<p><code>PRINT_FEATURE_JOIN</code> therefore selects between two behaviours:</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Value</th><th>Result</th><th>Use when</th></tr></thead><tbody><tr><td><code>concat</code></td><td>Texture preserved; the feature is a second closed shell overlapping the model</td><td>The mesh carries colour that has to survive</td></tr><tr><td><code>union</code></td><td>One fused solid; the texture is discarded</td><td>The mesh is geometry-only, or the output is an STL for monochrome printing</td></tr><tr><td><code>auto</code></td><td><code>concat</code> for a textured mesh, <code>union</code> for a geometry-only one</td><td>Default; the right choice unless you are comparing runs</td></tr></tbody></table>
+<p>Overlapping closed shells slice correctly, because a slicer fills by winding rule and so performs the union itself at slice time. The print gate cannot distinguish the two cases -- two disjoint closed shells are watertight, have no non-manifold edges and no broken faces -- so the join used and the resulting body count are both recorded in the report under <code>IMAGE_TO_3D_PRINT_FEATURES</code>. Read them alongside the gate verdict, since &quot;passed&quot; means something different for each.</p>
+<p>Added geometry is given its own flat <code>PRINT_FEATURE_COLOR</code>. Without one it still receives UV coordinates into the model&#x27;s texture atlas and prints as a smear of whichever part of the subject its unwrap happens to land on.</p>
+<p>The colour is painted into a small block of texels the model&#x27;s own UV coordinates do not reference, so the mesh keeps a single atlas at its original resolution. Supplying the feature as a second image instead would make the atlas packer combine the two, and it enlarges the result regardless of how small the added image is -- a 2048-pixel atlas becomes 8192, sixteen times the area with most of it unused, on the output the colour requirement cares most about.</p>
+<p>Feature dimensions extend the object beyond <code>TARGET_SIZE_MM</code>. That setting scales the reconstructed model, and a base is then sized from the model&#x27;s own footprint, so a 60 mm model with a default base measures about 69 mm across overall. Set <code>BASE_DIAMETER_MM</code> explicitly when the finished object has to fit a specific build volume.</p>
+<div class="theme-admonition theme-admonition-warning admonition_xJq3 alert alert--warning"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 16 16"><path fill-rule="evenodd" d="M8.893 1.5c-.183-.31-.52-.5-.887-.5s-.703.19-.886.5L.138 13.499a.98.98 0 0 0 0 1.001c.193.31.53.501.886.501h13.964c.367 0 .704-.19.877-.5a1.03 1.03 0 0 0 .01-1.002L8.893 1.5zm.133 11.497H6.987v-2.003h2.039v2.003zm0-3.004H6.987V5.987h2.039v4.006z"></path></svg></span>The container images carry GPL-3.0 components</div><div class="admonitionContent_BuS1"><p><code>pymeshfix</code> and <code>pymeshlab</code> are licensed under GPL-3.0 and are installed in every model image, so each image is subject to the obligations of GPL-3.0 -- including source availability obligations if you distribute those images. This holds regardless of which rungs <code>REPAIR_BACKENDS</code> selects, because the obligation follows the packages present in the image rather than the code a run executes. Review GPL-3.0 against your distribution model before deploying, and leave the pipeline disabled if your deployment cannot accept GPL-3.0 components in its container images.</p></div></div>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="outputs">Outputs<a href="#outputs" class="hash-link" aria-label="Direct link to Outputs" title="Direct link to Outputs" translate="no">​</a></h2>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Format</th><th>Extension</th><th>Description</th></tr></thead><tbody><tr><td>glTF binary</td><td><code>.glb</code></td><td>Self-contained textured mesh, viewable directly in the VAMS web interface</td></tr><tr><td>Wavefront OBJ</td><td><code>.obj</code> with <code>.mtl</code> and textures</td><td>Mesh, material definition and texture images kept together so that the material&#x27;s relative texture references resolve</td></tr><tr><td>Stereolithography</td><td><code>.stl</code></td><td>Geometry-only mesh for 3D printing and slicing; the gate report records whether it is watertight and manifold</td></tr><tr><td>Gate report</td><td><code>asset.metadata.json</code></td><td>Generation settings, repair rungs applied and every print-readiness criterion with its measured result, applied to the asset</td></tr><tr><td>Per-file metadata</td><td><code>&lt;mesh&gt;.metadata.json</code></td><td>Applied to each mesh: the model that produced it, its licence, whether that file carries colour, and the run&#x27;s measurements</td></tr></tbody></table>
+<p>Which of the three mesh formats are produced is controlled by <code>EXPORT_FORMATS</code>. Both metadata documents are written to the execution&#x27;s metadata prefix and applied as metadata rather than returned as downloadable asset files.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="metadata-applied-to-each-mesh">Metadata applied to each mesh<a href="#metadata-applied-to-each-mesh" class="hash-link" aria-label="Direct link to Metadata applied to each mesh" title="Direct link to Metadata applied to each mesh" translate="no">​</a></h3>
+<p>The gate report describes the run and is applied to the <strong>asset</strong>, which means an asset holding meshes from several models carries only the most recent run&#x27;s report. Each exported mesh therefore also carries its own metadata, so the file identifies itself without opening the execution that produced it:</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Key</th><th>Example</th><th>Notes</th></tr></thead><tbody><tr><td><code>IMAGE_TO_3D_MODEL</code></td><td><code>stable3dgen</code></td><td>The model that produced this file</td></tr><tr><td><code>IMAGE_TO_3D_MODEL_NAME</code></td><td><code>Stable-X Stable3DGen (Hi3DGen)</code></td><td></td></tr><tr><td><code>IMAGE_TO_3D_MODEL_LICENSE</code></td><td><code>MIT</code></td><td>The model&#x27;s own licence, as the adapter declares it</td></tr><tr><td><code>IMAGE_TO_3D_TEXTURE_STATUS</code></td><td><code>projectedFromPhotograph</code></td><td>The route the <strong>mesh&#x27;s</strong> colour took</td></tr><tr><td><code>IMAGE_TO_3D_COLOUR_IN_FILE</code></td><td><code>false</code> for an <code>.stl</code></td><td>Whether <strong>this file</strong> holds colour, which differs from the status above: a textured mesh still writes a colourless STL</td></tr><tr><td><code>IMAGE_TO_3D_SOURCE_IMAGE_NAME</code></td><td><code>mug.png</code></td><td>The photograph it was reconstructed from</td></tr><tr><td><code>IMAGE_TO_3D_JOB_NAME</code></td><td><code>ImageTo3dJob_20260825_...</code></td><td>The run that produced it</td></tr><tr><td><code>IMAGE_TO_3D_PRINT_READY</code>, <code>IMAGE_TO_3D_FACE_COUNT</code>, <code>IMAGE_TO_3D_BODIES</code></td><td><code>true</code>, <code>188244</code>, <code>1/1</code></td><td>Present when the cleanup ran</td></tr><tr><td><code>IMAGE_TO_3D_COLOUR_SOURCE</code>, <code>IMAGE_TO_3D_COLOUR_MEASURED_FRACTION</code></td><td><code>photograph</code>, <code>0.21</code></td><td>Present when colour came from the photograph — the fraction is how much of the surface was sampled rather than inferred</td></tr><tr><td><code>IMAGE_TO_3D_INSTANCE_TYPE</code>, <code>IMAGE_TO_3D_GPU</code></td><td><code>g5.8xlarge</code>, <code>NVIDIA A10G</code></td><td>Present when <code>BENCHMARK_REPORT</code> is on</td></tr><tr><td><code>IMAGE_TO_3D_SECONDS_GENERATE</code>, <code>_PREPROCESS</code>, <code>_CLEANUP</code>, <code>_PROJECTCOLOUR</code></td><td><code>44.4</code></td><td>Where the run&#x27;s time went, per stage</td></tr><tr><td><code>IMAGE_TO_3D_FILL_RATIO</code></td><td><code>0.2166</code></td><td>Volume against the convex hull — low for a hollow subject, high for a solid one</td></tr><tr><td><code>IMAGE_TO_3D_BENCHMARK</code></td><td>JSON</td><td>The whole benchmark document, for anything the flat fields leave out</td></tr></tbody></table>
+<p>The values are flat rather than one JSON document so they read in the asset&#x27;s metadata view and can be searched on. A document is written only for a mesh the run actually exported, because the workflow&#x27;s metadata write-back rejects a document naming a file that is absent from the output.</p>
+<p>Outputs land at the <strong>input image&#x27;s relative path inside the asset</strong>. An image at <code>photos/front/subject.png</code> produces its mesh set under the same <code>photos/front/</code> subdirectory of the output location, so an asset with many source images keeps its structure instead of collapsing into one flat directory. The workflow&#x27;s default output path extension appends the execution identifier, so repeated runs on the same image do not overwrite each other.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="benchmark-reporting">Benchmark reporting<a href="#benchmark-reporting" class="hash-link" aria-label="Direct link to Benchmark reporting" title="Direct link to Benchmark reporting" translate="no">​</a></h3>
+<p>With <code>BENCHMARK_REPORT</code> enabled, the run records an <code>IMAGE_TO_3D_BENCHMARK</code> block in the generation report describing what it did and what it ran on. It adds no GPU work, and it is what makes a comparison across models, segmentation paths and quality settings meaningful:</p>
+<ul>
+<li class=""><strong>Per-stage durations</strong> for weight cache resolution, input download, preprocessing, generation, mesh load, cleanup, print features, export and upload. Weight cache resolution is timed separately from generation on purpose: a cold cache downloads weights over the network, and folding that into the model&#x27;s own duration makes the first run of any model look like a slow model.</li>
+<li class=""><strong>Host facts</strong> -- the instance type, the GPU the run landed on and the AWS Batch job identity. A queue that can schedule several instance families will not give the same duration twice, so a duration is only comparable alongside the hardware that produced it.</li>
+<li class=""><strong>Outcome</strong> -- texture status, print-gate result, and the byte size of every file produced.</li>
+<li class=""><strong>Shape descriptors</strong> of the mesh as it ships: how much of its convex hull it fills, its ground-plane aspect, its proportion, and its <strong>genus</strong>. The first three mean little alone and a lot compared across models given the same photograph. Genus is read differently: it counts the TUNNELS through a closed surface, and any tunnel is a defect on its own terms. It is recorded here rather than as a print-gate criterion because a tunnel usually prints -- what it damages is the likeness, and one surfacing as a pinhole through a head passes every criterion the gate applies. Genus is measured on a position-welded copy, as the gate&#x27;s criteria are, and is absent for a surface that is not closed, where it is undefined.</li>
+</ul>
+<p>A comparison harness under <code>backendPipelines/genAi/imageTo3d/benchmark/</code> sweeps models and settings over a fixed image set and aggregates these per-run reports into a quality, speed and cost comparison with per-stage costing. See its <code>README.md</code>.</p>
+<p>The report records the <strong>inputs to a cost calculation rather than a cost</strong>: instance pricing is regional and changes over time, so an aggregating harness derives cost from the recorded instance type and duration. A fact that cannot be collected is recorded with the reason it failed instead of being omitted, so a missing GPU name reads as a collection failure rather than as a hardware difference.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="pipeline-input-parameters">Pipeline Input Parameters<a href="#pipeline-input-parameters" class="hash-link" aria-label="Direct link to Pipeline Input Parameters" title="Direct link to Pipeline Input Parameters" translate="no">​</a></h2>
+<p>These parameters are set in the configuration template&#x27;s body and can be overridden per execution. Every parameter is optional and carries a default, so the pipeline also runs headless from a file-upload trigger with no form input. An empty value is treated as &quot;use the default&quot;.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Parameter</th><th>Default</th><th>Description</th></tr></thead><tbody><tr><td><code>MODEL</code></td><td><code>stable3dgen</code></td><td>Model to run: <code>stable3dgen</code>, <code>trellis2</code>, <code>sam3d</code>, <code>triposr</code>, <code>step1x3d</code>, <code>hunyuan3d</code> or <code>blenderagent</code>. Selecting a disabled model fails with <code>ModelNotEnabled</code>.</td></tr><tr><td><code>IMAGE_CLEANUP</code></td><td><code>auto</code></td><td><code>auto</code> segments the subject and frames it for the selected model. <code>skip</code> takes the image as already segmented and hands it to the model as supplied, removing both stages&#x27; time and cost -- the choice for an input that is known to be a clean cut-out.</td></tr><tr><td><code>BACKGROUND_REMOVAL</code></td><td><code>rembg</code></td><td>Segmentation backend used when <code>IMAGE_CLEANUP</code> is <code>auto</code>: <code>none</code>, <code>rembg</code>, <code>birefnet</code>, <code>rmbg2</code> or <code>sam</code>. The first three select the salient object themselves; <code>sam</code> segments what <code>SAM_PROMPT</code> points at, which is how to choose between several objects in one frame.</td></tr><tr><td><code>FRAMING_RATIO</code></td><td><code>auto</code></td><td>Fraction of the frame the subject is scaled to fill before reconstruction, or <code>auto</code> to use the framing the selected model expects. The templates offer <code>0.70</code> through <code>0.95</code>. Ignored when <code>BACKGROUND_REMOVAL</code> is <code>none</code>.</td></tr><tr><td><code>FRAMING_BACKGROUND</code></td><td><code>auto</code></td><td>Flat colour composited behind the subject: <code>auto</code>, <code>none</code>, <code>gray</code>, <code>black</code> or <code>white</code>. <code>auto</code> uses the background the selected model was trained against. <code>none</code> composites nothing and keeps the alpha channel, which is what a model that reads alpha as an object mask requires. The subject is cropped and scaled to <code>FRAMING_RATIO</code> in every case -- this setting governs only what sits behind it.</td></tr><tr><td><code>PROJECT_PHOTO_COLOUR</code></td><td><code>off</code></td><td><code>auto</code> colours a mesh that has none of its own by sampling the input photograph onto the surface the camera saw, inferring the rest from it. Ignored when the model produced colour, and refused rather than guessed when no view matches the outline. See <a href="#colour-from-the-photograph" class="">Colour from the photograph</a>.</td></tr><tr><td><code>PROJECT_PHOTO_POSE</code></td><td><code>auto</code></td><td>The view the photograph was taken from, in degrees around the subject, when <code>PROJECT_PHOTO_COLOUR</code> is on. <code>auto</code> uses the view the selected model reconstructs from. An angle states it instead and leaves the tilt to be worked out from the outline; <code>angle,tilt</code> states both. Needed only for a subject whose outline cannot determine its view.</td></tr><tr><td><code>MESH_CLEANUP</code></td><td><code>true</code></td><td>Run the repair ladder, decimation, rescaling and the print-readiness gate. Set to <code>false</code> to return the mesh as generated.</td></tr><tr><td><code>PRINT_GATE_POLICY</code></td><td><code>failClosed</code></td><td><code>failClosed</code> fails the execution and writes no mesh when the gate does not pass. <code>bestEffort</code> writes all outputs and records the gate results.</td></tr><tr><td><code>TARGET_FACE_COUNT</code></td><td><code>200000</code></td><td>Decimate the mesh to approximately this many faces. Set to <code>0</code> to skip decimation. A textured mesh has its uv and normal seams welded before the reduction, so the reduction cannot open the surface at a seam. A deep reduction can still sever a thin connection -- a mug handle survived a reduction to 200,000 faces and came away from the body at 150,000 -- which the gate&#x27;s connectivity criterion reports rather than passing silently.</td></tr><tr><td><code>TARGET_SIZE_MM</code></td><td><code>0</code></td><td>Rescale the mesh so that its largest dimension is this many millimetres. Set to <code>0</code> to keep the model&#x27;s native scale. Applied whether or not <code>MESH_CLEANUP</code> is enabled.</td></tr><tr><td><code>PRINT_FEATURES</code></td><td><code>none</code></td><td>Printable geometry added to the finished mesh: <code>loop</code> for a hanging ring, <code>base</code> for a flat-bottomed stand, or <code>loop+base</code> for both. See <a href="#print-features" class="">Print features</a>.</td></tr><tr><td><code>PRINT_FEATURE_JOIN</code></td><td><code>auto</code></td><td>How a feature is attached: <code>concat</code> keeps the mesh&#x27;s texture and leaves the feature as an overlapping shell, <code>union</code> fuses one solid and discards the texture, and <code>auto</code> picks per mesh. See <a href="#print-features" class="">Print features</a>.</td></tr><tr><td><code>PRINT_FEATURE_COLOR</code></td><td><code>#3C3C3C</code></td><td>Flat <code>#RRGGBB</code> colour given to added geometry so it prints as a deliberate solid-coloured fitting. No effect under a <code>union</code> join, which carries no texture.</td></tr><tr><td><code>LOOP_DIAMETER_MM</code></td><td><code>0</code></td><td>Clear opening of the hanging loop, in millimetres. <code>0</code> sizes it to the model&#x27;s height.</td></tr><tr><td><code>LOOP_THICKNESS_MM</code></td><td><code>0</code></td><td>Thickness of the loop&#x27;s tube, in millimetres. <code>0</code> uses a fraction of the hole diameter. Must stay below the hole diameter.</td></tr><tr><td><code>BASE_DIAMETER_MM</code></td><td><code>0</code></td><td>Diameter of the stand base, in millimetres. <code>0</code> sizes it slightly wider than the model&#x27;s footprint.</td></tr><tr><td><code>BASE_HEIGHT_MM</code></td><td><code>0</code></td><td>Height of the stand base, in millimetres. <code>0</code> uses a fraction of the model&#x27;s height.</td></tr><tr><td><code>EXPORT_FORMATS</code></td><td><code>glb,obj,stl</code></td><td>Output containers to write. The templates offer <code>glb,obj,stl</code>, <code>glb,stl</code>, <code>glb,obj</code> and each format alone. <code>glb</code> carries geometry and texture in one file, <code>obj</code> writes the texture as a separate file set, and <code>stl</code> is geometry only.</td></tr><tr><td><code>REPAIR_BACKENDS</code></td><td><code>trimesh,manifold3d,pymeshfix,pymeshlab</code></td><td>Comma-separated repair ladder drawn from <code>trimesh</code>, <code>manifold3d</code>, <code>pymeshfix</code> and <code>pymeshlab</code>, applied in that fixed order whatever order they are named in. The templates also offer <code>trimesh,manifold3d</code> and <code>trimesh</code>.</td></tr><tr><td><code>MIN_VOLUME_RETENTION</code></td><td><code>0.5</code></td><td>Fraction of the mesh&#x27;s original volume a repair rung must leave behind for its result to be kept. A rung falling below this floor is discarded and the ladder continues from the mesh as it stood. See <a href="#rejecting-a-destructive-repair" class="">Rejecting a destructive repair</a>.</td></tr><tr><td><code>CLOSE_HOLE_MAX_EDGES</code></td><td><code>10000</code></td><td>Boundary size, in edges, of the largest hole the <code>pymeshlab</code> repair rung will close. The library&#x27;s own default is <code>30</code> and it leaves anything wider open without reporting it, so a rung could complete and still leave the mesh failing the gate. Lower it when a hole is part of the subject -- the opening of a cup -- and keeping the shape matters more than closing it; <code>0</code> closes nothing.</td></tr><tr><td><code>NEGLIGIBLE_FRAGMENT_FRACTION</code></td><td><code>0.1</code></td><td>How large a detached piece has to be, as a fraction of the mesh&#x27;s bounding-box diagonal, before it counts as part of the subject. Anything smaller is debris and is dropped before the repair ladder runs, because it would print as a loose speck; one reconstruction arrived with 28 such specks around a mug. Anything larger is kept, and no repair rung is allowed to fuse it into the body -- a mug whose handle had come away spanned 29% and fusing it produced a featureless billet. The measure is span rather than volume because a thin feature is small by volume: that handle was 0.7% of the mesh. Set to <code>0</code> to keep every fragment.</td></tr><tr><td><code>BENCHMARK_REPORT</code></td><td><code>false</code></td><td>Record per-stage timings and the hardware the run landed on in the generation report, so models, segmentation paths and quality settings can be compared on speed and cost as well as on the mesh. See <a href="#benchmark-reporting" class="">Benchmark reporting</a>.</td></tr><tr><td><code>STEP1X3D_TEXTURE_LOW_VRAM</code></td><td><code>auto</code></td><td>Step1X-3D only. How hard its texture stage works to fit the GPU it lands on: <code>auto</code> chooses from the card&#x27;s memory, <code>slicing</code> and <code>offload</code> force a choice, <code>off</code> runs the stage as the model ships it. <code>auto</code> selects <code>slicing</code>, which is VAE slicing alone and fits a 22 GiB card. Attention slicing is never applied and <code>offload</code> is not recommended: both interfere with the custom attention processor the texture adapter lives in, the first by replacing it and the second by raising inside it, and in either case the texture is lost while the geometry stands. Change this when a run fails with a CUDA out-of-memory error.</td></tr><tr><td><code>HUNYUAN3D_GENERATE_TEXTURE</code></td><td><code>true</code></td><td>Hunyuan3D-2 only. Whether its multi-view paint stage runs. <code>false</code> returns geometry in roughly half the time and drops the run from about 16 GB of GPU memory to about 6 GB.</td></tr><tr><td><code>HUNYUAN3D_POSTPROCESS</code></td><td><code>off</code></td><td>Hunyuan3D-2 only. Upstream&#x27;s own tidy-up steps applied to the shape before it is painted: <code>floaters</code> discards disconnected fragments, <code>degenerate</code> drops zero-area faces, and both may be named together. Face reduction is deliberately not offered -- <code>TARGET_FACE_COUNT</code> decimates once, after the repair ladder.</td></tr><tr><td><code>HUNYUAN3D_REMOVE_BG</code></td><td><code>auto</code></td><td>Hunyuan3D-2 only. Whether the model runs its own background removal. It reads the alpha channel as the object mask and recentres the subject from it, so an image without alpha is never cropped to the subject and the whole composition is reconstructed instead. <code>auto</code> runs it only when the image reaching the model carries no transparency.</td></tr><tr><td><code>INVALIDATE_MODEL_CACHE</code></td><td><code>false</code></td><td>Clear the Amazon EFS cache and the Amazon S3 backup for the selected model and re-download the weights from HuggingFace.</td></tr></tbody></table>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="troubleshooting">Troubleshooting<a href="#troubleshooting" class="hash-link" aria-label="Direct link to Troubleshooting" title="Direct link to Troubleshooting" translate="no">​</a></h2>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="out-of-memory-errors">Out-of-memory errors<a href="#out-of-memory-errors" class="hash-link" aria-label="Direct link to Out-of-memory errors" title="Direct link to Out-of-memory errors" translate="no">​</a></h3>
+<p>An out-of-memory failure in the AWS Batch job log means the selected instance type does not have enough GPU memory for the model, or the reconstruction resolution is too high for the available VRAM:</p>
+<ul>
+<li class="">Use an instance with at least 24 GB of GPU memory for TRELLIS.2, SAM 3D Objects and Step1X-3D; Hunyuan3D-2 needs about 16 GB and TripoSR runs in roughly 6-8 GB.</li>
+<li class="">Add a larger instance type to <code>instanceTypes</code> -- the compute environment will fall forward to it when the smaller type cannot satisfy the job.</li>
+<li class="">Lower <code>TARGET_FACE_COUNT</code> if the failure occurs during cleanup rather than generation. Host memory, not GPU memory, bounds the repair and decimation stages.</li>
+</ul>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="huggingface-token-and-license-acceptance">HuggingFace token and license acceptance<a href="#huggingface-token-and-license-acceptance" class="hash-link" aria-label="Direct link to HuggingFace token and license acceptance" title="Direct link to HuggingFace token and license acceptance" translate="no">​</a></h3>
+<p>If the job fails while resolving model weights:</p>
+<ol>
+<li class="">Verify that the <code>huggingFaceToken</code> value is a valid Read token and is not blank.</li>
+<li class="">Confirm the license has been accepted on each enabled model&#x27;s HuggingFace repository, using the same account that issued the token.</li>
+<li class="">For gated repositories, confirm the access request has been approved -- a pending request behaves like a denied one.</li>
+<li class="">Check the AWS Batch job logs in Amazon CloudWatch for the specific repository that failed.</li>
+</ol>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="invalidating-the-model-cache">Invalidating the model cache<a href="#invalidating-the-model-cache" class="hash-link" aria-label="Direct link to Invalidating the model cache" title="Direct link to Invalidating the model cache" translate="no">​</a></h3>
+<p>If a model has been updated upstream or the cached weights on Amazon EFS are incomplete, force a fresh download:</p>
+<ol>
+<li class="">Run the pipeline with <code>INVALIDATE_MODEL_CACHE</code> set to <code>true</code> in the configuration body.</li>
+<li class="">The cached weights for the selected model are deleted from Amazon EFS and from the Amazon S3 backup prefix, then re-downloaded from HuggingFace.</li>
+<li class="">Return the parameter to <code>false</code> after a successful run so that later executions use the fast Amazon EFS path.</li>
+</ol>
+<div class="theme-admonition theme-admonition-warning admonition_xJq3 alert alert--warning"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 16 16"><path fill-rule="evenodd" d="M8.893 1.5c-.183-.31-.52-.5-.887-.5s-.703.19-.886.5L.138 13.499a.98.98 0 0 0 0 1.001c.193.31.53.501.886.501h13.964c.367 0 .704-.19.877-.5a1.03 1.03 0 0 0 .01-1.002L8.893 1.5zm.133 11.497H6.987v-2.003h2.039v2.003zm0-3.004H6.987V5.987h2.039v4.006z"></path></svg></span>warning</div><div class="admonitionContent_BuS1"><p>Invalidating the cache adds the full weight download to the execution time and requires HuggingFace availability and a valid token.</p></div></div>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="amazon-efs-mount-failures">Amazon EFS mount failures<a href="#amazon-efs-mount-failures" class="hash-link" aria-label="Direct link to Amazon EFS mount failures" title="Direct link to Amazon EFS mount failures" translate="no">​</a></h3>
+<p>If the AWS Batch job fails before the container starts, or the container reports that <code>/mnt/efs/imageto3d-models</code> is unavailable:</p>
+<ul>
+<li class="">Confirm that the AWS Batch compute subnets can reach the Amazon EFS mount targets -- the mount targets must exist in the same Availability Zones as the compute environment subnets.</li>
+<li class="">Verify that the security group on the Amazon EFS mount targets allows inbound NFS traffic on port 2049 from the AWS Batch compute security group.</li>
+<li class="">Check the mount target state in the Amazon EFS console; a mount target still in <code>creating</code> will not accept a mount.</li>
+<li class="">Review the instance system log for the mount step, which runs before the container and reports TLS and DNS resolution problems there rather than in the job log.</li>
+</ul>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="modelnotenabled">ModelNotEnabled<a href="#modelnotenabled" class="hash-link" aria-label="Direct link to ModelNotEnabled" title="Direct link to ModelNotEnabled" translate="no">​</a></h3>
+<p>The state machine ends in a <code>ModelNotEnabled</code> failure when the resolved model key has no AWS Batch job definition -- that is, when the configuration template selects a model whose <code>models.&lt;modelKey&gt;.enabled</code> flag is <code>false</code>, or when the model was disabled after the template was created. Either apply a template for an enabled model, or enable the requested model in the configuration and redeploy. Enabling a model creates a new container image, so allow time for its build to finish before the first run.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Vzrq" id="print-gate-failure">Print gate failure<a href="#print-gate-failure" class="hash-link" aria-label="Direct link to Print gate failure" title="Direct link to Print gate failure" translate="no">​</a></h3>
+<p>A failure reporting that the mesh is not print-ready means the repair ladder could not make the mesh watertight and manifold. Read the gate report to see which criteria failed, then:</p>
+<ul>
+<li class="">Check <code>backendsApplied</code> and <code>failures</code> in the report. <code>backendsApplied</code> names the rungs that ran, so a ladder that reached the aggressive <code>pymeshfix</code> and <code>pymeshlab</code> rungs and still failed points at the input rather than at the repair settings. A <code>repair backend skipped -- &lt;backend&gt;: &lt;ExceptionType&gt;</code> entry in <code>failures</code> means that rung was reached but did not execute, so the mesh was never offered its repair -- inspect the AWS Batch job log in Amazon CloudWatch for the warning that names it.</li>
+<li class="">Confirm the ladder is the full one. A run narrowed to <code>trimesh,manifold3d</code> or <code>trimesh</code> excludes the most aggressive hole filling; select <code>trimesh,manifold3d,pymeshfix,pymeshlab</code> in the <strong>Mesh repair ladder</strong> field where the deployment can accept the GPL-3.0 rungs.</li>
+<li class="">Supply a cleaner input image. A single, fully visible, well-lit subject on a plain background reconstructs far more reliably than a partially occluded or heavily cropped one.</li>
+<li class="">Try a different model. SAM 3D Objects handles cluttered real-world photographs best; TRELLIS.2 produces the most detailed geometry on clean product-style images.</li>
+<li class="">Change <code>BACKGROUND_REMOVAL</code>. A segmentation that clips part of the subject leaves an open boundary the repair ladder cannot close plausibly.</li>
+<li class="">Raise <code>TARGET_FACE_COUNT</code> or set it to <code>0</code>. Decimation to an aggressive face budget leaves the repair rungs a coarser mesh with wider holes to close.</li>
+<li class="">For a failure reporting that the mesh is in more pieces than expected, raise <code>TARGET_FACE_COUNT</code> first. A deep reduction can pull a thin connection apart -- a mug handle survived a reduction to 200,000 faces and separated from the body at 150,000 -- and the piece that came away is usually a slender feature such as a handle, strap or stem. Compare <code>bodies</code> against <code>expectedBodies</code> in the report: <code>expectedBodies</code> is one for the model plus one for each print feature attached by <code>concat</code>, so anything above it is a genuine split. Raising the model&#x27;s own resolution, such as <code>TRIPOSR_MC_RESOLUTION</code>, gives the connection more geometry to survive on.</li>
+<li class="">Set <code>PRINT_GATE_POLICY</code> to <code>bestEffort</code> to retrieve the mesh for manual repair in an external tool, accepting that the output is not certified printable.</li>
+</ul>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="attribution">Attribution<a href="#attribution" class="hash-link" aria-label="Direct link to Attribution" title="Direct link to Attribution" translate="no">​</a></h2>
+<p>This pipeline runs third-party open-weight models, each under its own license. Review and comply with the license of every model you enable:</p>
+<ul>
+<li class=""><strong>Stable-X Stable3DGen</strong> -- MIT License for the code and geometry weights; the StableNormal weights it loads are Apache-2.0. Retain the copyright and license notices.</li>
+<li class=""><strong>Microsoft TRELLIS.2</strong> -- MIT License. Retain the copyright and license notice. Its rendering dependency NVlabs <code>nvdiffrast</code> is under the NVIDIA Source Code License, which limits licensees other than NVIDIA to research or evaluation use.</li>
+<li class=""><strong>Meta SAM 3D Objects</strong> -- Meta SAM License. The license includes trade-control terms and requires that derivatives and redistributions be made available under the same license. Review it against your deployment Region and distribution plans.</li>
+<li class=""><strong>VAST-AI TripoSR</strong> -- MIT License. Retain the copyright and license notice.</li>
+<li class=""><strong>StepFun Step1X-3D</strong> -- Apache-2.0 License. Retain the notice file and record modifications. It also pulls NVlabs <code>nvdiffrast</code>, under the same NVIDIA Source Code License limitation as TRELLIS.2.</li>
+<li class=""><strong>Blender agent</strong> -- Blender (GPL-2.0-or-later) is installed in that model&#x27;s image as a tool the agent runs; the meshes it writes are the agent&#x27;s output. OpenAI Codex CLI is Apache-2.0 and LiteLLM is MIT; retain their notices. MoGe-2, the scripted refit&#x27;s depth model, is MIT in code and weights with a vendored DINOv2 under Apache-2.0, and runs on PyTorch (BSD-3-Clause) and utils3d (MIT); retain their notices. The foundation model&#x27;s terms are Amazon Bedrock&#x27;s for the configured model.</li>
+<li class=""><strong>Tencent Hunyuan3D-2</strong> -- Tencent Hunyuan 3D 2.0 Community License Agreement. Commercial use is permitted only inside a Territory that excludes the European Union, the United Kingdom and South Korea; a deployment above one million monthly active users requires a separate licence from Tencent; outputs may not be used to improve any other AI model. Carry the agreement forward, mark modified files, and include Tencent&#x27;s notice text.</li>
+</ul>
+<p>The mesh processing dependencies <code>trimesh</code>, <code>manifold3d</code>, <code>rembg</code>, <code>xatlas</code>, <code>numpy</code>, <code>scipy</code> and <code>pillow</code> are permissively licensed. The repair backends <code>pymeshfix</code> and <code>pymeshlab</code> are licensed under <strong>GPL-3.0</strong> and are installed in every container image, which brings those images under GPL-3.0 obligations, including source availability if the images are distributed.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="related-pages">Related pages<a href="#related-pages" class="hash-link" aria-label="Direct link to Related pages" title="Direct link to Related pages" translate="no">​</a></h2>
+<ul>
+<li class=""><a class="" href="/visual-asset-management-system/pipelines/overview">Pipeline overview</a></li>
+<li class=""><a class="" href="/visual-asset-management-system/pipelines/custom-pipelines">Custom pipelines</a></li>
+<li class=""><a class="" href="/visual-asset-management-system/deployment/configuration-reference">Deployment configuration</a></li>
+</ul></div></article><nav class="docusaurus-mt-lg pagination-nav" aria-label="Docs pages"><a class="pagination-nav__link pagination-nav__link--prev" href="/visual-asset-management-system/pipelines/nvidia-gr00t-finetune"><div class="pagination-nav__sublabel">Previous</div><div class="pagination-nav__label">NVIDIA Gr00t Fine-Tuning Pipeline</div></a><a class="pagination-nav__link pagination-nav__link--next" href="/visual-asset-management-system/pipelines/image-to-3d-options"><div class="pagination-nav__sublabel">Next</div><div class="pagination-nav__label">Image to 3D: Stages, Models and Options</div></a></nav></div></div><div class="col col--3"><div class="tableOfContents_bqdL thin-scrollbar theme-doc-toc-desktop"><ul class="table-of-contents table-of-contents__left-border"><li><a href="#overview" class="table-of-contents__link toc-highlight">Overview</a></li><li><a href="#approximate-run-times" class="table-of-contents__link toc-highlight">Approximate Run Times</a></li><li><a href="#architecture" class="table-of-contents__link toc-highlight">Architecture</a><ul><li><a href="#processing-stages" class="table-of-contents__link toc-highlight">Processing stages</a></li></ul></li><li><a href="#model-selection" class="table-of-contents__link toc-highlight">Model selection</a></li><li><a href="#container-build-options" class="table-of-contents__link toc-highlight">Container Build Options</a><ul><li><a href="#aws-codebuild" class="table-of-contents__link toc-highlight">AWS CodeBuild</a></li><li><a href="#local-docker-asset" class="table-of-contents__link toc-highlight">Local Docker asset</a></li></ul></li><li><a href="#model-weights" class="table-of-contents__link toc-highlight">Model weights</a></li><li><a href="#prerequisites" class="table-of-contents__link toc-highlight">Prerequisites</a></li><li><a href="#configuration" class="table-of-contents__link toc-highlight">Configuration</a></li><li><a href="#gpu-instance-recommendations" class="table-of-contents__link toc-highlight">GPU Instance Recommendations</a></li><li><a href="#print-readiness-mesh-cleanup" class="table-of-contents__link toc-highlight">Print-readiness mesh cleanup</a><ul><li><a href="#repair-ladder" class="table-of-contents__link toc-highlight">Repair ladder</a></li><li><a href="#rejecting-a-destructive-repair" class="table-of-contents__link toc-highlight">Rejecting a destructive repair</a></li><li><a href="#print-readiness-gate" class="table-of-contents__link toc-highlight">Print-readiness gate</a></li><li><a href="#cleanup-disabled" class="table-of-contents__link toc-highlight">Cleanup disabled</a></li></ul></li><li><a href="#colour-from-the-photograph" class="table-of-contents__link toc-highlight">Colour from the photograph</a></li><li><a href="#print-features" class="table-of-contents__link toc-highlight">Print features</a><ul><li><a href="#attachment-and-colour" class="table-of-contents__link toc-highlight">Attachment and colour</a></li></ul></li><li><a href="#outputs" class="table-of-contents__link toc-highlight">Outputs</a><ul><li><a href="#metadata-applied-to-each-mesh" class="table-of-contents__link toc-highlight">Metadata applied to each mesh</a></li><li><a href="#benchmark-reporting" class="table-of-contents__link toc-highlight">Benchmark reporting</a></li></ul></li><li><a href="#pipeline-input-parameters" class="table-of-contents__link toc-highlight">Pipeline Input Parameters</a></li><li><a href="#troubleshooting" class="table-of-contents__link toc-highlight">Troubleshooting</a><ul><li><a href="#out-of-memory-errors" class="table-of-contents__link toc-highlight">Out-of-memory errors</a></li><li><a href="#huggingface-token-and-license-acceptance" class="table-of-contents__link toc-highlight">HuggingFace token and license acceptance</a></li><li><a href="#invalidating-the-model-cache" class="table-of-contents__link toc-highlight">Invalidating the model cache</a></li><li><a href="#amazon-efs-mount-failures" class="table-of-contents__link toc-highlight">Amazon EFS mount failures</a></li><li><a href="#modelnotenabled" class="table-of-contents__link toc-highlight">ModelNotEnabled</a></li><li><a href="#print-gate-failure" class="table-of-contents__link toc-highlight">Print gate failure</a></li></ul></li><li><a href="#attribution" class="table-of-contents__link toc-highlight">Attribution</a></li><li><a href="#related-pages" class="table-of-contents__link toc-highlight">Related pages</a></li></ul></div></div></div></div></main></div></div></div><footer class="theme-layout-footer footer footer--dark"><div class="container container-fluid"><div class="row footer__links"><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Documentation</div><ul class="footer__items clean-list"><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/user-guide/getting-started">Getting Started</a></li><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/deployment/deploy-the-solution">Deployment Guide</a></li><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/api/overview">API Reference</a></li><li class="footer__item"><a class="footer__link-item" href="/visual-asset-management-system/cli/getting-started">CLI Reference</a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Resources</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://github.com/awslabs/visual-asset-management-system" target="_blank" rel="noopener noreferrer" class="footer__link-item">GitHub Repository<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://aws.amazon.com/solutions/guidance/visual-asset-management-system-on-aws/" target="_blank" rel="noopener noreferrer" class="footer__link-item">AWS Solutions Guidance<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://aws.amazon.com/blogs/physical-ai/" target="_blank" rel="noopener noreferrer" class="footer__link-item">AWS Physical AI Blog<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Blog Posts</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://aws.amazon.com/blogs/physical-ai/gpu-accelerated-robotic-simulation-training-with-nvidia-isaac-lab-in-vams/" target="_blank" rel="noopener noreferrer" class="footer__link-item">GPU-Accelerated Robotic Simulation with Isaac Lab<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://aws.amazon.com/blogs/physical-ai/building-production-ready-3d-pipelines-with-aws-visual-asset-management-system-vams-and-4d-pipeline/" target="_blank" rel="noopener noreferrer" class="footer__link-item">Production-Ready 3D Pipelines<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div></div><div class="footer__bottom text--center"><div class="footer__copyright">Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.</div></div></div></footer></div>
+</body>
+</html>
